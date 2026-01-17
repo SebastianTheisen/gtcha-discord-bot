@@ -1,0 +1,23 @@
+app = "gtcha-discord-bot"
+primary_region = "fra"
+
+[build]
+dockerfile = "Dockerfile"
+
+[env]
+LOG_LEVEL = "INFO"
+SCRAPE_INTERVAL_MINUTES = "5"
+BASE_URL = "https://gtchaxonline.com"
+DATABASE_PATH = "data/gtcha_bot.db"
+
+[mounts]
+source = "gtcha_data"
+destination = "/app/data"
+
+[processes]
+bot = "python main.py"
+
+[[vm]]
+cpu_kind = "shared"
+cpus = 1
+memory_mb = 512
