@@ -240,24 +240,45 @@ class GTCHABot(commands.Bot):
         try:
             thread_data = await self.db.get_thread_by_banner_id(pack_id)
             if not thread_data:
+                logger.debug(f"Kein Thread in DB für {pack_id}")
                 return False
 
             thread_id = thread_data.get('thread_id')
             if not thread_id:
+                logger.debug(f"Keine thread_id für {pack_id}")
                 return False
 
             # Thread aus Discord löschen
+            # Erst aus Cache versuchen
             thread = self.get_channel(int(thread_id))
+
+            # Falls nicht im Cache, von API holen
+            if not thread:
+                try:
+                    thread = await self.fetch_channel(int(thread_id))
+                except discord.NotFound:
+                    logger.debug(f"Thread {thread_id} existiert nicht mehr")
+                    thread = None
+                except Exception as e:
+                    logger.debug(f"Fehler beim Fetchen von Thread {thread_id}: {e}")
+                    thread = None
+
             if thread and isinstance(thread, discord.Thread):
                 await thread.delete(reason=f"Banner {pack_id} ausverkauft (0 Packs)")
                 logger.info(f"Thread gelöscht: {pack_id}")
 
-            # Aus DB entfernen
+            # Aus DB entfernen (auch wenn Thread schon gelöscht war)
             await self.db.delete_thread(pack_id)
             await self.db.delete_banner(pack_id)
 
             return True
 
+        except discord.NotFound:
+            # Thread existiert nicht mehr - trotzdem aus DB entfernen
+            logger.debug(f"Thread für {pack_id} nicht gefunden - entferne aus DB")
+            await self.db.delete_thread(pack_id)
+            await self.db.delete_banner(pack_id)
+            return True
         except discord.HTTPException as e:
             logger.error(f"Discord-Fehler beim Thread löschen: {e}")
             return False
