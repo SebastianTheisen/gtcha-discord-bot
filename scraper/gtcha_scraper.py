@@ -133,45 +133,84 @@ class GTCHAScraper:
     async def _click_category_tab(self, category: str) -> bool:
         """Klickt auf einen Kategorie-Tab im Menü."""
         variants = {
-            "Pokémon": ["Pokémon", "Pokemon", "Pocketmonster", "ポケモン"],
-            "Yu-Gi-Oh!": ["Yu-Gi-Oh!", "Yu-Gi-Oh", "遊戯王"],
-            "One piece": ["One piece", "One Piece", "ワンピース"],
-            "Weiss Schwarz": ["Weiss Schwarz", "ヴァイスシュヴァルツ"],
-            "Bonus": ["Bonus", "ボーナス"],
-            "MIX": ["MIX", "Mix"],
-            "Hobby": ["Hobby", "ホビー"],
+            "Pokémon": ["Pokémon", "Pokemon", "Pocketmonster", "ポケモン", "pokemon", "POKEMON", "ポケットモンスター"],
+            "Yu-Gi-Oh!": ["Yu-Gi-Oh!", "Yu-Gi-Oh", "遊戯王", "yugioh", "YUGIOH", "YuGiOh"],
+            "One piece": ["One piece", "One Piece", "ワンピース", "ONEPIECE", "OnePiece", "onepiece"],
+            "Weiss Schwarz": ["Weiss Schwarz", "ヴァイスシュヴァルツ", "weiss", "Weiss", "WEISS", "WS"],
+            "Bonus": ["Bonus", "ボーナス", "bonus", "BONUS"],
+            "MIX": ["MIX", "Mix", "mix", "ミックス"],
+            "Hobby": ["Hobby", "ホビー", "hobby", "HOBBY"],
         }
 
         search_terms = variants.get(category, [category])
 
-        # Methode 1: Direkt auf .menu-item klicken
-        try:
-            menu_items = await self._page.query_selector_all('.menu-item, .menu_item, [class*="menu-item"]')
-            logger.debug(f"   Gefundene menu-items: {len(menu_items)}")
+        # Retry-Mechanismus
+        for attempt in range(3):
+            # Methode 1: Direkt auf .menu-item klicken
+            try:
+                selectors = ['.menu-item', '.menu_item', '[class*="menu-item"]', '.tab', '.tab-item', '[role="tab"]']
+                menu_items = []
+                for sel in selectors:
+                    items = await self._page.query_selector_all(sel)
+                    menu_items.extend(items)
 
-            for item in menu_items:
+                if attempt == 0:
+                    logger.debug(f"   Gefundene Menu-Items: {len(menu_items)}")
+
+                for item in menu_items:
+                    try:
+                        text = await item.inner_text()
+                        text_clean = text.strip()
+                        text_lower = text_clean.lower()
+
+                        # Exakte Übereinstimmung oder Teilübereinstimmung
+                        for term in search_terms:
+                            if term.lower() == text_lower or term.lower() in text_lower or text_lower in term.lower():
+                                await item.click()
+                                logger.debug(f"   Klick (menu-item): '{text_clean}'")
+                                return True
+                    except:
+                        pass
+            except Exception as e:
+                logger.debug(f"   menu-item Fehler (Versuch {attempt+1}): {e}")
+
+            # Methode 2: get_by_text (case-insensitive)
+            for term in search_terms:
                 try:
-                    text = await item.inner_text()
-                    text = text.strip()
-                    if text in search_terms or any(term in text for term in search_terms):
-                        await item.click()
-                        logger.debug(f"   Klick (menu-item): {text}")
+                    # Erst exakt
+                    loc = self._page.get_by_text(term, exact=True)
+                    if await loc.count() > 0:
+                        await loc.first.click(timeout=3000)
+                        logger.debug(f"   Klick (text exact): {term}")
+                        return True
+
+                    # Dann teilweise
+                    loc = self._page.get_by_text(term, exact=False)
+                    if await loc.count() > 0:
+                        await loc.first.click(timeout=3000)
+                        logger.debug(f"   Klick (text partial): {term}")
                         return True
                 except:
                     pass
-        except Exception as e:
-            logger.debug(f"   menu-item Fehler: {e}")
 
-        # Methode 2: get_by_text
-        for term in search_terms:
-            try:
-                loc = self._page.get_by_text(term, exact=True)
-                if await loc.count() > 0:
-                    await loc.first.click(timeout=3000)
-                    logger.debug(f"   Klick (text): {term}")
-                    return True
-            except:
-                pass
+            # Kurz warten vor nächstem Versuch
+            if attempt < 2:
+                await asyncio.sleep(1)
+
+        # Debug: Zeige alle gefundenen Tabs
+        try:
+            all_items = await self._page.query_selector_all('.menu-item, .menu_item, .tab, [role="tab"]')
+            tab_names = []
+            for item in all_items:
+                try:
+                    text = await item.inner_text()
+                    tab_names.append(text.strip())
+                except:
+                    pass
+            if tab_names:
+                logger.warning(f"   Verfügbare Tabs: {tab_names}")
+        except:
+            pass
 
         return False
 
