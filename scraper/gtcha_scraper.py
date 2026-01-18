@@ -20,6 +20,45 @@ from config import CATEGORIES
 
 JST = timezone(timedelta(hours=9))
 
+# Mapping von API-Kategorie-Werten zu unseren Kategorien
+CATEGORY_MAPPING = {
+    # Englische Namen
+    "bonus": "Bonus",
+    "mix": "MIX",
+    "yugioh": "Yu-Gi-Oh!",
+    "yu-gi-oh": "Yu-Gi-Oh!",
+    "yu-gi-oh!": "Yu-Gi-Oh!",
+    "pokemon": "Pokémon",
+    "pokémon": "Pokémon",
+    "pocketmonster": "Pokémon",
+    "pocket monster": "Pokémon",
+    "weiss": "Weiss Schwarz",
+    "weiss schwarz": "Weiss Schwarz",
+    "ws": "Weiss Schwarz",
+    "onepiece": "One piece",
+    "one piece": "One piece",
+    "op": "One piece",
+    "hobby": "Hobby",
+    # Japanische Namen
+    "ボーナス": "Bonus",
+    "ミックス": "MIX",
+    "遊戯王": "Yu-Gi-Oh!",
+    "ポケモン": "Pokémon",
+    "ポケットモンスター": "Pokémon",
+    "ヴァイス": "Weiss Schwarz",
+    "ヴァイスシュヴァルツ": "Weiss Schwarz",
+    "ワンピース": "One piece",
+    "ホビー": "Hobby",
+    # Numerische IDs (falls verwendet)
+    "1": "Bonus",
+    "2": "MIX",
+    "3": "Yu-Gi-Oh!",
+    "4": "Pokémon",
+    "5": "Weiss Schwarz",
+    "6": "One piece",
+    "7": "Hobby",
+}
+
 
 class GTCHAScraper:
     def __init__(self, base_url: str = "https://gtchaxonline.com", headless: bool = True):
@@ -147,8 +186,50 @@ class GTCHAScraper:
             pass
         return None
 
+    def _extract_category_from_item(self, item: Dict) -> str:
+        """Extrahiert die Kategorie aus den API-Daten."""
+        pack_id = item.get('id', item.get('packId', '?'))
+
+        # Versuche verschiedene Kategorie-Felder
+        for key in ['category', 'categoryName', 'category_name', 'categoryId', 'category_id',
+                    'type', 'typeName', 'type_name', 'genre', 'genreName', 'tag', 'label']:
+            if key in item and item[key]:
+                val = str(item[key]).lower().strip()
+                # Lookup im Mapping
+                if val in CATEGORY_MAPPING:
+                    logger.debug(f"   Banner {pack_id}: {key}='{item[key]}' -> {CATEGORY_MAPPING[val]}")
+                    return CATEGORY_MAPPING[val]
+                # Auch ohne lowercase prüfen
+                val_orig = str(item[key]).strip()
+                if val_orig in CATEGORY_MAPPING:
+                    logger.debug(f"   Banner {pack_id}: {key}='{item[key]}' -> {CATEGORY_MAPPING[val_orig]}")
+                    return CATEGORY_MAPPING[val_orig]
+                # Logge unbekannte Kategorie-Werte
+                logger.debug(f"   Banner {pack_id}: Unbekannte Kategorie {key}='{item[key]}'")
+
+        # Prüfe verschachtelte Objekte
+        for key in ['category', 'type', 'genre']:
+            if key in item and isinstance(item[key], dict):
+                obj = item[key]
+                for subkey in ['name', 'id', 'label', 'title']:
+                    if subkey in obj and obj[subkey]:
+                        val = str(obj[subkey]).lower().strip()
+                        if val in CATEGORY_MAPPING:
+                            logger.debug(f"   Banner {pack_id}: {key}.{subkey}='{obj[subkey]}' -> {CATEGORY_MAPPING[val]}")
+                            return CATEGORY_MAPPING[val]
+                        val_orig = str(obj[subkey]).strip()
+                        if val_orig in CATEGORY_MAPPING:
+                            logger.debug(f"   Banner {pack_id}: {key}.{subkey}='{obj[subkey]}' -> {CATEGORY_MAPPING[val_orig]}")
+                            return CATEGORY_MAPPING[val_orig]
+
+        # Fallback - logge erste 5 Keys um Struktur zu verstehen
+        keys = list(item.keys())[:10]
+        logger.debug(f"   Banner {pack_id}: Keine Kategorie gefunden. Keys: {keys}")
+
+        return self._current_category if self._current_category != "Unknown" else "Bonus"
+
     async def _extract_banners_from_api(self, data: Any):
-        """Extrahiert Banner mit korrekter Kategorie-Zuweisung."""
+        """Extrahiert Banner mit korrekter Kategorie-Zuweisung aus API-Daten."""
 
         items = []
         if isinstance(data, list):
@@ -160,8 +241,6 @@ class GTCHAScraper:
                     break
             if not items and 'id' in data:
                 items = [data]
-
-        category = self._current_category
 
         for item in items:
             if not isinstance(item, dict):
@@ -184,17 +263,18 @@ class GTCHAScraper:
             if not self._is_banner_active(item):
                 continue
 
-            # WICHTIG: Kategorie-Zuweisung
-            # Wenn Banner schon existiert, update nur wenn es unter dieser Kategorie geladen wurde
+            # WICHTIG: Kategorie aus den API-Daten extrahieren!
+            category = self._extract_category_from_item(item)
+
+            # Wenn Banner schon existiert, überspringen
             if pack_id in self._captured_banners:
-                # Banner existiert - nur Kategorie hinzufuegen
                 self._category_banners[category].add(pack_id)
                 continue
 
             # Neuer Banner
             banner = {
                 'pack_id': pack_id,
-                'category': category,  # Kategorie bei der der Banner gefunden wurde
+                'category': category,  # Kategorie aus API-Daten
                 'raw_data': item,
             }
 
@@ -347,12 +427,12 @@ class GTCHAScraper:
 
     async def _click_category_tab(self, category: str) -> bool:
         variants = {
-            "Pokemon": ["Pokemon", "Pokemon", "ポケモン"],
-            "Yu-Gi-Oh!": ["Yu-Gi-Oh!", "Yu-Gi-Oh", "遊戯王"],
-            "One piece": ["One piece", "One Piece", "ワンピース"],
-            "Weiss Schwarz": ["Weiss Schwarz", "Weiss", "ヴァイス"],
+            "Pokémon": ["Pocketmonster", "Pocket Monster", "Pokemon", "Pokémon", "ポケモン", "ポケットモンスター"],
+            "Yu-Gi-Oh!": ["Yu-Gi-Oh!", "Yu-Gi-Oh", "YuGiOh", "遊戯王"],
+            "One piece": ["One piece", "One Piece", "OnePiece", "ワンピース"],
+            "Weiss Schwarz": ["Weiss Schwarz", "Weiss", "WS", "ヴァイス", "ヴァイスシュヴァルツ"],
             "Bonus": ["Bonus", "ボーナス"],
-            "MIX": ["MIX", "Mix"],
+            "MIX": ["MIX", "Mix", "ミックス"],
             "Hobby": ["Hobby", "ホビー"],
         }
 
