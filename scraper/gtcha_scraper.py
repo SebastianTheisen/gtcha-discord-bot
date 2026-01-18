@@ -371,12 +371,22 @@ class GTCHAScraper:
                     banner['image_url'] = img_src
 
             # Prüfe ob Banner aktiv ist (kein Countdown = aktiv)
-            # Wenn "Bis zum Verkaufsbeginn" sichtbar ist, ist der Banner noch nicht aktiv
-            countdown_el = await el.query_selector('.countdown, [class*="countdown"]')
+            # Wenn "Bis zum Verkaufsbeginn" sichtbar ist oder Timer > 0, ist der Banner noch nicht aktiv
+            countdown_el = await el.query_selector('.countdown')
             if countdown_el:
+                # Prüfe auf Timer-Wert
+                timer_el = await countdown_el.query_selector('.num.timer-font, .num, .timer-font')
+                if timer_el:
+                    timer_text = await timer_el.inner_text()
+                    timer_text = timer_text.strip()
+                    # Wenn Timer nicht leer und nicht "00.00.00" oder ähnlich
+                    if timer_text and not all(c in '0.: ' for c in timer_text):
+                        logger.debug(f"   Banner {pack_id} noch nicht aktiv (Timer: {timer_text})")
+                        return None
+
+                # Fallback: Prüfe auf "Verkaufsbeginn" Text
                 countdown_text = await countdown_el.inner_text()
                 if 'Verkaufsbeginn' in countdown_text or 'start' in countdown_text.lower():
-                    # Banner ist noch nicht aktiv - überspringen
                     logger.debug(f"   Banner {pack_id} noch nicht aktiv (Countdown)")
                     return None
 
