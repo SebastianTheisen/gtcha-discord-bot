@@ -305,16 +305,22 @@ class GTCHAScraper:
                 limit_el = await el.query_selector('.buy_limit')
             if limit_el:
                 limit_text = await limit_el.inner_text()
+                logger.debug(f"   limit_detail Text für {pack_id}: '{limit_text}'")
                 limit_match = re.search(r'(\d+)', limit_text)
                 if limit_match:
                     banner['entries_per_day'] = int(limit_match.group(1))
-                    logger.debug(f"   Entries für {pack_id}: '{limit_text}' -> {banner['entries_per_day']}")
+                    logger.debug(f"   Entries für {pack_id}: {banner['entries_per_day']}")
+                else:
+                    logger.warning(f"   Entries-Pattern nicht gefunden für {pack_id}: '{limit_text}'")
+            else:
+                logger.debug(f"   Kein .limit_detail/.buy_limit für {pack_id}")
 
             # Packs aus .gacha_bar
             # "Rückstand 100 / 2.000" oder "0 / 2,000"
             bar_el = await el.query_selector('.gacha_bar')
             if bar_el:
                 bar_text = await bar_el.inner_text()
+                logger.debug(f"   gacha_bar Text für {pack_id}: '{bar_text}'")
                 # Entferne Tausender-Trennzeichen (. und ,) aus Zahlen
                 # "0 / 2.000" -> "0 / 2000"
                 bar_text_clean = re.sub(r'(\d)[.,](\d{3})', r'\1\2', bar_text)
@@ -325,7 +331,11 @@ class GTCHAScraper:
                 if packs_match:
                     banner['current_packs'] = int(packs_match.group(1))
                     banner['total_packs'] = int(packs_match.group(2))
-                    logger.debug(f"   Packs für {pack_id}: {bar_text} -> {banner['current_packs']}/{banner['total_packs']}")
+                    logger.debug(f"   Packs für {pack_id}: {banner['current_packs']}/{banner['total_packs']}")
+                else:
+                    logger.warning(f"   Packs-Pattern nicht gefunden für {pack_id}: '{bar_text_clean}'")
+            else:
+                logger.debug(f"   Kein .gacha_bar für {pack_id}")
 
             # End-Datum aus .end-date
             # "Verkauf bis 2026/01/21 JST"
