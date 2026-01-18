@@ -77,6 +77,9 @@ class GTCHABot(commands.Bot):
             minutes=SCRAPE_INTERVAL_MINUTES,
             id='scrape_job',
             replace_existing=True,
+            coalesce=True,  # Verpasste Jobs zusammenfassen
+            max_instances=1,  # Maximal eine Instanz gleichzeitig
+            misfire_grace_time=300,  # Job kann bis zu 5 Min verspätet starten
         )
         self.scheduler.start()
         logger.info(f"Scheduler: Alle {SCRAPE_INTERVAL_MINUTES} Min")
