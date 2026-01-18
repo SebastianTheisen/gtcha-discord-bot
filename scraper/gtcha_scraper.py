@@ -137,15 +137,16 @@ class GTCHAScraper:
     async def _click_category_tab(self, category: str) -> bool:
         """Klickt auf einen Kategorie-Tab im Menü."""
         # Mapping: Config-Name -> mögliche DOM-Texte (lowercase für Vergleich)
-        # Wir nutzen contains-Matching für robustere Erkennung
+        # Japanische Tab-Namen von der Webseite:
+        # ボーナス, MIX, 遊戯王, ポケモン, ヴァイスシュヴァルツ, ワンピース, ホビー
         category_keywords = {
-            "Bonus": ["bonus"],
+            "Bonus": ["bonus", "ボーナス"],
             "MIX": ["mix"],
-            "Yu-Gi-Oh!": ["yu-gi-oh", "yugioh"],
-            "Pokémon": ["pokemon", "poke"],  # Ohne Sonderzeichen für sicheren Vergleich
-            "Weiss Schwarz": ["weiss", "schwarz"],
-            "One piece": ["one piece", "onepiece"],
-            "Hobby": ["hobby"],
+            "Yu-Gi-Oh!": ["yu-gi-oh", "yugioh", "遊戯王"],
+            "Pokémon": ["pokemon", "poke", "ポケモン"],
+            "Weiss Schwarz": ["weiss", "schwarz", "ヴァイスシュヴァルツ"],
+            "One piece": ["one piece", "onepiece", "ワンピース"],
+            "Hobby": ["hobby", "ホビー"],
         }
 
         keywords = category_keywords.get(category, [category.lower()])
