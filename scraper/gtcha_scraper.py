@@ -90,11 +90,16 @@ class GTCHAScraper:
             elif isinstance(data, dict):
                 keys = list(data.keys())
                 logger.debug(f"   Dict keys: {keys}")
-                # Wenn data.data oder data.items existiert
-                for k in ['data', 'items', 'oripas', 'packs', 'banners']:
+                # Wenn data.list, data.data oder data.items existiert
+                for k in ['list', 'data', 'items', 'oripas', 'packs', 'banners']:
                     if k in data and isinstance(data[k], list) and len(data[k]) > 0:
-                        item_keys = list(data[k][0].keys()) if isinstance(data[k][0], dict) else []
-                        logger.debug(f"   {k}[0] keys: {item_keys}")
+                        if isinstance(data[k][0], dict):
+                            item_keys = list(data[k][0].keys())
+                            logger.debug(f"   {k}[0] keys: {item_keys}")
+                            # Bei pack/list API: Zeige auch erstes Item komplett
+                            if 'pack' in url.lower() and k == 'list':
+                                first_item = data[k][0]
+                                logger.info(f"   Pack list[0]: {first_item}")
                         break
 
             self._api_responses.append({
@@ -428,30 +433,55 @@ class GTCHAScraper:
         return banners
 
     async def _click_category_tab(self, category: str) -> bool:
+        """Klickt auf einen Kategorie-Tab im Menü."""
         variants = {
-            "Pokémon": ["Pocketmonster", "Pocket Monster", "Pokemon", "Pokémon", "ポケモン", "ポケットモンスター"],
-            "Yu-Gi-Oh!": ["Yu-Gi-Oh!", "Yu-Gi-Oh", "YuGiOh", "遊戯王"],
-            "One piece": ["One piece", "One Piece", "OnePiece", "ワンピース"],
-            "Weiss Schwarz": ["Weiss Schwarz", "Weiss", "WS", "ヴァイス", "ヴァイスシュヴァルツ"],
+            "Pokémon": ["Pokémon", "Pokemon", "Pocketmonster", "ポケモン"],
+            "Yu-Gi-Oh!": ["Yu-Gi-Oh!", "Yu-Gi-Oh", "遊戯王"],
+            "One piece": ["One piece", "One Piece", "ワンピース"],
+            "Weiss Schwarz": ["Weiss Schwarz", "ヴァイスシュヴァルツ"],
             "Bonus": ["Bonus", "ボーナス"],
-            "MIX": ["MIX", "Mix", "ミックス"],
+            "MIX": ["MIX", "Mix"],
             "Hobby": ["Hobby", "ホビー"],
         }
 
-        for term in variants.get(category, [category]):
+        search_terms = variants.get(category, [category])
+
+        # Methode 1: Direkt auf .menu-item klicken (wie im DOM gesehen)
+        try:
+            menu_items = await self._page.query_selector_all('.menu-item, .menu_item, [class*="menu"]')
+            for item in menu_items:
+                try:
+                    text = await item.inner_text()
+                    text = text.strip()
+                    if text in search_terms or any(term in text for term in search_terms):
+                        await item.click()
+                        logger.debug(f"   Klick (menu-item): {text}")
+                        return True
+                except:
+                    pass
+        except Exception as e:
+            logger.debug(f"   menu-item Fehler: {e}")
+
+        # Methode 2: get_by_text mit kurzem Timeout
+        for term in search_terms:
             try:
                 loc = self._page.get_by_text(term, exact=True)
                 if await loc.count() > 0:
-                    await loc.first.click()
-                    logger.debug(f"   Klick: {term}")
+                    await loc.first.click(timeout=3000)
+                    logger.debug(f"   Klick (text): {term}")
                     return True
             except:
                 pass
+
+        # Methode 3: CSS Selector mit Text
+        for term in search_terms:
             try:
-                await self._page.click(f"text={term}", timeout=2000)
+                await self._page.click(f"text={term}", timeout=3000)
+                logger.debug(f"   Klick (selector): {term}")
                 return True
             except:
                 pass
+
         return False
 
     def _convert_to_scraped_banners(self) -> List[ScrapedBanner]:
