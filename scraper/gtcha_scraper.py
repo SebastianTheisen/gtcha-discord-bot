@@ -227,6 +227,30 @@ class GTCHAScraper:
         }
 
         try:
+            # Titel/Name aus verschiedenen möglichen Elementen
+            title_selectors = [
+                '.gacha_name',
+                '.gacha-name',
+                '.title',
+                '.name',
+                '.pack-name',
+                '.gacha_title',
+                'h3',
+                'h4',
+                '.header .text',
+            ]
+            for sel in title_selectors:
+                try:
+                    title_el = await el.query_selector(sel)
+                    if title_el:
+                        title_text = await title_el.inner_text()
+                        title_text = title_text.strip()
+                        if title_text and len(title_text) > 1:
+                            banner['title'] = title_text
+                            break
+                except:
+                    pass
+
             # Preis aus .gacha_pay
             # <div class="gacha_pay"><img ...><div>1.111</div></div>
             price_el = await el.query_selector('.gacha_pay div:not(:has(img))')
@@ -250,15 +274,21 @@ class GTCHAScraper:
                     banner['entries_per_day'] = int(limit_match.group(1))
 
             # Packs aus .gacha_bar
-            # "Rückstand 100 / 100"
+            # "Rückstand 100 / 2.000" oder "0 / 2,000"
             bar_el = await el.query_selector('.gacha_bar')
             if bar_el:
                 bar_text = await bar_el.inner_text()
+                # Entferne Tausender-Trennzeichen (. und ,) aus Zahlen
+                # "0 / 2.000" -> "0 / 2000"
+                bar_text_clean = re.sub(r'(\d)[.,](\d{3})', r'\1\2', bar_text)
+                # Wiederhole für mehrere Tausender (z.B. 1.000.000)
+                bar_text_clean = re.sub(r'(\d)[.,](\d{3})', r'\1\2', bar_text_clean)
                 # Suche nach "X / Y" Pattern
-                packs_match = re.search(r'(\d+)\s*/\s*(\d+)', bar_text)
+                packs_match = re.search(r'(\d+)\s*/\s*(\d+)', bar_text_clean)
                 if packs_match:
                     banner['current_packs'] = int(packs_match.group(1))
                     banner['total_packs'] = int(packs_match.group(2))
+                    logger.debug(f"   Packs für {pack_id}: {bar_text} -> {banner['current_packs']}/{banner['total_packs']}")
 
             # End-Datum aus .end-date
             # "Verkauf bis 2026/01/21 JST"
