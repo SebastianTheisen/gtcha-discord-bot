@@ -93,8 +93,15 @@ class GTCHABot(commands.Bot):
 
                 # Verarbeite Banner
                 new_count = 0
+                skipped_empty = 0
                 for banner in banners:
                     try:
+                        # Überspringe Banner ohne verfügbare Packs
+                        if banner.current_packs is not None and banner.current_packs == 0:
+                            skipped_empty += 1
+                            logger.debug(f"Übersprungen (0 Packs): {banner.pack_id}")
+                            continue
+
                         # Pruefe ob Banner neu ist
                         existing = await self.db.get_banner(banner.pack_id)
 
@@ -131,7 +138,7 @@ class GTCHABot(commands.Bot):
                         logger.error(f"Fehler bei Banner {banner.pack_id}: {e}")
 
                 elapsed = (datetime.now() - start_time).total_seconds()
-                logger.info(f"Scrape done: {elapsed:.1f}s, {new_count} neue Banner")
+                logger.info(f"Scrape done: {elapsed:.1f}s, {new_count} neue Banner, {skipped_empty} übersprungen (0 Packs)")
 
         except Exception as e:
             logger.error(f"Scrape-Fehler: {e}")
