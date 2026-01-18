@@ -99,15 +99,16 @@ class GTCHABot(commands.Bot):
                         existing = await self.db.get_banner(banner.pack_id)
 
                         if not existing:
-                            # Neuer Banner - Best Hit von Detail-Seite holen
-                            if not banner.best_hit:
-                                try:
-                                    best_hit, _ = await scraper.scrape_banner_details(banner.pack_id)
-                                    if best_hit:
-                                        banner.best_hit = best_hit
-                                        logger.debug(f"Best Hit fuer {banner.pack_id}: {best_hit}")
-                                except Exception as e:
-                                    logger.debug(f"Best Hit Fehler: {e}")
+                            # Neuer Banner - Best Hit erstmal NICHT laden (zu langsam)
+                            # TODO: Best Hit optional oder async laden
+                            # if not banner.best_hit:
+                            #     try:
+                            #         best_hit, _ = await scraper.scrape_banner_details(banner.pack_id)
+                            #         if best_hit:
+                            #             banner.best_hit = best_hit
+                            #             logger.debug(f"Best Hit fuer {banner.pack_id}: {best_hit}")
+                            #     except Exception as e:
+                            #         logger.debug(f"Best Hit Fehler: {e}")
 
                             # In DB speichern
                             await self.db.save_banner(banner)
