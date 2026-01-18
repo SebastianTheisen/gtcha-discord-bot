@@ -347,7 +347,8 @@ class GTCHABot(commands.Bot):
                             title_updated = False
 
                             # Prüfe ob entries_per_day sich geändert hat (Titel-Update nötig)
-                            if banner.entries_per_day and banner.entries_per_day != old_entries:
+                            # Auch updaten wenn neuer Wert None (unbegrenzt) ist!
+                            if banner.entries_per_day != old_entries:
                                 await self.db.update_banner_entries(
                                     banner.pack_id,
                                     banner.entries_per_day
@@ -355,7 +356,9 @@ class GTCHABot(commands.Bot):
                                 # Thread-Titel aktualisieren
                                 await self._update_thread_title(banner)
                                 title_updated = True
-                                logger.info(f"Update: {banner.pack_id} Entries: {old_entries} -> {banner.entries_per_day}")
+                                new_entries_str = banner.entries_per_day if banner.entries_per_day else "unbegrenzt"
+                                old_entries_str = old_entries if old_entries else "unbegrenzt"
+                                logger.info(f"Update: {banner.pack_id} Entries: {old_entries_str} -> {new_entries_str}")
 
                             if banner.current_packs != old_packs:
                                 await self.db.update_banner_packs(
