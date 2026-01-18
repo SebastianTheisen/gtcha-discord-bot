@@ -1,15 +1,17 @@
 """
-GTCHA Webseiten-Scraper - FINALE VERSION v4
+GTCHA Webseiten-Scraper - VERSION v5
 
-- Kategorien werden korrekt zugewiesen
+- Kategorien werden über DOM-Sichtbarkeit zugewiesen
+- API gibt keine Kategorie zurück, daher Tab-basierte Zuordnung
 - Keine Detail-Seiten (schnell!)
 - Nur aktive Banner
 """
 
 import asyncio
 import json
+import re
 from pathlib import Path
-from typing import List, Optional, Tuple, Dict, Any
+from typing import List, Optional, Tuple, Dict, Any, Set
 from datetime import datetime, timezone, timedelta
 
 from playwright.async_api import async_playwright, Page, Browser, BrowserContext, Response
@@ -19,45 +21,6 @@ from .models import ScrapedBanner
 from config import CATEGORIES
 
 JST = timezone(timedelta(hours=9))
-
-# Mapping von API-Kategorie-Werten zu unseren Kategorien
-CATEGORY_MAPPING = {
-    # Englische Namen
-    "bonus": "Bonus",
-    "mix": "MIX",
-    "yugioh": "Yu-Gi-Oh!",
-    "yu-gi-oh": "Yu-Gi-Oh!",
-    "yu-gi-oh!": "Yu-Gi-Oh!",
-    "pokemon": "Pokémon",
-    "pokémon": "Pokémon",
-    "pocketmonster": "Pokémon",
-    "pocket monster": "Pokémon",
-    "weiss": "Weiss Schwarz",
-    "weiss schwarz": "Weiss Schwarz",
-    "ws": "Weiss Schwarz",
-    "onepiece": "One piece",
-    "one piece": "One piece",
-    "op": "One piece",
-    "hobby": "Hobby",
-    # Japanische Namen
-    "ボーナス": "Bonus",
-    "ミックス": "MIX",
-    "遊戯王": "Yu-Gi-Oh!",
-    "ポケモン": "Pokémon",
-    "ポケットモンスター": "Pokémon",
-    "ヴァイス": "Weiss Schwarz",
-    "ヴァイスシュヴァルツ": "Weiss Schwarz",
-    "ワンピース": "One piece",
-    "ホビー": "Hobby",
-    # Numerische IDs (falls verwendet)
-    "1": "Bonus",
-    "2": "MIX",
-    "3": "Yu-Gi-Oh!",
-    "4": "Pokémon",
-    "5": "Weiss Schwarz",
-    "6": "One piece",
-    "7": "Hobby",
-}
 
 
 class GTCHAScraper:
@@ -76,7 +39,7 @@ class GTCHAScraper:
         self._current_category: str = "Unknown"
 
         # Speichere welche Banner zu welcher Kategorie gehoeren
-        self._category_banners: Dict[str, set] = {cat: set() for cat in CATEGORIES}
+        self._category_banners: Dict[str, Set[int]] = {cat: set() for cat in CATEGORIES}
 
     async def __aenter__(self):
         await self.start()
@@ -103,10 +66,10 @@ class GTCHAScraper:
         self._page = await self._context.new_page()
         self._page.on("response", self._handle_response)
 
-        logger.info("Browser gestartet (v4 - korrekte Kategorien)")
+        logger.info("Browser gestartet (v5 - DOM-basierte Kategorien)")
 
     async def _handle_response(self, response: Response):
-        """Faengt API-Responses ab."""
+        """Faengt API-Responses ab und speichert Banner-Daten."""
         url = response.url
 
         if not any(x in url.lower() for x in ['/api/', 'oripa', 'pack', 'product', 'item', 'gacha', 'list']):
@@ -123,10 +86,9 @@ class GTCHAScraper:
             self._api_responses.append({
                 'url': url,
                 'data': data,
-                'category': self._current_category,
             })
 
-            # Extrahiere Banner mit AKTUELLER Kategorie
+            # Extrahiere Banner-Daten (ohne Kategorie)
             await self._extract_banners_from_api(data)
 
         except Exception as e:
@@ -141,7 +103,6 @@ class GTCHAScraper:
             if key in item:
                 val = item[key]
                 if val in [False, 0, 'inactive', 'disabled', 'upcoming', 'scheduled', 'pending', 'hidden', 'draft']:
-                    logger.debug(f"      -> Inaktiv: {key}={val}")
                     return False
 
         # Start-Datum
@@ -150,7 +111,6 @@ class GTCHAScraper:
                 try:
                     start = self._parse_date(str(item[key]))
                     if start and start > now_jst:
-                        logger.debug(f"      -> Noch nicht gestartet: {start}")
                         return False
                 except:
                     pass
@@ -161,7 +121,6 @@ class GTCHAScraper:
                 try:
                     end = self._parse_date(str(item[key]))
                     if end and end < now_jst:
-                        logger.debug(f"      -> Abgelaufen: {end}")
                         return False
                 except:
                     pass
@@ -186,50 +145,8 @@ class GTCHAScraper:
             pass
         return None
 
-    def _extract_category_from_item(self, item: Dict) -> str:
-        """Extrahiert die Kategorie aus den API-Daten."""
-        pack_id = item.get('id', item.get('packId', '?'))
-
-        # Versuche verschiedene Kategorie-Felder
-        for key in ['category', 'categoryName', 'category_name', 'categoryId', 'category_id',
-                    'type', 'typeName', 'type_name', 'genre', 'genreName', 'tag', 'label']:
-            if key in item and item[key]:
-                val = str(item[key]).lower().strip()
-                # Lookup im Mapping
-                if val in CATEGORY_MAPPING:
-                    logger.debug(f"   Banner {pack_id}: {key}='{item[key]}' -> {CATEGORY_MAPPING[val]}")
-                    return CATEGORY_MAPPING[val]
-                # Auch ohne lowercase prüfen
-                val_orig = str(item[key]).strip()
-                if val_orig in CATEGORY_MAPPING:
-                    logger.debug(f"   Banner {pack_id}: {key}='{item[key]}' -> {CATEGORY_MAPPING[val_orig]}")
-                    return CATEGORY_MAPPING[val_orig]
-                # Logge unbekannte Kategorie-Werte
-                logger.debug(f"   Banner {pack_id}: Unbekannte Kategorie {key}='{item[key]}'")
-
-        # Prüfe verschachtelte Objekte
-        for key in ['category', 'type', 'genre']:
-            if key in item and isinstance(item[key], dict):
-                obj = item[key]
-                for subkey in ['name', 'id', 'label', 'title']:
-                    if subkey in obj and obj[subkey]:
-                        val = str(obj[subkey]).lower().strip()
-                        if val in CATEGORY_MAPPING:
-                            logger.debug(f"   Banner {pack_id}: {key}.{subkey}='{obj[subkey]}' -> {CATEGORY_MAPPING[val]}")
-                            return CATEGORY_MAPPING[val]
-                        val_orig = str(obj[subkey]).strip()
-                        if val_orig in CATEGORY_MAPPING:
-                            logger.debug(f"   Banner {pack_id}: {key}.{subkey}='{obj[subkey]}' -> {CATEGORY_MAPPING[val_orig]}")
-                            return CATEGORY_MAPPING[val_orig]
-
-        # Fallback - logge erste 5 Keys um Struktur zu verstehen
-        keys = list(item.keys())[:10]
-        logger.debug(f"   Banner {pack_id}: Keine Kategorie gefunden. Keys: {keys}")
-
-        return self._current_category if self._current_category != "Unknown" else "Bonus"
-
     async def _extract_banners_from_api(self, data: Any):
-        """Extrahiert Banner mit korrekter Kategorie-Zuweisung aus API-Daten."""
+        """Extrahiert Banner-Daten aus API (ohne Kategorie-Zuweisung)."""
 
         items = []
         if isinstance(data, list):
@@ -263,18 +180,14 @@ class GTCHAScraper:
             if not self._is_banner_active(item):
                 continue
 
-            # WICHTIG: Kategorie aus den API-Daten extrahieren!
-            category = self._extract_category_from_item(item)
-
-            # Wenn Banner schon existiert, überspringen
+            # Wenn Banner schon existiert, ueberspringen
             if pack_id in self._captured_banners:
-                self._category_banners[category].add(pack_id)
                 continue
 
-            # Neuer Banner
+            # Neuer Banner (noch ohne Kategorie!)
             banner = {
                 'pack_id': pack_id,
-                'category': category,  # Kategorie aus API-Daten
+                'category': None,  # Wird spaeter via DOM zugewiesen
                 'raw_data': item,
             }
 
@@ -342,8 +255,83 @@ class GTCHAScraper:
                     break
 
             self._captured_banners[pack_id] = banner
-            self._category_banners[category].add(pack_id)
-            logger.debug(f"   Neuer Banner: {pack_id} ({category})")
+
+    async def _get_visible_pack_ids_from_dom(self) -> Set[int]:
+        """Extrahiert Pack-IDs aus den sichtbaren DOM-Elementen."""
+        pack_ids = set()
+
+        try:
+            # Verschiedene Selektoren fuer Pack-IDs
+            selectors = [
+                # Links mit packId Parameter
+                'a[href*="packId="]',
+                'a[href*="pack-detail"]',
+                # Data-Attribute
+                '[data-pack-id]',
+                '[data-id]',
+                '[data-product-id]',
+                # Klickbare Elemente
+                '[onclick*="pack"]',
+            ]
+
+            for selector in selectors:
+                try:
+                    elements = await self._page.query_selector_all(selector)
+                    for el in elements:
+                        # Pruefe ob Element sichtbar ist
+                        is_visible = await el.is_visible()
+                        if not is_visible:
+                            continue
+
+                        # Extrahiere Pack-ID
+                        pack_id = None
+
+                        # Aus href
+                        href = await el.get_attribute('href')
+                        if href:
+                            match = re.search(r'packId[=:](\d+)', href)
+                            if match:
+                                pack_id = int(match.group(1))
+                            else:
+                                match = re.search(r'/pack[/-]?(\d+)', href)
+                                if match:
+                                    pack_id = int(match.group(1))
+
+                        # Aus data-Attributen
+                        if not pack_id:
+                            for attr in ['data-pack-id', 'data-id', 'data-product-id']:
+                                val = await el.get_attribute(attr)
+                                if val and val.isdigit():
+                                    pack_id = int(val)
+                                    break
+
+                        if pack_id:
+                            pack_ids.add(pack_id)
+
+                except Exception as e:
+                    logger.debug(f"Selector {selector} error: {e}")
+
+            # Fallback: Alle Links durchsuchen
+            if not pack_ids:
+                all_links = await self._page.query_selector_all('a')
+                for link in all_links:
+                    try:
+                        is_visible = await link.is_visible()
+                        if not is_visible:
+                            continue
+
+                        href = await link.get_attribute('href')
+                        if href:
+                            match = re.search(r'packId[=:](\d+)', href)
+                            if match:
+                                pack_ids.add(int(match.group(1)))
+                    except:
+                        pass
+
+        except Exception as e:
+            logger.warning(f"DOM-Extraktion Fehler: {e}")
+
+        return pack_ids
 
     async def close(self):
         if self._context:
@@ -355,7 +343,7 @@ class GTCHAScraper:
         logger.info("Browser geschlossen")
 
     async def scrape_all_banners(self) -> List[ScrapedBanner]:
-        """Scrapet alle aktiven Banner mit korrekten Kategorien."""
+        """Scrapet alle aktiven Banner mit korrekten Kategorien via DOM."""
 
         self._api_responses = []
         self._captured_banners = {}
@@ -366,9 +354,6 @@ class GTCHAScraper:
         logger.info(f"JST: {now_jst.strftime('%Y-%m-%d %H:%M')}")
 
         try:
-            # Erste Kategorie setzen BEVOR Seite laedt
-            self._current_category = CATEGORIES[0]  # "Bonus"
-
             await self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=60000)
 
             try:
@@ -379,20 +364,16 @@ class GTCHAScraper:
             logger.info("Warte auf API (8s)...")
             await asyncio.sleep(8)
 
-            logger.info(f"   -> {len(self._captured_banners)} Banner nach Start")
+            logger.info(f"   -> {len(self._captured_banners)} Banner aus API geladen")
 
         except Exception as e:
             logger.error(f"Ladefehler: {e}")
             return []
 
-        # WICHTIG: Durch Kategorien klicken
-        # Die erste Kategorie (Bonus) wurde schon beim Laden erfasst
-        for category in CATEGORIES[1:]:  # Ueberspringe erste Kategorie
+        # WICHTIG: Durch alle Kategorien klicken und sichtbare Banner erfassen
+        for category in CATEGORIES:
             try:
                 logger.info(f"Wechsle zu: {category}")
-
-                # WICHTIG: Kategorie ZUERST setzen!
-                self._current_category = category
 
                 # Tab klicken
                 clicked = await self._click_category_tab(category)
@@ -400,15 +381,36 @@ class GTCHAScraper:
                     logger.warning(f"   Tab nicht gefunden: {category}")
                     continue
 
-                # Warte auf API-Response
-                await asyncio.sleep(4)
+                # Warte auf DOM-Update
+                await asyncio.sleep(2)
 
-                # Zeige wie viele Banner in dieser Kategorie
-                count = len(self._category_banners.get(category, set()))
-                logger.info(f"   -> {count} Banner in {category}")
+                # Extrahiere sichtbare Pack-IDs aus dem DOM
+                visible_ids = await self._get_visible_pack_ids_from_dom()
+
+                # Weise Kategorie zu
+                for pack_id in visible_ids:
+                    if pack_id in self._captured_banners:
+                        # Nur zuweisen wenn noch keine Kategorie
+                        if self._captured_banners[pack_id].get('category') is None:
+                            self._captured_banners[pack_id]['category'] = category
+                        self._category_banners[category].add(pack_id)
+
+                count = len(visible_ids)
+                logger.info(f"   -> {count} Banner sichtbar in {category}")
 
             except Exception as e:
-                logger.warning(f"   Fehler: {e}")
+                logger.warning(f"   Fehler bei {category}: {e}")
+
+        # Banner ohne Kategorie auf "Bonus" setzen (Fallback)
+        uncategorized = 0
+        for pack_id, banner in self._captured_banners.items():
+            if banner.get('category') is None:
+                banner['category'] = "Bonus"
+                self._category_banners["Bonus"].add(pack_id)
+                uncategorized += 1
+
+        if uncategorized > 0:
+            logger.warning(f"   {uncategorized} Banner ohne Kategorie -> Bonus")
 
         # Statistik
         logger.info(f"Gesamt API-Responses: {len(self._api_responses)}")
@@ -460,7 +462,7 @@ class GTCHAScraper:
             try:
                 banner = ScrapedBanner(
                     pack_id=pack_id,
-                    category=data.get('category', 'Unknown'),
+                    category=data.get('category', 'Bonus'),
                     title=data.get('title'),
                     best_hit=data.get('best_hit'),
                     price_coins=data.get('price'),
