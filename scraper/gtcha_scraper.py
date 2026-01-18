@@ -1,14 +1,13 @@
 """
-GTCHA Webseiten-Scraper - OPTIMIERT v3
+GTCHA Webseiten-Scraper - FINALE VERSION v4
 
-- Keine Detail-Seiten mehr laden (viel schneller!)
-- Filtert zukünftige/inaktive Banner
-- Zeitzone JST
+- Kategorien werden korrekt zugewiesen
+- Keine Detail-Seiten (schnell!)
+- Nur aktive Banner
 """
 
 import asyncio
 import json
-import re
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
 from datetime import datetime, timezone, timedelta
@@ -19,7 +18,6 @@ from loguru import logger
 from .models import ScrapedBanner
 from config import CATEGORIES
 
-# Japan Standard Time (UTC+9)
 JST = timezone(timedelta(hours=9))
 
 
@@ -34,9 +32,12 @@ class GTCHAScraper:
         self.debug_dir = Path("screenshots/debug")
         self.debug_dir.mkdir(parents=True, exist_ok=True)
 
-        self._api_responses: List[Dict[str, Any]] = []
+        self._api_responses: List[Dict] = []
         self._captured_banners: Dict[int, Dict] = {}
         self._current_category: str = "Unknown"
+
+        # Speichere welche Banner zu welcher Kategorie gehoeren
+        self._category_banners: Dict[str, set] = {cat: set() for cat in CATEGORIES}
 
     async def __aenter__(self):
         await self.start()
@@ -46,7 +47,7 @@ class GTCHAScraper:
         await self.close()
 
     async def start(self):
-        logger.info("🌐 Starte Browser...")
+        logger.info("Starte Browser...")
         self._playwright = await async_playwright().start()
 
         self._browser = await self._playwright.chromium.launch(
@@ -63,10 +64,10 @@ class GTCHAScraper:
         self._page = await self._context.new_page()
         self._page.on("response", self._handle_response)
 
-        logger.info("✅ Browser gestartet (Optimiert v3 - keine Detail-Seiten)")
+        logger.info("Browser gestartet (v4 - korrekte Kategorien)")
 
     async def _handle_response(self, response: Response):
-        """Intercepts API responses."""
+        """Faengt API-Responses ab."""
         url = response.url
 
         if not any(x in url.lower() for x in ['/api/', 'oripa', 'pack', 'product', 'item', 'gacha', 'list']):
@@ -78,7 +79,7 @@ class GTCHAScraper:
 
         try:
             data = await response.json()
-            logger.debug(f"📡 API: {url[:80]}")
+            logger.debug(f"API: {url[:80]}")
 
             self._api_responses.append({
                 'url': url,
@@ -86,88 +87,68 @@ class GTCHAScraper:
                 'category': self._current_category,
             })
 
+            # Extrahiere Banner mit AKTUELLER Kategorie
             await self._extract_banners_from_api(data)
 
         except Exception as e:
             logger.debug(f"    Parse error: {e}")
 
     def _is_banner_active(self, item: Dict) -> bool:
-        """Checks if banner is currently active (not future, not expired)."""
+        """Prueft ob Banner JETZT aktiv ist."""
         now_jst = datetime.now(JST)
 
-        # Check status
-        for key in ['status', 'state', 'isActive', 'is_active', 'active']:
+        # Status pruefen
+        for key in ['status', 'state', 'isActive', 'is_active', 'active', 'selling']:
             if key in item:
                 val = item[key]
-                if val in [False, 0, 'inactive', 'disabled', 'upcoming', 'scheduled', 'pending', 'hidden']:
+                if val in [False, 0, 'inactive', 'disabled', 'upcoming', 'scheduled', 'pending', 'hidden', 'draft']:
+                    logger.debug(f"      -> Inaktiv: {key}={val}")
                     return False
 
-        # Check start date (not started yet?)
-        for key in ['startDate', 'start_date', 'startAt', 'start_at', 'saleStart', 'openDate']:
+        # Start-Datum
+        for key in ['startDate', 'start_date', 'startAt', 'start_at', 'saleStart', 'openDate', 'releaseDate']:
             if key in item and item[key]:
                 try:
-                    start_str = str(item[key])
-                    start_date = self._parse_date(start_str)
-                    if start_date and start_date > now_jst:
-                        logger.debug(f"      Skipped: starts {start_date.strftime('%Y-%m-%d %H:%M')}")
+                    start = self._parse_date(str(item[key]))
+                    if start and start > now_jst:
+                        logger.debug(f"      -> Noch nicht gestartet: {start}")
                         return False
                 except:
                     pass
 
-        # Check end date (already expired?)
-        for key in ['endDate', 'end_date', 'endAt', 'end_at', 'saleEnd', 'expiry']:
+        # End-Datum
+        for key in ['endDate', 'end_date', 'endAt', 'end_at', 'saleEnd', 'expiry', 'closeDate']:
             if key in item and item[key]:
                 try:
-                    end_str = str(item[key])
-                    end_date = self._parse_date(end_str)
-                    if end_date and end_date < now_jst:
-                        logger.debug(f"      Skipped: expired {end_date.strftime('%Y-%m-%d %H:%M')}")
-                        return False
-                except:
-                    pass
-
-        # Check stock (sold out?)
-        for key in ['stock', 'remaining', 'quantity', 'left']:
-            if key in item:
-                try:
-                    if int(item[key]) <= 0:
+                    end = self._parse_date(str(item[key]))
+                    if end and end < now_jst:
+                        logger.debug(f"      -> Abgelaufen: {end}")
                         return False
                 except:
                     pass
 
         return True
 
-    def _parse_date(self, date_str: str) -> Optional[datetime]:
-        """Parses various date formats."""
+    def _parse_date(self, s: str) -> Optional[datetime]:
         try:
-            # ISO: 2026-01-18T10:00:00
-            if 'T' in date_str:
-                dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=JST)
-                return dt
-
-            # Format: 2026/01/18 10:00
-            if '/' in date_str:
-                parts = date_str.replace(' JST', '').strip()
-                if ' ' in parts:
-                    dt = datetime.strptime(parts, '%Y/%m/%d %H:%M')
-                else:
-                    dt = datetime.strptime(parts, '%Y/%m/%d')
-                return dt.replace(tzinfo=JST)
-
-            # Unix Timestamp
-            if date_str.isdigit():
-                ts = int(date_str)
-                if ts > 1e12:  # Milliseconds
-                    ts = ts / 1000
+            if 'T' in s:
+                dt = datetime.fromisoformat(s.replace('Z', '+00:00'))
+                return dt if dt.tzinfo else dt.replace(tzinfo=JST)
+            if '/' in s:
+                p = s.replace(' JST', '').strip()
+                fmt = '%Y/%m/%d %H:%M' if ' ' in p else '%Y/%m/%d'
+                return datetime.strptime(p, fmt).replace(tzinfo=JST)
+            if s.isdigit():
+                ts = int(s)
+                if ts > 1e12:
+                    ts /= 1000
                 return datetime.fromtimestamp(ts, tz=JST)
         except:
             pass
         return None
 
     async def _extract_banners_from_api(self, data: Any):
-        """Extracts only ACTIVE banners from API."""
+        """Extrahiert Banner mit korrekter Kategorie-Zuweisung."""
 
         items = []
         if isinstance(data, list):
@@ -180,11 +161,13 @@ class GTCHAScraper:
             if not items and 'id' in data:
                 items = [data]
 
+        category = self._current_category
+
         for item in items:
             if not isinstance(item, dict):
                 continue
 
-            # Find pack ID
+            # Pack ID
             pack_id = None
             for key in ['id', 'packId', 'pack_id', 'productId', 'oripaId']:
                 if key in item:
@@ -194,21 +177,28 @@ class GTCHAScraper:
                     except:
                         pass
 
-            if not pack_id or pack_id in self._captured_banners:
+            if not pack_id:
                 continue
 
-            # Only active banners!
+            # Aktiv?
             if not self._is_banner_active(item):
                 continue
 
-            # Extract data
+            # WICHTIG: Kategorie-Zuweisung
+            # Wenn Banner schon existiert, update nur wenn es unter dieser Kategorie geladen wurde
+            if pack_id in self._captured_banners:
+                # Banner existiert - nur Kategorie hinzufuegen
+                self._category_banners[category].add(pack_id)
+                continue
+
+            # Neuer Banner
             banner = {
                 'pack_id': pack_id,
-                'category': self._current_category,
+                'category': category,  # Kategorie bei der der Banner gefunden wurde
                 'raw_data': item,
             }
 
-            # Price
+            # Preis
             for key in ['price', 'coin', 'coins', 'cost', 'point', 'points']:
                 if key in item:
                     try:
@@ -235,7 +225,7 @@ class GTCHAScraper:
                     except:
                         pass
 
-            # Limit per day
+            # Limit
             for key in ['dailyLimit', 'limitPerDay', 'perDay', 'purchaseLimit']:
                 if key in item:
                     try:
@@ -244,13 +234,13 @@ class GTCHAScraper:
                     except:
                         pass
 
-            # Title
+            # Titel
             for key in ['name', 'title', 'productName', 'oripaName']:
                 if key in item and item[key]:
                     banner['title'] = str(item[key])
                     break
 
-            # Image
+            # Bild
             for key in ['image', 'imageUrl', 'thumbnail', 'banner', 'mainImage']:
                 if key in item and item[key]:
                     img = str(item[key])
@@ -265,14 +255,15 @@ class GTCHAScraper:
                     banner['best_hit'] = str(item[key])
                     break
 
-            # End date
+            # End-Datum
             for key in ['endDate', 'end_date', 'saleEnd', 'expiry', 'endAt']:
                 if key in item and item[key]:
                     banner['sale_end_date'] = str(item[key])
                     break
 
             self._captured_banners[pack_id] = banner
-            logger.debug(f"   ✅ Banner: {pack_id} ({self._current_category})")
+            self._category_banners[category].add(pack_id)
+            logger.debug(f"   Neuer Banner: {pack_id} ({category})")
 
     async def close(self):
         if self._context:
@@ -281,20 +272,23 @@ class GTCHAScraper:
             await self._browser.close()
         if self._playwright:
             await self._playwright.stop()
-        logger.info("🔒 Browser geschlossen")
+        logger.info("Browser geschlossen")
 
     async def scrape_all_banners(self) -> List[ScrapedBanner]:
-        """Scrapes all ACTIVE banners - WITHOUT detail pages!"""
+        """Scrapet alle aktiven Banner mit korrekten Kategorien."""
 
         self._api_responses = []
         self._captured_banners = {}
-        self._current_category = "Bonus"
+        self._category_banners = {cat: set() for cat in CATEGORIES}
 
         now_jst = datetime.now(JST)
-        logger.info(f"📄 Lade: {self.base_url}")
-        logger.info(f"🕐 JST: {now_jst.strftime('%Y-%m-%d %H:%M')}")
+        logger.info(f"Lade: {self.base_url}")
+        logger.info(f"JST: {now_jst.strftime('%Y-%m-%d %H:%M')}")
 
         try:
+            # Erste Kategorie setzen BEVOR Seite laedt
+            self._current_category = CATEGORIES[0]  # "Bonus"
+
             await self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=60000)
 
             try:
@@ -302,39 +296,58 @@ class GTCHAScraper:
             except:
                 pass
 
-            logger.info("⏳ Warte auf API (10s)...")
-            await asyncio.sleep(10)
+            logger.info("Warte auf API (8s)...")
+            await asyncio.sleep(8)
+
+            logger.info(f"   -> {len(self._captured_banners)} Banner nach Start")
 
         except Exception as e:
-            logger.error(f"❌ Ladefehler: {e}")
+            logger.error(f"Ladefehler: {e}")
             return []
 
-        # Go through categories
-        for category in CATEGORIES:
+        # WICHTIG: Durch Kategorien klicken
+        # Die erste Kategorie (Bonus) wurde schon beim Laden erfasst
+        for category in CATEGORIES[1:]:  # Ueberspringe erste Kategorie
             try:
-                logger.info(f"🔍 {category}")
+                logger.info(f"Wechsle zu: {category}")
+
+                # WICHTIG: Kategorie ZUERST setzen!
                 self._current_category = category
 
-                await self._click_category_tab(category)
-                await asyncio.sleep(3)
+                # Tab klicken
+                clicked = await self._click_category_tab(category)
+                if not clicked:
+                    logger.warning(f"   Tab nicht gefunden: {category}")
+                    continue
 
-                logger.info(f"   → {len(self._captured_banners)} Banner")
+                # Warte auf API-Response
+                await asyncio.sleep(4)
+
+                # Zeige wie viele Banner in dieser Kategorie
+                count = len(self._category_banners.get(category, set()))
+                logger.info(f"   -> {count} Banner in {category}")
 
             except Exception as e:
-                logger.debug(f"   Fehler: {e}")
+                logger.warning(f"   Fehler: {e}")
 
-        logger.info(f"📊 API-Responses: {len(self._api_responses)}")
-        logger.info(f"🎯 Aktive Banner: {len(self._captured_banners)}")
+        # Statistik
+        logger.info(f"Gesamt API-Responses: {len(self._api_responses)}")
+        logger.info(f"Gesamt aktive Banner: {len(self._captured_banners)}")
 
-        # Convert - WITHOUT loading detail pages!
+        for cat in CATEGORIES:
+            count = len(self._category_banners.get(cat, set()))
+            if count > 0:
+                logger.info(f"   {cat}: {count} Banner")
+
+        # Konvertieren
         banners = self._convert_to_scraped_banners()
 
-        logger.info(f"✅ Fertig: {len(banners)} Banner")
+        logger.info(f"Fertig: {len(banners)} Banner")
         return banners
 
     async def _click_category_tab(self, category: str) -> bool:
         variants = {
-            "Pokémon": ["Pokémon", "Pokemon", "ポケモン"],
+            "Pokemon": ["Pokemon", "Pokemon", "ポケモン"],
             "Yu-Gi-Oh!": ["Yu-Gi-Oh!", "Yu-Gi-Oh", "遊戯王"],
             "One piece": ["One piece", "One Piece", "ワンピース"],
             "Weiss Schwarz": ["Weiss Schwarz", "Weiss", "ヴァイス"],
@@ -348,6 +361,7 @@ class GTCHAScraper:
                 loc = self._page.get_by_text(term, exact=True)
                 if await loc.count() > 0:
                     await loc.first.click()
+                    logger.debug(f"   Klick: {term}")
                     return True
             except:
                 pass
@@ -359,7 +373,7 @@ class GTCHAScraper:
         return False
 
     def _convert_to_scraped_banners(self) -> List[ScrapedBanner]:
-        """Converts to ScrapedBanner - WITHOUT detail pages!"""
+        """Konvertiert zu ScrapedBanner Objekten."""
         banners = []
 
         for pack_id, data in self._captured_banners.items():
@@ -384,11 +398,9 @@ class GTCHAScraper:
         return banners
 
     async def scrape_banner_details(self, pack_id: int) -> Tuple[Optional[str], Optional[bytes]]:
-        """NOT USED ANYMORE - Data comes from API!"""
-        # We already have best_hit from API
+        """Gibt best_hit aus Cache zurueck (keine Seiten-Ladung!)"""
         if pack_id in self._captured_banners:
-            best_hit = self._captured_banners[pack_id].get('best_hit')
-            return best_hit, None
+            return self._captured_banners[pack_id].get('best_hit'), None
         return None, None
 
     async def download_image(self, url: str) -> Optional[bytes]:
