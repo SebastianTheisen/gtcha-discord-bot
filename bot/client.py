@@ -3,6 +3,8 @@ Discord Bot Client - Forum-Channel Version
 """
 
 import asyncio
+import re
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
@@ -18,6 +20,22 @@ from config import (
 )
 from scraper.gtcha_scraper import GTCHAScraper
 from database.db import Database
+
+
+@dataclass
+class RecoveredBanner:
+    """Minimale Banner-Daten für Wiederherstellung aus Discord."""
+    pack_id: int
+    category: str
+    title: str = None
+    best_hit: str = None
+    price_coins: int = None
+    current_packs: int = None
+    total_packs: int = None
+    entries_per_day: int = None
+    sale_end_date: str = None
+    image_url: str = None
+    detail_page_url: str = None
 
 
 class GTCHABot(commands.Bot):
@@ -73,9 +91,152 @@ class GTCHABot(commands.Bot):
     async def on_ready(self):
         logger.info(f"Bot online: {self.user}")
 
+        # Threads aus Discord wiederherstellen (falls DB leer nach Neustart)
+        await self._recover_threads_from_discord()
+
         # Erster Scrape nach 5 Sekunden
         await asyncio.sleep(5)
         await self.scrape_and_post()
+
+    async def _recover_threads_from_discord(self):
+        """Stellt Thread-Daten aus Discord wieder her (für DB-Verlust nach Neustart)."""
+        logger.info("Prüfe Discord-Threads zur Wiederherstellung...")
+        recovered_count = 0
+
+        for category, channel_id in CHANNEL_IDS.items():
+            if not channel_id:
+                continue
+
+            try:
+                channel = self.get_channel(int(channel_id))
+                if not channel:
+                    try:
+                        channel = await self.fetch_channel(int(channel_id))
+                    except Exception:
+                        continue
+
+                if not isinstance(channel, discord.ForumChannel):
+                    continue
+
+                # Alle aktiven Threads im Forum durchgehen
+                for thread in channel.threads:
+                    try:
+                        # Thread-Titel parsen: "ID: 15257 / Kosten: 1111 / Anzahl: 10 / Gesamt: 500"
+                        match = re.match(r'ID:\s*(\d+)', thread.name)
+                        if not match:
+                            continue
+
+                        pack_id = int(match.group(1))
+
+                        # Prüfen ob schon in DB
+                        existing_thread = await self.db.get_thread_by_banner_id(pack_id)
+                        if existing_thread:
+                            continue  # Thread bereits bekannt
+
+                        # Starter-Message holen (erste Nachricht im Thread)
+                        starter_message_id = None
+                        try:
+                            # Forum-Threads haben eine starter_message
+                            if thread.starter_message:
+                                starter_message_id = thread.starter_message.id
+                            else:
+                                # Fallback: erste Nachricht holen
+                                async for msg in thread.history(limit=1, oldest_first=True):
+                                    starter_message_id = msg.id
+                                    break
+                        except Exception as e:
+                            logger.debug(f"Konnte Starter-Message nicht holen: {e}")
+
+                        # Thread in DB speichern
+                        await self.db.save_thread(
+                            banner_id=pack_id,
+                            thread_id=thread.id,
+                            channel_id=channel.id,
+                            starter_message_id=starter_message_id or 0
+                        )
+
+                        # Banner-Daten aus Thread-Titel extrahieren
+                        price_match = re.search(r'Kosten:\s*(\d+)', thread.name)
+                        entries_match = re.search(r'Anzahl:\s*(\d+)', thread.name)
+                        total_match = re.search(r'Gesamt:\s*(\d+)', thread.name)
+
+                        banner = RecoveredBanner(
+                            pack_id=pack_id,
+                            category=category,
+                            price_coins=int(price_match.group(1)) if price_match else None,
+                            entries_per_day=int(entries_match.group(1)) if entries_match else None,
+                            total_packs=int(total_match.group(1)) if total_match else None,
+                            current_packs=1,  # Mindestens 1, sonst wäre Thread gelöscht
+                        )
+
+                        await self.db.save_banner(banner)
+                        recovered_count += 1
+                        logger.info(f"Thread wiederhergestellt: {pack_id} aus {channel.name}")
+
+                    except Exception as e:
+                        logger.debug(f"Fehler bei Thread {thread.name}: {e}")
+
+                # Auch archivierte Threads prüfen
+                try:
+                    async for thread in channel.archived_threads(limit=100):
+                        try:
+                            match = re.match(r'ID:\s*(\d+)', thread.name)
+                            if not match:
+                                continue
+
+                            pack_id = int(match.group(1))
+
+                            existing_thread = await self.db.get_thread_by_banner_id(pack_id)
+                            if existing_thread:
+                                continue
+
+                            starter_message_id = None
+                            try:
+                                if thread.starter_message:
+                                    starter_message_id = thread.starter_message.id
+                                else:
+                                    async for msg in thread.history(limit=1, oldest_first=True):
+                                        starter_message_id = msg.id
+                                        break
+                            except Exception:
+                                pass
+
+                            await self.db.save_thread(
+                                banner_id=pack_id,
+                                thread_id=thread.id,
+                                channel_id=channel.id,
+                                starter_message_id=starter_message_id or 0
+                            )
+
+                            price_match = re.search(r'Kosten:\s*(\d+)', thread.name)
+                            entries_match = re.search(r'Anzahl:\s*(\d+)', thread.name)
+                            total_match = re.search(r'Gesamt:\s*(\d+)', thread.name)
+
+                            banner = RecoveredBanner(
+                                pack_id=pack_id,
+                                category=category,
+                                price_coins=int(price_match.group(1)) if price_match else None,
+                                entries_per_day=int(entries_match.group(1)) if entries_match else None,
+                                total_packs=int(total_match.group(1)) if total_match else None,
+                                current_packs=1,
+                            )
+
+                            await self.db.save_banner(banner)
+                            recovered_count += 1
+                            logger.info(f"Archivierter Thread wiederhergestellt: {pack_id}")
+
+                        except Exception as e:
+                            logger.debug(f"Fehler bei archiviertem Thread: {e}")
+                except Exception as e:
+                    logger.debug(f"Fehler bei archivierten Threads: {e}")
+
+            except Exception as e:
+                logger.warning(f"Fehler bei Channel {category}: {e}")
+
+        if recovered_count > 0:
+            logger.info(f"Thread-Wiederherstellung abgeschlossen: {recovered_count} Threads wiederhergestellt")
+        else:
+            logger.info("Keine Threads zur Wiederherstellung gefunden")
 
     async def scrape_and_post(self):
         """Hauptfunktion: Scrapen und neue Banner posten."""
@@ -176,11 +337,11 @@ class GTCHABot(commands.Bot):
             logger.warning(f"Channel {channel.name} ist kein Forum!")
             return
 
-        # Thread-Titel: PackID/Kosten/Entries/TotalPacks
+        # Thread-Titel: ID: X / Kosten: Y / Anzahl: Z / Gesamt: W
         price = banner.price_coins or 0
         entries = banner.entries_per_day or 1
         total = banner.total_packs or 0
-        title = f"{banner.pack_id}/{price}/{entries}x/{total}"
+        title = f"ID: {banner.pack_id} / Kosten: {price} / Anzahl: {entries} / Gesamt: {total}"
         if len(title) > 100:
             title = title[:97] + "..."
 
