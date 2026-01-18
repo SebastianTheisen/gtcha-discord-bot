@@ -403,7 +403,7 @@ class GTCHABot(commands.Bot):
 
         # Thread-Titel: ID: X / Kosten: Y / Anzahl: Z / Gesamt: W
         price = banner.price_coins or 0
-        entries = banner.entries_per_day or 1
+        entries = banner.entries_per_day if banner.entries_per_day else "unbegrenzt"
         total = banner.total_packs or 0
         title = f"ID: {banner.pack_id} / Kosten: {price} / Anzahl: {entries} / Gesamt: {total}"
         if len(title) > 100:
@@ -543,7 +543,7 @@ class GTCHABot(commands.Bot):
 
             # Neuen Titel generieren
             price = banner.price_coins or 0
-            entries = banner.entries_per_day or 1
+            entries = banner.entries_per_day if banner.entries_per_day else "unbegrenzt"
             total = banner.total_packs or 0
             new_title = f"ID: {banner.pack_id} / Kosten: {price} / Anzahl: {entries} / Gesamt: {total}"
             if len(new_title) > 100:
