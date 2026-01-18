@@ -97,9 +97,10 @@ class GTCHABot(commands.Bot):
         # Threads aus Discord wiederherstellen (falls DB leer nach Neustart)
         await self._recover_threads_from_discord()
 
-        # Erster Scrape nach 5 Sekunden
-        await asyncio.sleep(5)
-        await self.scrape_and_post()
+        # Erster Scrape nach 10 Sekunden - über Scheduler triggern statt direkt aufrufen
+        # Das vermeidet Konflikte mit dem regulären Scheduler-Job
+        await asyncio.sleep(10)
+        self.scheduler.modify_job('scrape_job', next_run_time=datetime.now())
 
     async def _recover_threads_from_discord(self):
         """Stellt Thread-Daten aus Discord wieder her (für DB-Verlust nach Neustart)."""
