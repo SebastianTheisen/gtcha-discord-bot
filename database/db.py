@@ -119,6 +119,16 @@ class Database:
 
             await db.commit()
 
+    async def update_banner_entries(self, pack_id: int, entries_per_day: int) -> None:
+        """Aktualisiert entries_per_day für einen Banner."""
+        now = datetime.now().isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE banners SET entries_per_day = ?, updated_at = ? WHERE pack_id = ?",
+                (entries_per_day, now, pack_id)
+            )
+            await db.commit()
+
     async def save_thread(self, banner_id: int, thread_id: int, channel_id: int, starter_message_id: int) -> None:
         now = datetime.now().isoformat()
         async with aiosqlite.connect(self.db_path) as db:
