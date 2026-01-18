@@ -1,20 +1,18 @@
 """
-GTCHA Webseiten-Scraper - VERSION v5
+GTCHA Webseiten-Scraper - VERSION v6 (Pure DOM)
 
-- Kategorien werden über DOM-Sichtbarkeit zugewiesen
-- API gibt keine Kategorie zurück, daher Tab-basierte Zuordnung
-- Keine Detail-Seiten (schnell!)
-- Nur aktive Banner
+- Keine API-Abfragen mehr
+- Alle Daten direkt aus dem DOM
+- Pro Kategorie-Tab die Banner auslesen
 """
 
 import asyncio
-import json
 import re
 from pathlib import Path
-from typing import List, Optional, Tuple, Dict, Any, Set
+from typing import List, Optional, Tuple, Dict, Set
 from datetime import datetime, timezone, timedelta
 
-from playwright.async_api import async_playwright, Page, Browser, BrowserContext, Response
+from playwright.async_api import async_playwright, Page, Browser, BrowserContext, ElementHandle
 from loguru import logger
 
 from .models import ScrapedBanner
@@ -34,11 +32,8 @@ class GTCHAScraper:
         self.debug_dir = Path("screenshots/debug")
         self.debug_dir.mkdir(parents=True, exist_ok=True)
 
-        self._api_responses: List[Dict] = []
+        # Banner-Daten
         self._captured_banners: Dict[int, Dict] = {}
-        self._current_category: str = "Unknown"
-
-        # Speichere welche Banner zu welcher Kategorie gehoeren
         self._category_banners: Dict[str, Set[int]] = {cat: set() for cat in CATEGORIES}
 
     async def __aenter__(self):
@@ -64,284 +59,7 @@ class GTCHAScraper:
         )
 
         self._page = await self._context.new_page()
-        self._page.on("response", self._handle_response)
-
-        logger.info("Browser gestartet (v5 - DOM-basierte Kategorien)")
-
-    async def _handle_response(self, response: Response):
-        """Faengt API-Responses ab und speichert Banner-Daten."""
-        url = response.url
-
-        # Logge ALLE API-Aufrufe (nicht nur /api/user/)
-        content_type = response.headers.get('content-type', '')
-        if 'application/json' not in content_type:
-            return
-
-        # Zeige alle JSON-Responses von der Domain
-        if 'gtchaxonline.com' not in url and 'gtcha' not in url.lower():
-            return
-
-        # Logge die URL immer
-        logger.info(f"API Response: {url}")
-
-        try:
-            data = await response.json()
-            logger.debug(f"API: {url}")
-
-            # Logge erste Item-Keys um Struktur zu verstehen
-            if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
-                keys = list(data[0].keys())
-                logger.debug(f"   List[0] keys: {keys}")
-            elif isinstance(data, dict):
-                keys = list(data.keys())
-                logger.debug(f"   Dict keys: {keys}")
-                # Wenn data.list, data.data oder data.items existiert
-                for k in ['list', 'data', 'items', 'oripas', 'packs', 'banners']:
-                    if k in data and isinstance(data[k], list) and len(data[k]) > 0:
-                        if isinstance(data[k][0], dict):
-                            item_keys = list(data[k][0].keys())
-                            logger.debug(f"   {k}[0] keys: {item_keys}")
-                            # Bei pack/list API: Zeige auch erstes Item komplett
-                            if 'pack' in url.lower() and k == 'list':
-                                first_item = data[k][0]
-                                logger.info(f"   Pack list[0]: {first_item}")
-                        break
-
-            self._api_responses.append({
-                'url': url,
-                'data': data,
-            })
-
-            # Extrahiere Banner-Daten (ohne Kategorie)
-            await self._extract_banners_from_api(data)
-
-        except Exception as e:
-            logger.debug(f"    Parse error: {e}")
-
-    def _is_banner_active(self, item: Dict) -> bool:
-        """Prueft ob Banner JETZT aktiv ist."""
-        now_jst = datetime.now(JST)
-
-        # Status pruefen
-        for key in ['status', 'state', 'isActive', 'is_active', 'active', 'selling']:
-            if key in item:
-                val = item[key]
-                if val in [False, 0, 'inactive', 'disabled', 'upcoming', 'scheduled', 'pending', 'hidden', 'draft']:
-                    return False
-
-        # Start-Datum
-        for key in ['startDate', 'start_date', 'startAt', 'start_at', 'saleStart', 'openDate', 'releaseDate']:
-            if key in item and item[key]:
-                try:
-                    start = self._parse_date(str(item[key]))
-                    if start and start > now_jst:
-                        return False
-                except:
-                    pass
-
-        # End-Datum
-        for key in ['endDate', 'end_date', 'endAt', 'end_at', 'saleEnd', 'expiry', 'closeDate']:
-            if key in item and item[key]:
-                try:
-                    end = self._parse_date(str(item[key]))
-                    if end and end < now_jst:
-                        return False
-                except:
-                    pass
-
-        return True
-
-    def _parse_date(self, s: str) -> Optional[datetime]:
-        try:
-            if 'T' in s:
-                dt = datetime.fromisoformat(s.replace('Z', '+00:00'))
-                return dt if dt.tzinfo else dt.replace(tzinfo=JST)
-            if '/' in s:
-                p = s.replace(' JST', '').strip()
-                fmt = '%Y/%m/%d %H:%M' if ' ' in p else '%Y/%m/%d'
-                return datetime.strptime(p, fmt).replace(tzinfo=JST)
-            if s.isdigit():
-                ts = int(s)
-                if ts > 1e12:
-                    ts /= 1000
-                return datetime.fromtimestamp(ts, tz=JST)
-        except:
-            pass
-        return None
-
-    async def _extract_banners_from_api(self, data: Any):
-        """Extrahiert Banner-Daten aus API (ohne Kategorie-Zuweisung)."""
-
-        items = []
-        if isinstance(data, list):
-            items = data
-        elif isinstance(data, dict):
-            for key in ['data', 'items', 'products', 'oripas', 'packs', 'list', 'results', 'banners']:
-                if key in data and isinstance(data[key], list):
-                    items = data[key]
-                    break
-            if not items and 'id' in data:
-                items = [data]
-
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-
-            # Pack ID
-            pack_id = None
-            for key in ['id', 'packId', 'pack_id', 'productId', 'oripaId']:
-                if key in item:
-                    try:
-                        pack_id = int(item[key])
-                        break
-                    except:
-                        pass
-
-            if not pack_id:
-                continue
-
-            # Aktiv?
-            if not self._is_banner_active(item):
-                continue
-
-            # Wenn Banner schon existiert, ueberspringen
-            if pack_id in self._captured_banners:
-                continue
-
-            # Neuer Banner (noch ohne Kategorie!)
-            banner = {
-                'pack_id': pack_id,
-                'category': None,  # Wird spaeter via DOM zugewiesen
-                'raw_data': item,
-            }
-
-            # Preis
-            for key in ['price', 'coin', 'coins', 'cost', 'point', 'points']:
-                if key in item:
-                    try:
-                        banner['price'] = int(item[key])
-                        break
-                    except:
-                        pass
-
-            # Stock
-            for key in ['stock', 'remaining', 'quantity', 'left', 'currentStock']:
-                if key in item:
-                    try:
-                        banner['current_packs'] = int(item[key])
-                        break
-                    except:
-                        pass
-
-            # Total
-            for key in ['total', 'totalStock', 'max', 'initialStock']:
-                if key in item:
-                    try:
-                        banner['total_packs'] = int(item[key])
-                        break
-                    except:
-                        pass
-
-            # Limit
-            for key in ['dailyLimit', 'limitPerDay', 'perDay', 'purchaseLimit']:
-                if key in item:
-                    try:
-                        banner['entries_per_day'] = int(item[key])
-                        break
-                    except:
-                        pass
-
-            # Titel
-            for key in ['name', 'title', 'productName', 'oripaName']:
-                if key in item and item[key]:
-                    banner['title'] = str(item[key])
-                    break
-
-            # Bild
-            for key in ['image', 'imageUrl', 'thumbnail', 'banner', 'mainImage']:
-                if key in item and item[key]:
-                    img = str(item[key])
-                    if not img.startswith('http'):
-                        img = f"{self.base_url}/{img.lstrip('/')}"
-                    banner['image_url'] = img
-                    break
-
-            # Best Hit
-            for key in ['topPrize', 'bestHit', 'mainCard', 'firstPrize', 'highlight']:
-                if key in item and item[key]:
-                    banner['best_hit'] = str(item[key])
-                    break
-
-            # End-Datum
-            for key in ['endDate', 'end_date', 'saleEnd', 'expiry', 'endAt']:
-                if key in item and item[key]:
-                    banner['sale_end_date'] = str(item[key])
-                    break
-
-            self._captured_banners[pack_id] = banner
-
-    async def _get_visible_pack_ids_from_dom(self) -> Set[int]:
-        """Extrahiert Pack-IDs aus den sichtbaren DOM-Elementen."""
-        pack_ids = set()
-
-        try:
-            # Primaer: Banner mit data-pack-id Attribut (wie im DOM gesehen)
-            # class="banner_wrap banner" data-pack-id="15311"
-            banner_elements = await self._page.query_selector_all('.banner_wrap[data-pack-id], .banner[data-pack-id], [data-pack-id]')
-            logger.debug(f"   Gefundene [data-pack-id] Elemente: {len(banner_elements)}")
-
-            for el in banner_elements:
-                try:
-                    pack_id_str = await el.get_attribute('data-pack-id')
-                    if pack_id_str and pack_id_str.isdigit():
-                        # Pruefe Sichtbarkeit - aber nicht zu streng
-                        try:
-                            is_visible = await el.is_visible()
-                            if is_visible:
-                                pack_ids.add(int(pack_id_str))
-                        except:
-                            # Bei Fehler trotzdem hinzufuegen
-                            pack_ids.add(int(pack_id_str))
-                except Exception as e:
-                    logger.debug(f"   Element error: {e}")
-
-            logger.debug(f"   Pack-IDs aus data-pack-id: {len(pack_ids)}")
-
-            # Sekundaer: Links mit packId Parameter
-            if len(pack_ids) < 10:  # Falls wenig gefunden
-                links = await self._page.query_selector_all('a[href*="packId="], a[href*="pack-detail"]')
-                for link in links:
-                    try:
-                        is_visible = await link.is_visible()
-                        if not is_visible:
-                            continue
-                        href = await link.get_attribute('href')
-                        if href:
-                            match = re.search(r'packId[=:](\d+)', href)
-                            if match:
-                                pack_ids.add(int(match.group(1)))
-                    except:
-                        pass
-
-            # Tertiaer: Bilder mit /pack/ID/ im src
-            if len(pack_ids) < 10:
-                images = await self._page.query_selector_all('img[src*="/pack/"]')
-                for img in images:
-                    try:
-                        src = await img.get_attribute('src')
-                        if src:
-                            # src="/pack/15311/1.webp"
-                            match = re.search(r'/pack/(\d+)/', src)
-                            if match:
-                                pack_ids.add(int(match.group(1)))
-                    except:
-                        pass
-
-        except Exception as e:
-            logger.warning(f"DOM-Extraktion Fehler: {e}")
-
-        logger.debug(f"   Gesamt Pack-IDs aus DOM: {len(pack_ids)}")
-        return pack_ids
+        logger.info("Browser gestartet (v6 - Pure DOM)")
 
     async def close(self):
         if self._context:
@@ -353,9 +71,8 @@ class GTCHAScraper:
         logger.info("Browser geschlossen")
 
     async def scrape_all_banners(self) -> List[ScrapedBanner]:
-        """Scrapet alle aktiven Banner mit korrekten Kategorien via DOM."""
+        """Scrapet alle aktiven Banner aus dem DOM."""
 
-        self._api_responses = []
         self._captured_banners = {}
         self._category_banners = {cat: set() for cat in CATEGORIES}
 
@@ -371,19 +88,17 @@ class GTCHAScraper:
             except:
                 pass
 
-            logger.info("Warte auf API (8s)...")
-            await asyncio.sleep(8)
-
-            logger.info(f"   -> {len(self._captured_banners)} Banner aus API geladen")
+            logger.info("Warte auf Seite (5s)...")
+            await asyncio.sleep(5)
 
         except Exception as e:
             logger.error(f"Ladefehler: {e}")
             return []
 
-        # WICHTIG: Durch alle Kategorien klicken und sichtbare Banner erfassen
+        # Durch alle Kategorien klicken und Banner aus DOM lesen
         for category in CATEGORIES:
             try:
-                logger.info(f"Wechsle zu: {category}")
+                logger.info(f"Kategorie: {category}")
 
                 # Tab klicken
                 clicked = await self._click_category_tab(category)
@@ -394,36 +109,14 @@ class GTCHAScraper:
                 # Warte auf DOM-Update
                 await asyncio.sleep(2)
 
-                # Extrahiere sichtbare Pack-IDs aus dem DOM
-                visible_ids = await self._get_visible_pack_ids_from_dom()
-
-                # Weise Kategorie zu
-                for pack_id in visible_ids:
-                    if pack_id in self._captured_banners:
-                        # Nur zuweisen wenn noch keine Kategorie
-                        if self._captured_banners[pack_id].get('category') is None:
-                            self._captured_banners[pack_id]['category'] = category
-                        self._category_banners[category].add(pack_id)
-
-                count = len(visible_ids)
-                logger.info(f"   -> {count} Banner sichtbar in {category}")
+                # Banner aus DOM extrahieren
+                count = await self._extract_banners_from_dom(category)
+                logger.info(f"   -> {count} Banner in {category}")
 
             except Exception as e:
                 logger.warning(f"   Fehler bei {category}: {e}")
 
-        # Banner ohne Kategorie auf "Bonus" setzen (Fallback)
-        uncategorized = 0
-        for pack_id, banner in self._captured_banners.items():
-            if banner.get('category') is None:
-                banner['category'] = "Bonus"
-                self._category_banners["Bonus"].add(pack_id)
-                uncategorized += 1
-
-        if uncategorized > 0:
-            logger.warning(f"   {uncategorized} Banner ohne Kategorie -> Bonus")
-
         # Statistik
-        logger.info(f"Gesamt API-Responses: {len(self._api_responses)}")
         logger.info(f"Gesamt aktive Banner: {len(self._captured_banners)}")
 
         for cat in CATEGORIES:
@@ -451,9 +144,11 @@ class GTCHAScraper:
 
         search_terms = variants.get(category, [category])
 
-        # Methode 1: Direkt auf .menu-item klicken (wie im DOM gesehen)
+        # Methode 1: Direkt auf .menu-item klicken
         try:
-            menu_items = await self._page.query_selector_all('.menu-item, .menu_item, [class*="menu"]')
+            menu_items = await self._page.query_selector_all('.menu-item, .menu_item, [class*="menu-item"]')
+            logger.debug(f"   Gefundene menu-items: {len(menu_items)}")
+
             for item in menu_items:
                 try:
                     text = await item.inner_text()
@@ -467,7 +162,7 @@ class GTCHAScraper:
         except Exception as e:
             logger.debug(f"   menu-item Fehler: {e}")
 
-        # Methode 2: get_by_text mit kurzem Timeout
+        # Methode 2: get_by_text
         for term in search_terms:
             try:
                 loc = self._page.get_by_text(term, exact=True)
@@ -478,16 +173,179 @@ class GTCHAScraper:
             except:
                 pass
 
-        # Methode 3: CSS Selector mit Text
-        for term in search_terms:
-            try:
-                await self._page.click(f"text={term}", timeout=3000)
-                logger.debug(f"   Klick (selector): {term}")
-                return True
-            except:
-                pass
-
         return False
+
+    async def _extract_banners_from_dom(self, category: str) -> int:
+        """Extrahiert alle sichtbaren Banner aus dem DOM."""
+        count = 0
+
+        try:
+            # Finde alle Banner-Elemente
+            banner_elements = await self._page.query_selector_all('[data-pack-id]')
+            logger.debug(f"   Gefundene [data-pack-id] Elemente: {len(banner_elements)}")
+
+            for el in banner_elements:
+                try:
+                    # Prüfe Sichtbarkeit
+                    is_visible = await el.is_visible()
+                    if not is_visible:
+                        continue
+
+                    # Pack ID
+                    pack_id_str = await el.get_attribute('data-pack-id')
+                    if not pack_id_str or not pack_id_str.isdigit():
+                        continue
+
+                    pack_id = int(pack_id_str)
+
+                    # Wenn Banner schon existiert, nur Kategorie hinzufügen
+                    if pack_id in self._captured_banners:
+                        self._category_banners[category].add(pack_id)
+                        count += 1
+                        continue
+
+                    # Neuen Banner aus DOM extrahieren
+                    banner = await self._parse_banner_element(el, pack_id, category)
+                    if banner:
+                        self._captured_banners[pack_id] = banner
+                        self._category_banners[category].add(pack_id)
+                        count += 1
+
+                except Exception as e:
+                    logger.debug(f"   Banner-Element Fehler: {e}")
+
+        except Exception as e:
+            logger.warning(f"   DOM-Extraktion Fehler: {e}")
+
+        return count
+
+    async def _parse_banner_element(self, el: ElementHandle, pack_id: int, category: str) -> Optional[Dict]:
+        """Parst ein Banner-Element und extrahiert alle Daten."""
+        banner = {
+            'pack_id': pack_id,
+            'category': category,
+        }
+
+        try:
+            # Preis aus .gacha_pay
+            # <div class="gacha_pay"><img ...><div>1.111</div></div>
+            price_el = await el.query_selector('.gacha_pay div:not(:has(img))')
+            if not price_el:
+                price_el = await el.query_selector('.gacha_pay')
+            if price_el:
+                price_text = await price_el.inner_text()
+                price_text = price_text.strip().replace('.', '').replace(',', '').replace(' ', '')
+                # Extrahiere Zahl
+                price_match = re.search(r'(\d+)', price_text)
+                if price_match:
+                    banner['price'] = int(price_match.group(1))
+
+            # Entries per day aus .limit_detail
+            # "Beschränkt auf 10 Mal pro Tag"
+            limit_el = await el.query_selector('.limit_detail, .buy_limit')
+            if limit_el:
+                limit_text = await limit_el.inner_text()
+                limit_match = re.search(r'(\d+)', limit_text)
+                if limit_match:
+                    banner['entries_per_day'] = int(limit_match.group(1))
+
+            # Packs aus .gacha_bar
+            # "Rückstand 100 / 100"
+            bar_el = await el.query_selector('.gacha_bar')
+            if bar_el:
+                bar_text = await bar_el.inner_text()
+                # Suche nach "X / Y" Pattern
+                packs_match = re.search(r'(\d+)\s*/\s*(\d+)', bar_text)
+                if packs_match:
+                    banner['current_packs'] = int(packs_match.group(1))
+                    banner['total_packs'] = int(packs_match.group(2))
+
+            # End-Datum aus .end-date
+            # "Verkauf bis 2026/01/21 JST"
+            end_el = await el.query_selector('.end-date')
+            if end_el:
+                end_text = await end_el.inner_text()
+                banner['sale_end_date'] = end_text.strip()
+
+            # Bild-URL aus img.current
+            img_el = await el.query_selector('img.current, .image img')
+            if img_el:
+                img_src = await img_el.get_attribute('src')
+                if img_src:
+                    if not img_src.startswith('http'):
+                        img_src = f"{self.base_url}{img_src}"
+                    # Entferne Query-Parameter für saubere URL
+                    img_src = img_src.split('?')[0]
+                    banner['image_url'] = img_src
+
+            # Prüfe ob Banner aktiv ist (kein Countdown = aktiv)
+            # Wenn "Bis zum Verkaufsbeginn" sichtbar ist, ist der Banner noch nicht aktiv
+            countdown_el = await el.query_selector('.countdown, [class*="countdown"]')
+            if countdown_el:
+                countdown_text = await countdown_el.inner_text()
+                if 'Verkaufsbeginn' in countdown_text or 'start' in countdown_text.lower():
+                    # Banner ist noch nicht aktiv - überspringen
+                    logger.debug(f"   Banner {pack_id} noch nicht aktiv (Countdown)")
+                    return None
+
+            # Detail-URL
+            banner['detail_page_url'] = f"{self.base_url}/pack-detail?packId={pack_id}"
+
+            logger.debug(f"   Banner {pack_id}: {banner.get('price', '?')} Coins, {banner.get('current_packs', '?')}/{banner.get('total_packs', '?')} Packs")
+
+            return banner
+
+        except Exception as e:
+            logger.debug(f"   Parse Fehler für {pack_id}: {e}")
+            return None
+
+    async def scrape_banner_details(self, pack_id: int) -> Tuple[Optional[str], Optional[bytes]]:
+        """Holt den Best Hit (erste Karte) von der Detail-Seite."""
+        detail_url = f"{self.base_url}/pack-detail?packId={pack_id}"
+
+        try:
+            logger.debug(f"   Lade Detail-Seite: {detail_url}")
+            await self._page.goto(detail_url, wait_until="domcontentloaded", timeout=30000)
+            await asyncio.sleep(3)
+
+            # Suche nach der ersten Karte (Rang 1)
+            # Die erste .card-container hat rank-icon-1
+            # Name ist in .card-info .name .text
+
+            # Methode 1: Erste Karte mit rank-icon-1
+            first_card = await self._page.query_selector('.card-container:has(.rank-icon-1)')
+            if first_card:
+                name_el = await first_card.query_selector('.name .text, .name span')
+                if name_el:
+                    text = await name_el.inner_text()
+                    if text and len(text.strip()) > 2:
+                        logger.debug(f"   Best Hit: {text.strip()}")
+                        return text.strip(), None
+
+            # Methode 2: Erste .card-container
+            first_card = await self._page.query_selector('.card-container')
+            if first_card:
+                name_el = await first_card.query_selector('.name .text, .name span, .name')
+                if name_el:
+                    text = await name_el.inner_text()
+                    if text and len(text.strip()) > 2:
+                        logger.debug(f"   Best Hit: {text.strip()}")
+                        return text.strip(), None
+
+            # Methode 3: Direkt .name .text suchen
+            name_el = await self._page.query_selector('.card-info .name .text, .name .text')
+            if name_el:
+                text = await name_el.inner_text()
+                if text and len(text.strip()) > 2:
+                    logger.debug(f"   Best Hit: {text.strip()}")
+                    return text.strip(), None
+
+            logger.debug(f"   Kein Best Hit gefunden für {pack_id}")
+            return None, None
+
+        except Exception as e:
+            logger.debug(f"   Detail-Seite Fehler: {e}")
+            return None, None
 
     def _convert_to_scraped_banners(self) -> List[ScrapedBanner]:
         """Konvertiert zu ScrapedBanner Objekten."""
@@ -506,19 +364,13 @@ class GTCHAScraper:
                     entries_per_day=data.get('entries_per_day'),
                     sale_end_date=data.get('sale_end_date'),
                     image_url=data.get('image_url'),
-                    detail_page_url=f"{self.base_url}/pack-detail?packId={pack_id}",
+                    detail_page_url=data.get('detail_page_url', f"{self.base_url}/pack-detail?packId={pack_id}"),
                 )
                 banners.append(banner)
             except Exception as e:
                 logger.warning(f"Fehler bei {pack_id}: {e}")
 
         return banners
-
-    async def scrape_banner_details(self, pack_id: int) -> Tuple[Optional[str], Optional[bytes]]:
-        """Gibt best_hit aus Cache zurueck (keine Seiten-Ladung!)"""
-        if pack_id in self._captured_banners:
-            return self._captured_banners[pack_id].get('best_hit'), None
-        return None, None
 
     async def download_image(self, url: str) -> Optional[bytes]:
         try:
