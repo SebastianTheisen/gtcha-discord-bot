@@ -72,12 +72,17 @@ class GTCHAScraper:
         """Faengt API-Responses ab und speichert Banner-Daten."""
         url = response.url
 
-        if not any(x in url.lower() for x in ['/api/', 'oripa', 'pack', 'product', 'item', 'gacha', 'list', 'category']):
-            return
-
+        # Logge ALLE API-Aufrufe (nicht nur /api/user/)
         content_type = response.headers.get('content-type', '')
         if 'application/json' not in content_type:
             return
+
+        # Zeige alle JSON-Responses von der Domain
+        if 'gtchaxonline.com' not in url and 'gtcha' not in url.lower():
+            return
+
+        # Logge die URL immer
+        logger.info(f"API Response: {url}")
 
         try:
             data = await response.json()
