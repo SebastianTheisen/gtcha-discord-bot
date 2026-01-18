@@ -306,30 +306,41 @@ class GTCHAScraper:
         try:
             logger.debug(f"   Lade Detail-Seite: {detail_url}")
             await self._page.goto(detail_url, wait_until="domcontentloaded", timeout=30000)
-            await asyncio.sleep(2)
+            await asyncio.sleep(3)
 
-            # Suche nach dem Namen der ersten Karte
-            # Verschiedene mögliche Selektoren
-            selectors = [
-                '.card-name',
-                '.prize-name',
-                '.item-name',
-                '.first-prize',
-                '.top-prize',
-                'h2',
-                'h3',
-            ]
+            # Suche nach der ersten Karte (Rang 1)
+            # Die erste .card-container hat rank-icon-1
+            # Name ist in .card-info .name .text
 
-            for selector in selectors:
-                try:
-                    el = await self._page.query_selector(selector)
-                    if el:
-                        text = await el.inner_text()
-                        if text and len(text) > 2:
-                            return text.strip(), None
-                except:
-                    pass
+            # Methode 1: Erste Karte mit rank-icon-1
+            first_card = await self._page.query_selector('.card-container:has(.rank-icon-1)')
+            if first_card:
+                name_el = await first_card.query_selector('.name .text, .name span')
+                if name_el:
+                    text = await name_el.inner_text()
+                    if text and len(text.strip()) > 2:
+                        logger.debug(f"   Best Hit: {text.strip()}")
+                        return text.strip(), None
 
+            # Methode 2: Erste .card-container
+            first_card = await self._page.query_selector('.card-container')
+            if first_card:
+                name_el = await first_card.query_selector('.name .text, .name span, .name')
+                if name_el:
+                    text = await name_el.inner_text()
+                    if text and len(text.strip()) > 2:
+                        logger.debug(f"   Best Hit: {text.strip()}")
+                        return text.strip(), None
+
+            # Methode 3: Direkt .name .text suchen
+            name_el = await self._page.query_selector('.card-info .name .text, .name .text')
+            if name_el:
+                text = await name_el.inner_text()
+                if text and len(text.strip()) > 2:
+                    logger.debug(f"   Best Hit: {text.strip()}")
+                    return text.strip(), None
+
+            logger.debug(f"   Kein Best Hit gefunden für {pack_id}")
             return None, None
 
         except Exception as e:
