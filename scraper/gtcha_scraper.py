@@ -72,7 +72,7 @@ class GTCHAScraper:
         """Faengt API-Responses ab und speichert Banner-Daten."""
         url = response.url
 
-        if not any(x in url.lower() for x in ['/api/', 'oripa', 'pack', 'product', 'item', 'gacha', 'list']):
+        if not any(x in url.lower() for x in ['/api/', 'oripa', 'pack', 'product', 'item', 'gacha', 'list', 'category']):
             return
 
         content_type = response.headers.get('content-type', '')
@@ -81,7 +81,21 @@ class GTCHAScraper:
 
         try:
             data = await response.json()
-            logger.debug(f"API: {url[:80]}")
+            logger.debug(f"API: {url}")
+
+            # Logge erste Item-Keys um Struktur zu verstehen
+            if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
+                keys = list(data[0].keys())
+                logger.debug(f"   List[0] keys: {keys}")
+            elif isinstance(data, dict):
+                keys = list(data.keys())
+                logger.debug(f"   Dict keys: {keys}")
+                # Wenn data.data oder data.items existiert
+                for k in ['data', 'items', 'oripas', 'packs', 'banners']:
+                    if k in data and isinstance(data[k], list) and len(data[k]) > 0:
+                        item_keys = list(data[k][0].keys()) if isinstance(data[k][0], dict) else []
+                        logger.debug(f"   {k}[0] keys: {item_keys}")
+                        break
 
             self._api_responses.append({
                 'url': url,
@@ -261,65 +275,36 @@ class GTCHAScraper:
         pack_ids = set()
 
         try:
-            # Verschiedene Selektoren fuer Pack-IDs
-            selectors = [
-                # Links mit packId Parameter
-                'a[href*="packId="]',
-                'a[href*="pack-detail"]',
-                # Data-Attribute
-                '[data-pack-id]',
-                '[data-id]',
-                '[data-product-id]',
-                # Klickbare Elemente
-                '[onclick*="pack"]',
-            ]
+            # Primaer: Banner mit data-pack-id Attribut (wie im DOM gesehen)
+            # class="banner_wrap banner" data-pack-id="15311"
+            banner_elements = await self._page.query_selector_all('.banner_wrap[data-pack-id], .banner[data-pack-id], [data-pack-id]')
+            logger.debug(f"   Gefundene [data-pack-id] Elemente: {len(banner_elements)}")
 
-            for selector in selectors:
+            for el in banner_elements:
                 try:
-                    elements = await self._page.query_selector_all(selector)
-                    for el in elements:
-                        # Pruefe ob Element sichtbar ist
-                        is_visible = await el.is_visible()
-                        if not is_visible:
-                            continue
-
-                        # Extrahiere Pack-ID
-                        pack_id = None
-
-                        # Aus href
-                        href = await el.get_attribute('href')
-                        if href:
-                            match = re.search(r'packId[=:](\d+)', href)
-                            if match:
-                                pack_id = int(match.group(1))
-                            else:
-                                match = re.search(r'/pack[/-]?(\d+)', href)
-                                if match:
-                                    pack_id = int(match.group(1))
-
-                        # Aus data-Attributen
-                        if not pack_id:
-                            for attr in ['data-pack-id', 'data-id', 'data-product-id']:
-                                val = await el.get_attribute(attr)
-                                if val and val.isdigit():
-                                    pack_id = int(val)
-                                    break
-
-                        if pack_id:
-                            pack_ids.add(pack_id)
-
+                    pack_id_str = await el.get_attribute('data-pack-id')
+                    if pack_id_str and pack_id_str.isdigit():
+                        # Pruefe Sichtbarkeit - aber nicht zu streng
+                        try:
+                            is_visible = await el.is_visible()
+                            if is_visible:
+                                pack_ids.add(int(pack_id_str))
+                        except:
+                            # Bei Fehler trotzdem hinzufuegen
+                            pack_ids.add(int(pack_id_str))
                 except Exception as e:
-                    logger.debug(f"Selector {selector} error: {e}")
+                    logger.debug(f"   Element error: {e}")
 
-            # Fallback: Alle Links durchsuchen
-            if not pack_ids:
-                all_links = await self._page.query_selector_all('a')
-                for link in all_links:
+            logger.debug(f"   Pack-IDs aus data-pack-id: {len(pack_ids)}")
+
+            # Sekundaer: Links mit packId Parameter
+            if len(pack_ids) < 10:  # Falls wenig gefunden
+                links = await self._page.query_selector_all('a[href*="packId="], a[href*="pack-detail"]')
+                for link in links:
                     try:
                         is_visible = await link.is_visible()
                         if not is_visible:
                             continue
-
                         href = await link.get_attribute('href')
                         if href:
                             match = re.search(r'packId[=:](\d+)', href)
@@ -328,9 +313,24 @@ class GTCHAScraper:
                     except:
                         pass
 
+            # Tertiaer: Bilder mit /pack/ID/ im src
+            if len(pack_ids) < 10:
+                images = await self._page.query_selector_all('img[src*="/pack/"]')
+                for img in images:
+                    try:
+                        src = await img.get_attribute('src')
+                        if src:
+                            # src="/pack/15311/1.webp"
+                            match = re.search(r'/pack/(\d+)/', src)
+                            if match:
+                                pack_ids.add(int(match.group(1)))
+                    except:
+                        pass
+
         except Exception as e:
             logger.warning(f"DOM-Extraktion Fehler: {e}")
 
+        logger.debug(f"   Gesamt Pack-IDs aus DOM: {len(pack_ids)}")
         return pack_ids
 
     async def close(self):
