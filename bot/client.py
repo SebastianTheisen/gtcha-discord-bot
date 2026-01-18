@@ -643,11 +643,15 @@ class GTCHABot(commands.Bot):
         if not isinstance(message.channel, discord.Thread):
             return
 
+        # Suche nach T1, T2 oder T3 im Text (case insensitive)
+        # Matcht: "T1", "t1 + 4b", "t1+4b", "T2 test", etc.
         content = message.content.strip().upper()
-        if content not in ['T1', 'T2', 'T3']:
+        tier_match = re.search(r'\b(T[123])\b', content)
+        if not tier_match:
             return
 
-        logger.debug(f"T-Nachricht erkannt: {content} von {message.author.name} in Thread {message.channel.id}")
+        tier = tier_match.group(1)  # "T1", "T2" oder "T3"
+        logger.debug(f"T-Nachricht erkannt: {tier} von {message.author.name} in Thread {message.channel.id}")
 
         try:
             # Pruefe ob Thread zu einem Banner gehoert
@@ -656,7 +660,6 @@ class GTCHABot(commands.Bot):
                 logger.debug(f"Thread {message.channel.id} nicht in DB gefunden")
                 return
 
-            tier = content
             user_id = message.author.id
             thread_id = message.channel.id
 
