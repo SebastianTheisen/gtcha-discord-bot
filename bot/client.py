@@ -114,28 +114,31 @@ class GTCHABot(commands.Bot):
         # Alle aktiven Threads vom Server holen (nicht aus Cache!)
         if GUILD_ID:
             try:
-                guild = self.get_guild(int(GUILD_ID))
-                if not guild:
-                    guild = await self.fetch_guild(int(GUILD_ID))
+                guild_id = int(GUILD_ID)
 
-                # Alle aktiven Threads im Guild abrufen
-                active_threads = await guild.fetch_active_threads()
-                logger.info(f"Gefundene aktive Threads im Guild: {len(active_threads.threads)}")
+                # HTTP API direkt nutzen um aktive Threads zu holen
+                data = await self.http.get_active_threads(guild_id)
+                threads_data = data.get('threads', [])
+                logger.info(f"Gefundene aktive Threads im Guild: {len(threads_data)}")
 
-                for thread in active_threads.threads:
+                for thread_data in threads_data:
                     try:
+                        thread_id = int(thread_data['id'])
+                        parent_id = int(thread_data.get('parent_id', 0))
+                        thread_name = thread_data.get('name', '')
+
                         # Nur Threads aus unseren Forum-Channels
-                        if thread.parent_id not in forum_channel_ids:
+                        if parent_id not in forum_channel_ids:
                             continue
 
-                        category = channel_to_category.get(thread.parent_id)
+                        category = channel_to_category.get(parent_id)
                         if not category:
                             continue
 
                         # Thread-Titel parsen: "ID: 15257 / Kosten: 1111 / Anzahl: 10 / Gesamt: 500"
-                        match = re.match(r'ID:\s*(\d+)', thread.name)
+                        match = re.match(r'ID:\s*(\d+)', thread_name)
                         if not match:
-                            logger.debug(f"Thread-Titel passt nicht: {thread.name}")
+                            logger.debug(f"Thread-Titel passt nicht: {thread_name}")
                             continue
 
                         pack_id = int(match.group(1))
@@ -145,32 +148,41 @@ class GTCHABot(commands.Bot):
                         if existing_thread:
                             continue  # Thread bereits bekannt
 
+                        # Thread-Objekt holen für Starter-Message
+                        thread = self.get_channel(thread_id)
+                        if not thread:
+                            try:
+                                thread = await self.fetch_channel(thread_id)
+                            except:
+                                thread = None
+
                         # Starter-Message holen (erste Nachricht im Thread)
                         starter_message_id = None
-                        try:
-                            # Forum-Threads haben eine starter_message
-                            if thread.starter_message:
-                                starter_message_id = thread.starter_message.id
-                            else:
-                                # Fallback: erste Nachricht holen
-                                async for msg in thread.history(limit=1, oldest_first=True):
-                                    starter_message_id = msg.id
-                                    break
-                        except Exception as e:
-                            logger.debug(f"Konnte Starter-Message nicht holen: {e}")
+                        if thread:
+                            try:
+                                # Forum-Threads haben eine starter_message
+                                if hasattr(thread, 'starter_message') and thread.starter_message:
+                                    starter_message_id = thread.starter_message.id
+                                else:
+                                    # Fallback: erste Nachricht holen
+                                    async for msg in thread.history(limit=1, oldest_first=True):
+                                        starter_message_id = msg.id
+                                        break
+                            except Exception as e:
+                                logger.debug(f"Konnte Starter-Message nicht holen: {e}")
 
                         # Thread in DB speichern
                         await self.db.save_thread(
                             banner_id=pack_id,
-                            thread_id=thread.id,
-                            channel_id=thread.parent_id,
+                            thread_id=thread_id,
+                            channel_id=parent_id,
                             starter_message_id=starter_message_id or 0
                         )
 
                         # Banner-Daten aus Thread-Titel extrahieren
-                        price_match = re.search(r'Kosten:\s*(\d+)', thread.name)
-                        entries_match = re.search(r'Anzahl:\s*(\d+)', thread.name)
-                        total_match = re.search(r'Gesamt:\s*(\d+)', thread.name)
+                        price_match = re.search(r'Kosten:\s*(\d+)', thread_name)
+                        entries_match = re.search(r'Anzahl:\s*(\d+)', thread_name)
+                        total_match = re.search(r'Gesamt:\s*(\d+)', thread_name)
 
                         banner = RecoveredBanner(
                             pack_id=pack_id,
@@ -183,10 +195,10 @@ class GTCHABot(commands.Bot):
 
                         await self.db.save_banner(banner)
                         recovered_count += 1
-                        logger.info(f"Thread wiederhergestellt: {pack_id} ({thread.name})")
+                        logger.info(f"Thread wiederhergestellt: {pack_id} ({thread_name})")
 
                     except Exception as e:
-                        logger.debug(f"Fehler bei Thread {thread.name}: {e}")
+                        logger.debug(f"Fehler bei Thread {thread_name}: {e}")
 
             except Exception as e:
                 logger.warning(f"Fehler beim Abrufen aktiver Threads: {e}")
