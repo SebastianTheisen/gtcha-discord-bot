@@ -102,13 +102,19 @@ class GTCHABot(commands.Bot):
 
                         # Banner mit 0 Packs: Thread löschen falls vorhanden
                         if banner.current_packs is not None and banner.current_packs == 0:
+                            logger.info(f"Banner {banner.pack_id} hat 0 Packs - prüfe Löschung")
                             if existing:
+                                logger.info(f"   Banner {banner.pack_id} existiert in DB - lösche Thread")
                                 # Thread löschen
                                 deleted = await self._delete_banner_thread(banner.pack_id)
                                 if deleted:
                                     deleted_count += 1
+                                    logger.info(f"   Banner {banner.pack_id} Thread gelöscht!")
+                                else:
+                                    logger.warning(f"   Banner {banner.pack_id} konnte nicht gelöscht werden")
+                            else:
+                                logger.debug(f"   Banner {banner.pack_id} nicht in DB")
                             skipped_empty += 1
-                            logger.debug(f"Übersprungen (0 Packs): {banner.pack_id}")
                             continue
 
                         if not existing:
@@ -238,38 +244,52 @@ class GTCHABot(commands.Bot):
     async def _delete_banner_thread(self, pack_id: int) -> bool:
         """Löscht den Discord-Thread für einen Banner mit 0 Packs."""
         try:
+            logger.info(f"   Lösche Thread für Banner {pack_id}...")
+
             thread_data = await self.db.get_thread_by_banner_id(pack_id)
             if not thread_data:
-                logger.debug(f"Kein Thread in DB für {pack_id}")
+                logger.warning(f"   Kein Thread in DB für Banner {pack_id}")
+                # Trotzdem Banner aus DB löschen
+                await self.db.delete_banner(pack_id)
                 return False
 
             thread_id = thread_data.get('thread_id')
+            logger.info(f"   Thread-ID für {pack_id}: {thread_id}")
+
             if not thread_id:
-                logger.debug(f"Keine thread_id für {pack_id}")
+                logger.warning(f"   Keine thread_id in Daten für {pack_id}")
                 return False
 
             # Thread aus Discord löschen
             # Erst aus Cache versuchen
             thread = self.get_channel(int(thread_id))
+            logger.info(f"   Thread aus Cache: {thread}")
 
             # Falls nicht im Cache, von API holen
             if not thread:
                 try:
+                    logger.info(f"   Hole Thread {thread_id} von API...")
                     thread = await self.fetch_channel(int(thread_id))
+                    logger.info(f"   Thread von API: {thread}")
                 except discord.NotFound:
-                    logger.debug(f"Thread {thread_id} existiert nicht mehr")
+                    logger.info(f"   Thread {thread_id} existiert nicht mehr in Discord")
                     thread = None
                 except Exception as e:
-                    logger.debug(f"Fehler beim Fetchen von Thread {thread_id}: {e}")
+                    logger.warning(f"   Fehler beim Fetchen von Thread {thread_id}: {e}")
                     thread = None
 
             if thread and isinstance(thread, discord.Thread):
+                logger.info(f"   Lösche Discord-Thread {thread_id}...")
                 await thread.delete(reason=f"Banner {pack_id} ausverkauft (0 Packs)")
-                logger.info(f"Thread gelöscht: {pack_id}")
+                logger.info(f"   Discord-Thread {thread_id} gelöscht!")
+            else:
+                logger.info(f"   Kein gültiger Thread zum Löschen gefunden")
 
             # Aus DB entfernen (auch wenn Thread schon gelöscht war)
+            logger.info(f"   Entferne aus DB...")
             await self.db.delete_thread(pack_id)
             await self.db.delete_banner(pack_id)
+            logger.info(f"   DB-Einträge für {pack_id} entfernt")
 
             return True
 
@@ -324,9 +344,23 @@ class GTCHABot(commands.Bot):
             # Medaille vergeben
             await self.db.save_medal(thread_id, tier, user_id)
 
-            # Emoji-Reaktion
+            # Emoji-Reaktion auf die ERSTE Nachricht im Thread (Banner-Post)
             emoji = {'T1': '🥇', 'T2': '🥈', 'T3': '🥉'}[tier]
-            await message.add_reaction(emoji)
+
+            # Hole die Starter-Message (erste Nachricht im Thread)
+            starter_message_id = thread_data.get('starter_message_id')
+            if starter_message_id:
+                try:
+                    starter_message = await message.channel.fetch_message(int(starter_message_id))
+                    await starter_message.add_reaction(emoji)
+                except Exception as e:
+                    logger.debug(f"Konnte Starter-Message nicht finden: {e}")
+                    # Fallback: Reaktion auf aktuelle Nachricht
+                    await message.add_reaction(emoji)
+            else:
+                # Fallback: Reaktion auf aktuelle Nachricht
+                await message.add_reaction(emoji)
+
             await message.reply(f"{emoji} {tier} geht an {message.author.mention}!")
 
             logger.info(f"Medaille: {tier} an {message.author.name} in {message.channel.name}")
