@@ -516,7 +516,7 @@ class GTCHABot(commands.Bot):
                 emoji = "📈"
                 change = f"+{new_packs - old_packs}"
 
-            message = f"{emoji} **Pack-Update:** {old_packs} → {new_packs} / {total} ({change})"
+            message = f"{emoji} **Pack-Update:** {old_packs} → {new_packs} ({change})"
 
             await thread.send(message)
             logger.debug(f"Pack-Update gepostet in Thread {thread_id}")
