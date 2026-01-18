@@ -315,6 +315,7 @@ class GTCHAScraper:
             bar_el = await el.query_selector('.gacha_bar')
             if bar_el:
                 bar_text = await bar_el.inner_text()
+                logger.debug(f"   gacha_bar Text für {pack_id}: '{bar_text}'")
                 # Entferne Tausender-Trennzeichen (. und ,) aus Zahlen
                 # "0 / 2.000" -> "0 / 2000"
                 bar_text_clean = re.sub(r'(\d)[.,](\d{3})', r'\1\2', bar_text)
@@ -325,7 +326,11 @@ class GTCHAScraper:
                 if packs_match:
                     banner['current_packs'] = int(packs_match.group(1))
                     banner['total_packs'] = int(packs_match.group(2))
-                    logger.debug(f"   Packs für {pack_id}: {bar_text} -> {banner['current_packs']}/{banner['total_packs']}")
+                    logger.debug(f"   Packs für {pack_id}: {banner['current_packs']}/{banner['total_packs']}")
+                else:
+                    logger.warning(f"   Packs-Pattern nicht gefunden für {pack_id}: '{bar_text_clean}'")
+            else:
+                logger.debug(f"   Kein .gacha_bar für {pack_id}")
 
             # End-Datum aus .end-date
             # "Verkauf bis 2026/01/21 JST"
