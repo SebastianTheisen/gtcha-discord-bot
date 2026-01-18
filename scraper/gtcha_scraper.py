@@ -1,15 +1,9 @@
 """
-GTCHA Webseiten-Scraper mit Playwright - VERBESSERTE VERSION
-
-Änderungen:
-- Bessere Selektoren für die SPA
-- Debug-Screenshots
-- Mehr Logging
-- Robustere Tab-Erkennung
+GTCHA Webseiten-Scraper - VERSION 3
+Mit Fix für JavaScript-Ausführung
 """
 
 import asyncio
-import re
 from pathlib import Path
 from typing import List, Optional, Tuple
 from datetime import datetime
@@ -41,14 +35,49 @@ class GTCHAScraper:
     async def start(self):
         logger.info("🌐 Starte Browser...")
         self._playwright = await async_playwright().start()
+
+        # Special browser arguments for container environment
         self._browser = await self._playwright.chromium.launch(
             headless=self.headless,
-            args=["--disable-dev-shm-usage", "--no-sandbox", "--disable-gpu", "--disable-setuid-sandbox"]
+            args=[
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--no-first-run',
+                '--no-zygote',
+                '--single-process',
+                '--disable-gpu',
+                '--disable-background-networking',
+                '--disable-default-apps',
+                '--disable-extensions',
+                '--disable-sync',
+                '--disable-translate',
+                '--hide-scrollbars',
+                '--metrics-recording-only',
+                '--mute-audio',
+                '--safebrowsing-disable-auto-update',
+                '--ignore-certificate-errors',
+                '--ignore-ssl-errors',
+                '--ignore-certificate-errors-spki-list',
+            ]
         )
-        self._page = await self._browser.new_page(
+
+        # Browser context with JavaScript enabled
+        context = await self._browser.new_context(
             viewport={"width": 1920, "height": 1080},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            java_script_enabled=True,
+            bypass_csp=True,
+            ignore_https_errors=True,
         )
+
+        self._page = await context.new_page()
+
+        # Log JavaScript errors
+        self._page.on("pageerror", lambda err: logger.warning(f"JS Error: {err}"))
+        self._page.on("console", lambda msg: logger.debug(f"Console: {msg.text}") if msg.type == "error" else None)
+
         logger.info("✅ Browser gestartet")
 
     async def close(self):
@@ -61,10 +90,10 @@ class GTCHAScraper:
     async def _save_debug_screenshot(self, name: str):
         """Speichert einen Debug-Screenshot."""
         try:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now().strftime("%H%M%S")
             path = self.debug_dir / f"{timestamp}_{name}.png"
-            await self._page.screenshot(path=str(path), full_page=True)
-            logger.debug(f"📸 Debug-Screenshot: {path}")
+            await self._page.screenshot(path=str(path))
+            logger.debug(f"📸 Screenshot: {path}")
         except Exception as e:
             logger.warning(f"Screenshot fehlgeschlagen: {e}")
 
@@ -74,27 +103,62 @@ class GTCHAScraper:
         logger.info(f"📄 Lade Hauptseite: {self.base_url}")
 
         try:
-            await self._page.goto(self.base_url, wait_until="networkidle", timeout=60000)
-            logger.info("✅ Seite geladen")
+            # Load page
+            response = await self._page.goto(
+                self.base_url,
+                wait_until="domcontentloaded",
+                timeout=60000
+            )
 
-            await asyncio.sleep(5)
+            logger.info(f"📡 Response Status: {response.status if response else 'None'}")
 
-            await self._save_debug_screenshot("01_hauptseite")
+            # Wait for networkidle
+            await self._page.wait_for_load_state("networkidle", timeout=30000)
+            logger.info("✅ Network idle erreicht")
 
-            page_content = await self._page.content()
-            if "JavaScript" in page_content and "enable" in page_content.lower():
-                logger.error("❌ JavaScript nicht geladen! Seite zeigt JS-Warnung.")
-                return []
+            # Extra wait time for SPA/JavaScript
+            logger.info("⏳ Warte auf JavaScript-Ausführung (10 Sekunden)...")
+            await asyncio.sleep(10)
 
-            logger.debug(f"📝 Seiten-Länge: {len(page_content)} Zeichen")
+            # Debug screenshot
+            await self._save_debug_screenshot("01_nach_warten")
 
-            await self._log_page_structure()
+            # Check page content
+            content = await self._page.content()
+            body_text = await self._page.inner_text("body")
+
+            logger.info(f"📝 Seiten-Länge: {len(content)} Zeichen")
+            logger.info(f"📝 Body-Text Länge: {len(body_text)} Zeichen")
+            logger.debug(f"📝 Body-Text Anfang: {body_text[:500]}")
+
+            # Check for JS warning
+            if "JavaScript" in body_text and "enable" in body_text.lower():
+                logger.error("❌ JavaScript nicht geladen! Seite zeigt JS-Warnung")
+                logger.error(f"   Body: {body_text[:200]}")
+
+                # Retry with more wait time
+                logger.info("🔄 Versuche erneut mit mehr Wartezeit...")
+                await asyncio.sleep(15)
+
+                body_text = await self._page.inner_text("body")
+                if "JavaScript" in body_text and "enable" in body_text.lower():
+                    logger.error("❌ JavaScript immer noch nicht geladen")
+                    await self._save_debug_screenshot("error_no_js")
+                    return []
+
+            # Check for banner content
+            if "Rückstand" in body_text or "kaufen" in body_text:
+                logger.info("✅ Banner-Content gefunden!")
+            else:
+                logger.warning("⚠️ Kein Banner-Content gefunden")
+                logger.debug(f"Body: {body_text[:1000]}")
 
         except Exception as e:
-            logger.error(f"❌ Fehler beim Laden der Hauptseite: {e}")
-            await self._save_debug_screenshot("error_hauptseite")
+            logger.error(f"❌ Fehler beim Laden: {e}")
+            await self._save_debug_screenshot("error_load")
             return []
 
+        # Scrape categories
         for category in CATEGORIES:
             try:
                 logger.info(f"🔍 Scrape Kategorie: {category}")
@@ -103,138 +167,77 @@ class GTCHAScraper:
                 logger.info(f"   → {len(banners)} Banner gefunden")
             except Exception as e:
                 logger.error(f"❌ Fehler bei {category}: {e}")
-                await self._save_debug_screenshot(f"error_{category.replace(' ', '_')}")
 
-        logger.info(f"✅ Scraping abgeschlossen: {len(all_banners)} Banner total")
+        logger.info(f"✅ Scraping fertig: {len(all_banners)} Banner total")
         return all_banners
 
-    async def _log_page_structure(self):
-        """Loggt die Seitenstruktur für Debug-Zwecke."""
-        try:
-            tab_info = await self._page.evaluate("""
-                () => {
-                    const info = {
-                        buttons: [],
-                        tabs: [],
-                        clickables: [],
-                        textContent: []
-                    };
-
-                    document.querySelectorAll('button').forEach(el => {
-                        info.buttons.push(el.innerText.substring(0, 50));
-                    });
-
-                    document.querySelectorAll('[class*="tab"], [role="tab"]').forEach(el => {
-                        info.tabs.push(el.innerText.substring(0, 50));
-                    });
-
-                    const categories = ['Bonus', 'MIX', 'Yu-Gi-Oh', 'Pokémon', 'Pokemon', 'Weiss', 'One piece', 'Hobby'];
-                    categories.forEach(cat => {
-                        const els = document.querySelectorAll(`*:not(script):not(style)`);
-                        els.forEach(el => {
-                            if (el.innerText && el.innerText.includes(cat) && el.innerText.length < 100) {
-                                info.clickables.push({
-                                    tag: el.tagName,
-                                    text: el.innerText.substring(0, 50),
-                                    classes: el.className.substring(0, 100)
-                                });
-                            }
-                        });
-                    });
-
-                    const body = document.body.innerText;
-                    if (body.includes('Rückstand')) info.textContent.push('Rückstand gefunden');
-                    if (body.includes('kaufen')) info.textContent.push('kaufen gefunden');
-                    if (body.includes('pro Tag')) info.textContent.push('pro Tag gefunden');
-                    if (body.includes('Verkauf bis')) info.textContent.push('Verkauf bis gefunden');
-
-                    return info;
-                }
-            """)
-
-            logger.debug(f"📊 Seiten-Struktur:")
-            logger.debug(f"   Buttons: {tab_info.get('buttons', [])[:10]}")
-            logger.debug(f"   Tabs: {tab_info.get('tabs', [])[:10]}")
-            logger.debug(f"   Kategorie-Elemente: {len(tab_info.get('clickables', []))}")
-            logger.debug(f"   Text-Inhalte: {tab_info.get('textContent', [])}")
-
-            if tab_info.get('clickables'):
-                for item in tab_info['clickables'][:5]:
-                    logger.debug(f"      → {item}")
-
-        except Exception as e:
-            logger.warning(f"Struktur-Analyse fehlgeschlagen: {e}")
-
     async def _scrape_category(self, category: str) -> List[ScrapedBanner]:
-        """Scrapet alle Banner einer Kategorie."""
-
+        # Click tab
         clicked = await self._click_category_tab(category)
-        if not clicked:
-            logger.warning(f"   ⚠️ Tab '{category}' konnte nicht geklickt werden")
 
+        # Wait
         await asyncio.sleep(3)
 
+        # Scroll for lazy loading
         await self._scroll_to_load_all()
 
-        await self._save_debug_screenshot(f"02_kategorie_{category.replace(' ', '_').replace('!', '')}")
+        # Screenshot
+        await self._save_debug_screenshot(f"kat_{category.replace(' ', '_').replace('!', '')}")
 
+        # Extract banners
         return await self._extract_banners_from_page(category)
 
     async def _click_category_tab(self, category: str) -> bool:
-        """Klickt auf einen Kategorie-Tab."""
+        """Klickt auf Kategorie-Tab mit verschiedenen Methoden."""
 
-        category_variants = [category]
+        variants = [category]
         if category == "Pokémon":
-            category_variants.extend(["Pokemon", "POKEMON", "Pokémon"])
+            variants = ["Pokémon", "Pokemon", "POKEMON"]
         elif category == "Yu-Gi-Oh!":
-            category_variants.extend(["Yu-Gi-Oh", "YuGiOh", "Yugioh", "Yu Gi Oh"])
+            variants = ["Yu-Gi-Oh!", "Yu-Gi-Oh", "YuGiOh", "Yugioh"]
         elif category == "One piece":
-            category_variants.extend(["One Piece", "ONE PIECE", "OnePiece", "Onepiece"])
+            variants = ["One piece", "One Piece", "ONE PIECE"]
         elif category == "Weiss Schwarz":
-            category_variants.extend(["Weiss", "WEISS SCHWARZ", "WeissSchwarz"])
+            variants = ["Weiss Schwarz", "Weiss", "WEISS SCHWARZ"]
 
-        for variant in category_variants:
+        for variant in variants:
+            # Method 1: getByText
             try:
-                element = await self._page.query_selector(f'text="{variant}"')
-                if element:
-                    await element.click()
-                    logger.debug(f"   ✅ Tab geklickt (text=): {variant}")
+                locator = self._page.get_by_text(variant, exact=True)
+                if await locator.count() > 0:
+                    await locator.first.click()
+                    logger.debug(f"   ✅ Tab geklickt (getByText): {variant}")
                     return True
             except:
                 pass
 
+            # Method 2: getByRole
             try:
-                element = await self._page.query_selector(f'text={variant}')
-                if element:
-                    await element.click()
-                    logger.debug(f"   ✅ Tab geklickt (text contains): {variant}")
+                locator = self._page.get_by_role("tab", name=variant)
+                if await locator.count() > 0:
+                    await locator.first.click()
+                    logger.debug(f"   ✅ Tab geklickt (getByRole): {variant}")
                     return True
             except:
                 pass
 
+            # Method 3: CSS text selector
             try:
-                elements = await self._page.query_selector_all(f'//*[contains(text(), "{variant}")]')
-                for el in elements:
-                    tag = await el.evaluate("el => el.tagName")
-                    if tag.lower() in ['button', 'div', 'span', 'a', 'li']:
-                        await el.click()
-                        logger.debug(f"   ✅ Tab geklickt (xpath): {variant}")
-                        return True
+                await self._page.click(f"text={variant}", timeout=2000)
+                logger.debug(f"   ✅ Tab geklickt (text=): {variant}")
+                return True
             except:
                 pass
 
+            # Method 4: JavaScript
             try:
                 clicked = await self._page.evaluate(f"""
                     () => {{
-                        const elements = document.querySelectorAll('*');
-                        for (const el of elements) {{
-                            if (el.innerText && el.innerText.trim() === '{variant}') {{
-                                el.click();
-                                return true;
-                            }}
-                        }}
-                        for (const el of elements) {{
-                            if (el.innerText && el.innerText.includes('{variant}') && el.innerText.length < 50) {{
+                        const els = [...document.querySelectorAll('*')];
+                        for (const el of els) {{
+                            const text = el.innerText || '';
+                            if (text.trim() === '{variant}' ||
+                                (text.includes('{variant}') && text.length < 30)) {{
                                 el.click();
                                 return true;
                             }}
@@ -248,136 +251,79 @@ class GTCHAScraper:
             except:
                 pass
 
-        logger.debug(f"   ❌ Kein Tab gefunden für: {category}")
         return False
 
     async def _scroll_to_load_all(self):
-        """Scrollt um lazy-loaded Content zu laden."""
+        """Scrollt für lazy loading."""
         try:
-            for i in range(8):
-                await self._page.evaluate(f"window.scrollBy(0, 300)")
-                await asyncio.sleep(0.4)
+            for _ in range(6):
+                await self._page.evaluate("window.scrollBy(0, 400)")
+                await asyncio.sleep(0.5)
             await self._page.evaluate("window.scrollTo(0, 0)")
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1)
         except:
             pass
 
     async def _extract_banners_from_page(self, category: str) -> List[ScrapedBanner]:
-        """Extrahiert Banner mit verbesserter Logik."""
+        """Extrahiert Banner von der Seite."""
         banners = []
 
         banner_data = await self._page.evaluate("""
             () => {
                 const banners = [];
-                const processedIds = new Set();
+                const seen = new Set();
 
-                // METHODE 1: Suche nach Links mit packId
+                // Find all links with packId
                 document.querySelectorAll('a[href*="packId"]').forEach(link => {
-                    try {
-                        const match = link.href.match(/packId=(\\d+)/);
-                        if (match && !processedIds.has(match[1])) {
-                            processedIds.add(match[1]);
+                    const match = link.href.match(/packId=(\\d+)/);
+                    if (!match || seen.has(match[1])) return;
+                    seen.add(match[1]);
 
-                            let container = link;
-                            for (let i = 0; i < 10; i++) {
-                                if (container.parentElement) {
-                                    container = container.parentElement;
-                                    const text = container.innerText || '';
-                                    if (text.includes('Rückstand') || text.includes('kaufen')) {
-                                        break;
-                                    }
-                                }
-                            }
-
-                            const text = container.innerText || '';
-                            const img = container.querySelector('img');
-
-                            const packMatch = text.match(/Rückstand\\s*(\\d+)\\s*\\/\\s*(\\d+)/i);
-                            const priceMatch = text.match(/(\\d{1,3}(?:[.,]\\d{3})*)\\s*$/m);
-                            const entriesMatch = text.match(/(\\d+)\\s*(?:Mal\\s*)?pro\\s*Tag/i);
-                            const dateMatch = text.match(/Verkauf bis\\s*([\\d\\/]+(?:\\s*JST)?)/i);
-
-                            let price = null;
-                            const priceMatch2 = text.match(/(\\d{1,3}(?:[.,]\\d{3})*|\\d+)(?:\\s*kaufen|\\s*$)/m);
-                            if (priceMatch2) {
-                                price = priceMatch2[1].replace(/[.,]/g, '');
-                            }
-
-                            banners.push({
-                                packId: match[1],
-                                currentPacks: packMatch ? packMatch[1] : null,
-                                totalPacks: packMatch ? packMatch[2] : null,
-                                entriesPerDay: entriesMatch ? entriesMatch[1] : null,
-                                saleEndDate: dateMatch ? dateMatch[1] : null,
-                                price: price,
-                                imageUrl: img ? img.src : null,
-                                rawText: text.substring(0, 500)
-                            });
+                    // Find container
+                    let container = link;
+                    for (let i = 0; i < 8; i++) {
+                        if (container.parentElement) {
+                            container = container.parentElement;
+                            if ((container.innerText || '').includes('Rückstand')) break;
                         }
-                    } catch (e) {}
+                    }
+
+                    const text = container.innerText || '';
+                    const img = container.querySelector('img');
+
+                    // Parse data
+                    const packs = text.match(/Rückstand\\s*(\\d+)\\s*\\/\\s*(\\d+)/i);
+                    const entries = text.match(/(\\d+)\\s*(?:Mal\\s*)?pro\\s*Tag/i);
+                    const date = text.match(/Verkauf bis\\s*([\\d\\/]+)/i);
+
+                    // Price
+                    let price = null;
+                    const priceEl = container.querySelector('[class*="price"], [class*="coin"]');
+                    if (priceEl) {
+                        const m = priceEl.innerText.match(/(\\d[\\d.,]*)/);
+                        if (m) price = m[1].replace(/[.,]/g, '');
+                    }
+                    if (!price) {
+                        const m = text.match(/(\\d{2,5})(?:\\s*(?:kaufen|$))/m);
+                        if (m) price = m[1];
+                    }
+
+                    banners.push({
+                        packId: match[1],
+                        price,
+                        currentPacks: packs ? packs[1] : null,
+                        totalPacks: packs ? packs[2] : null,
+                        entriesPerDay: entries ? entries[1] : null,
+                        saleEndDate: date ? date[1] : null,
+                        imageUrl: img ? img.src : null
+                    });
                 });
-
-                // METHODE 2: Suche nach Elementen mit "Rückstand"
-                if (banners.length === 0) {
-                    const allElements = document.querySelectorAll('*');
-                    allElements.forEach(el => {
-                        try {
-                            const text = el.innerText || '';
-                            if (text.includes('Rückstand') && text.includes('kaufen') && text.length < 1000) {
-                                const links = el.querySelectorAll('a[href*="packId"]');
-                                links.forEach(link => {
-                                    const match = link.href.match(/packId=(\\d+)/);
-                                    if (match && !processedIds.has(match[1])) {
-                                        processedIds.add(match[1]);
-
-                                        const packMatch = text.match(/Rückstand\\s*(\\d+)\\s*\\/\\s*(\\d+)/i);
-                                        const entriesMatch = text.match(/(\\d+)\\s*(?:Mal\\s*)?pro\\s*Tag/i);
-                                        const img = el.querySelector('img');
-
-                                        banners.push({
-                                            packId: match[1],
-                                            currentPacks: packMatch ? packMatch[1] : null,
-                                            totalPacks: packMatch ? packMatch[2] : null,
-                                            entriesPerDay: entriesMatch ? entriesMatch[1] : null,
-                                            imageUrl: img ? img.src : null,
-                                            rawText: text.substring(0, 500)
-                                        });
-                                    }
-                                });
-                            }
-                        } catch (e) {}
-                    });
-                }
-
-                // METHODE 3: Suche über onclick Handler
-                if (banners.length === 0) {
-                    document.querySelectorAll('[onclick*="packId"], [data-pack-id]').forEach(el => {
-                        try {
-                            const onclick = el.getAttribute('onclick') || '';
-                            const dataId = el.getAttribute('data-pack-id');
-                            const match = onclick.match(/packId[=:]\\s*(\\d+)/) || (dataId ? [null, dataId] : null);
-
-                            if (match && !processedIds.has(match[1])) {
-                                processedIds.add(match[1]);
-                                const text = el.innerText || '';
-                                const packMatch = text.match(/Rückstand\\s*(\\d+)\\s*\\/\\s*(\\d+)/i);
-
-                                banners.push({
-                                    packId: match[1],
-                                    currentPacks: packMatch ? packMatch[1] : null,
-                                    totalPacks: packMatch ? packMatch[2] : null,
-                                    rawText: text.substring(0, 500)
-                                });
-                            }
-                        } catch (e) {}
-                    });
-                }
 
                 return banners;
             }
         """)
 
-        logger.debug(f"   📊 Rohdaten: {len(banner_data)} gefunden")
+        logger.debug(f"   Raw data: {len(banner_data)} Banner")
 
         for data in banner_data:
             try:
@@ -385,10 +331,7 @@ class GTCHAScraper:
                 if pack_id == 0:
                     continue
 
-                if len(banners) < 2:
-                    logger.debug(f"   📝 Banner {pack_id} Raw: {data.get('rawText', '')[:200]}")
-
-                banner = ScrapedBanner(
+                banners.append(ScrapedBanner(
                     pack_id=pack_id,
                     category=category,
                     price_coins=int(data["price"]) if data.get("price") else None,
@@ -398,75 +341,44 @@ class GTCHAScraper:
                     sale_end_date=data.get("saleEndDate"),
                     image_url=data.get("imageUrl"),
                     detail_page_url=f"{self.base_url}/pack-detail?packId={pack_id}",
-                )
-                banners.append(banner)
-                logger.debug(f"   ✅ Banner: {banner}")
-
+                ))
             except Exception as e:
-                logger.warning(f"   ⚠️ Parse-Fehler: {e}")
+                logger.warning(f"   Parse error: {e}")
 
         return banners
 
     async def scrape_banner_details(self, pack_id: int) -> Tuple[Optional[str], Optional[bytes]]:
-        """Scrapet Details von einer Banner Detail-Seite."""
-        detail_url = f"{self.base_url}/pack-detail?packId={pack_id}"
+        """Scrapet Details einer Banner-Seite."""
+        url = f"{self.base_url}/pack-detail?packId={pack_id}"
 
         try:
-            logger.debug(f"   📄 Lade Detail-Seite: {detail_url}")
-            await self._page.goto(detail_url, wait_until="networkidle", timeout=30000)
-            await asyncio.sleep(3)
+            await self._page.goto(url, wait_until="networkidle", timeout=30000)
+            await asyncio.sleep(5)
 
-            screenshot = await self._page.screenshot(full_page=False)
+            screenshot = await self._page.screenshot()
 
             best_hit = await self._page.evaluate("""
                 () => {
-                    const selectors = [
-                        '[class*="hit"]',
-                        '[class*="prize"]',
-                        '[class*="reward"]',
-                        '[class*="card-item"]',
-                        '[class*="item"]'
-                    ];
-
-                    for (const sel of selectors) {
-                        const els = document.querySelectorAll(sel);
-                        if (els.length > 0) {
-                            const text = els[0].innerText || els[0].textContent || '';
-                            if (text.trim()) {
-                                return text.split('\\n')[0].trim().substring(0, 100);
-                            }
+                    const sels = ['[class*="hit"]', '[class*="prize"]', '[class*="item"]'];
+                    for (const sel of sels) {
+                        const el = document.querySelector(sel);
+                        if (el && el.innerText) {
+                            return el.innerText.split('\\n')[0].substring(0, 100);
                         }
                     }
-
-                    const body = document.body.innerText;
-                    const patterns = [
-                        /(PSA\\s*\\d+[^\\n]{0,50})/i,
-                        /(BGS\\s*\\d+[^\\n]{0,50})/i,
-                        /([A-Z][a-z]+\\s+(?:EX|GX|V|VMAX|VSTAR)[^\\n]{0,30})/
-                    ];
-
-                    for (const pattern of patterns) {
-                        const match = body.match(pattern);
-                        if (match) return match[1].trim();
-                    }
-
-                    return null;
+                    const m = document.body.innerText.match(/(PSA\\s*\\d+[^\\n]{0,50})/i);
+                    return m ? m[1] : null;
                 }
             """)
 
-            logger.debug(f"   🏆 Best Hit: {best_hit}")
             return best_hit, screenshot
-
         except Exception as e:
-            logger.error(f"   ❌ Detail-Seite Fehler: {e}")
+            logger.error(f"Detail error: {e}")
             return None, None
 
     async def download_image(self, url: str) -> Optional[bytes]:
-        """Lädt ein Bild herunter."""
         try:
-            response = await self._page.request.get(url)
-            if response.ok:
-                return await response.body()
-        except Exception as e:
-            logger.warning(f"   Bild-Download fehlgeschlagen: {e}")
-        return None
+            resp = await self._page.request.get(url)
+            return await resp.body() if resp.ok else None
+        except:
+            return None
