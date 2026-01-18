@@ -330,12 +330,20 @@ class GTCHABot(commands.Bot):
                             logger.info(f"Neu: {banner.pack_id} ({banner.category})")
                         else:
                             # Existierender Banner - auf Updates pruefen
-                            if banner.current_packs != existing.get('current_packs'):
+                            old_packs = existing.get('current_packs')
+                            if banner.current_packs != old_packs:
                                 await self.db.update_banner_packs(
                                     banner.pack_id,
                                     banner.current_packs
                                 )
-                                logger.debug(f"Update: {banner.pack_id} Packs: {banner.current_packs}")
+                                # Kommentar im Thread posten
+                                await self._post_pack_update_to_thread(
+                                    banner.pack_id,
+                                    old_packs,
+                                    banner.current_packs,
+                                    banner.total_packs
+                                )
+                                logger.info(f"Update: {banner.pack_id} Packs: {old_packs} -> {banner.current_packs}")
 
                     except Exception as e:
                         logger.error(f"Fehler bei Banner {banner.pack_id}: {e}")
@@ -431,6 +439,55 @@ class GTCHABot(commands.Bot):
             logger.error(f"Discord-Fehler beim Thread erstellen: {e}")
         except Exception as e:
             logger.error(f"Fehler beim Thread erstellen: {e}")
+
+    async def _post_pack_update_to_thread(self, pack_id: int, old_packs: int, new_packs: int, total_packs: int):
+        """Postet einen Kommentar im Thread wenn sich die Pack-Anzahl ändert."""
+        try:
+            thread_data = await self.db.get_thread_by_banner_id(pack_id)
+            if not thread_data:
+                logger.debug(f"Kein Thread für Pack-Update {pack_id}")
+                return
+
+            thread_id = thread_data.get('thread_id')
+            if not thread_id:
+                return
+
+            # Thread holen
+            thread = self.get_channel(int(thread_id))
+            if not thread:
+                try:
+                    thread = await self.fetch_channel(int(thread_id))
+                except discord.NotFound:
+                    logger.debug(f"Thread {thread_id} nicht gefunden")
+                    return
+                except Exception:
+                    return
+
+            if not isinstance(thread, discord.Thread):
+                return
+
+            # Kommentar erstellen
+            old_packs = old_packs or 0
+            new_packs = new_packs or 0
+            total = total_packs or 0
+
+            # Emoji basierend auf Veränderung
+            if new_packs < old_packs:
+                emoji = "📉"
+                change = f"-{old_packs - new_packs}"
+            else:
+                emoji = "📈"
+                change = f"+{new_packs - old_packs}"
+
+            message = f"{emoji} **Pack-Update:** {old_packs} → {new_packs} / {total} ({change})"
+
+            await thread.send(message)
+            logger.debug(f"Pack-Update gepostet in Thread {thread_id}")
+
+        except discord.HTTPException as e:
+            logger.debug(f"Discord-Fehler bei Pack-Update: {e}")
+        except Exception as e:
+            logger.debug(f"Fehler bei Pack-Update für {pack_id}: {e}")
 
     async def _delete_banner_thread(self, pack_id: int) -> bool:
         """Löscht den Discord-Thread für einen Banner mit 0 Packs."""

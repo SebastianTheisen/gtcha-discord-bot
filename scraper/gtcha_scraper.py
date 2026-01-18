@@ -296,13 +296,19 @@ class GTCHAScraper:
                     banner['price'] = int(price_match.group(1))
 
             # Entries per day aus .limit_detail
-            # "Beschränkt auf 10 Mal pro Tag"
-            limit_el = await el.query_selector('.limit_detail, .buy_limit')
+            # "Beschränkt auf 10 Mal" oder "Beschränkt auf 10 Mal pro Tag"
+            # Erst .limit_detail versuchen (spezifischer), dann .buy_limit
+            limit_el = await el.query_selector('.limit_detail')
+            if not limit_el:
+                limit_el = await el.query_selector('.buy_limit .limit_detail')
+            if not limit_el:
+                limit_el = await el.query_selector('.buy_limit')
             if limit_el:
                 limit_text = await limit_el.inner_text()
                 limit_match = re.search(r'(\d+)', limit_text)
                 if limit_match:
                     banner['entries_per_day'] = int(limit_match.group(1))
+                    logger.debug(f"   Entries für {pack_id}: '{limit_text}' -> {banner['entries_per_day']}")
 
             # Packs aus .gacha_bar
             # "Rückstand 100 / 2.000" oder "0 / 2,000"
