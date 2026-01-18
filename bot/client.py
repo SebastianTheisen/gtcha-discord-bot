@@ -190,7 +190,7 @@ class GTCHABot(commands.Bot):
                             price_coins=int(price_match.group(1)) if price_match else None,
                             entries_per_day=int(entries_match.group(1)) if entries_match else None,
                             total_packs=int(total_match.group(1)) if total_match else None,
-                            current_packs=1,  # Mindestens 1, sonst wäre Thread gelöscht
+                            current_packs=None,  # Unbekannt bei Wiederherstellung - kein falsches Update
                         )
 
                         await self.db.save_banner(banner)
@@ -260,7 +260,7 @@ class GTCHABot(commands.Bot):
                                 price_coins=int(price_match.group(1)) if price_match else None,
                                 entries_per_day=int(entries_match.group(1)) if entries_match else None,
                                 total_packs=int(total_match.group(1)) if total_match else None,
-                                current_packs=1,
+                                current_packs=None,  # Unbekannt bei Wiederherstellung
                             )
 
                             await self.db.save_banner(banner)
@@ -362,14 +362,18 @@ class GTCHABot(commands.Bot):
                                     banner.pack_id,
                                     banner.current_packs
                                 )
-                                # Kommentar im Thread posten
-                                await self._post_pack_update_to_thread(
-                                    banner.pack_id,
-                                    old_packs,
-                                    banner.current_packs,
-                                    banner.total_packs
-                                )
-                                logger.info(f"Update: {banner.pack_id} Packs: {old_packs} -> {banner.current_packs}")
+                                # Kommentar im Thread posten - NUR wenn alter Wert bekannt war
+                                # (Bei Wiederherstellung ist old_packs=None, dann kein Update posten)
+                                if old_packs is not None:
+                                    await self._post_pack_update_to_thread(
+                                        banner.pack_id,
+                                        old_packs,
+                                        banner.current_packs,
+                                        banner.total_packs
+                                    )
+                                    logger.info(f"Update: {banner.pack_id} Packs: {old_packs} -> {banner.current_packs}")
+                                else:
+                                    logger.debug(f"Initiales Pack-Update für {banner.pack_id}: {banner.current_packs} (kein Post)")
 
                     except Exception as e:
                         logger.error(f"Fehler bei Banner {banner.pack_id}: {e}")
