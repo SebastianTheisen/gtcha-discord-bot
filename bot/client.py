@@ -1,5 +1,5 @@
 """
-Discord Bot Client - Reparierte Version
+Discord Bot Client - Forum-Channel Version
 """
 
 import asyncio
@@ -40,6 +40,18 @@ class GTCHABot(commands.Bot):
         await self.db.init()
         logger.info(f"Datenbank initialisiert: {self.db.db_path}")
 
+        # Slash Commands registrieren
+        self.tree.add_command(app_commands.Command(
+            name="refresh",
+            description="Manuelles Scraping starten",
+            callback=self.refresh_command
+        ))
+        self.tree.add_command(app_commands.Command(
+            name="status",
+            description="Bot-Status anzeigen",
+            callback=self.status_command
+        ))
+
         # Scheduler starten
         self.scheduler.add_job(
             self.scrape_and_post,
@@ -51,11 +63,12 @@ class GTCHABot(commands.Bot):
         self.scheduler.start()
         logger.info(f"Scheduler: Alle {SCRAPE_INTERVAL_MINUTES} Min")
 
-        # Commands registrieren
+        # Commands synchronisieren
         if GUILD_ID:
             guild = discord.Object(id=int(GUILD_ID))
             self.tree.copy_global_to(guild=guild)
             await self.tree.sync(guild=guild)
+            logger.info("Slash Commands synchronisiert")
 
     async def on_ready(self):
         logger.info(f"Bot online: {self.user}")
@@ -86,7 +99,17 @@ class GTCHABot(commands.Bot):
                         existing = await self.db.get_banner(banner.pack_id)
 
                         if not existing:
-                            # Neuer Banner - in DB speichern
+                            # Neuer Banner - Best Hit von Detail-Seite holen
+                            if not banner.best_hit:
+                                try:
+                                    best_hit, _ = await scraper.scrape_banner_details(banner.pack_id)
+                                    if best_hit:
+                                        banner.best_hit = best_hit
+                                        logger.debug(f"Best Hit fuer {banner.pack_id}: {best_hit}")
+                                except Exception as e:
+                                    logger.debug(f"Best Hit Fehler: {e}")
+
+                            # In DB speichern
                             await self.db.save_banner(banner)
 
                             # In Discord posten
@@ -233,32 +256,24 @@ class GTCHABot(commands.Bot):
 
         logger.info(f"Medaille: {tier} an {message.author.name} in {message.channel.name}")
 
+    # Slash Commands als Methoden
+    async def refresh_command(self, interaction: discord.Interaction):
+        """Manuelles Scraping starten."""
+        await interaction.response.defer()
+        await self.scrape_and_post()
+        await interaction.followup.send("Scrape abgeschlossen!")
 
-# Slash Commands
-@app_commands.command(name="refresh", description="Manuelles Scraping starten")
-async def refresh_command(interaction: discord.Interaction):
-    await interaction.response.defer()
+    async def status_command(self, interaction: discord.Interaction):
+        """Bot-Status anzeigen."""
+        stats = await self.db.get_stats()
 
-    bot: GTCHABot = interaction.client
-    await bot.scrape_and_post()
+        embed = discord.Embed(
+            title="GTCHA Bot Status",
+            color=discord.Color.green()
+        )
 
-    await interaction.followup.send("Scrape abgeschlossen!")
+        embed.add_field(name="Banner gesamt", value=str(stats.get('total_banners', 0)), inline=True)
+        embed.add_field(name="Aktive Threads", value=str(stats.get('active_threads', 0)), inline=True)
+        embed.add_field(name="Medaillen", value=str(stats.get('total_medals', 0)), inline=True)
 
-
-@app_commands.command(name="status", description="Bot-Status anzeigen")
-async def status_command(interaction: discord.Interaction):
-    bot: GTCHABot = interaction.client
-
-    # Statistiken aus DB
-    stats = await bot.db.get_stats()
-
-    embed = discord.Embed(
-        title="GTCHA Bot Status",
-        color=discord.Color.green()
-    )
-
-    embed.add_field(name="Banner gesamt", value=str(stats.get('total_banners', 0)), inline=True)
-    embed.add_field(name="Aktive Threads", value=str(stats.get('active_threads', 0)), inline=True)
-    embed.add_field(name="Medaillen", value=str(stats.get('total_medals', 0)), inline=True)
-
-    await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=embed)
