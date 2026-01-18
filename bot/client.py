@@ -343,6 +343,20 @@ class GTCHABot(commands.Bot):
                         else:
                             # Existierender Banner - auf Updates pruefen
                             old_packs = existing.get('current_packs')
+                            old_entries = existing.get('entries_per_day')
+                            title_updated = False
+
+                            # Prüfe ob entries_per_day sich geändert hat (Titel-Update nötig)
+                            if banner.entries_per_day and banner.entries_per_day != old_entries:
+                                await self.db.update_banner_entries(
+                                    banner.pack_id,
+                                    banner.entries_per_day
+                                )
+                                # Thread-Titel aktualisieren
+                                await self._update_thread_title(banner)
+                                title_updated = True
+                                logger.info(f"Update: {banner.pack_id} Entries: {old_entries} -> {banner.entries_per_day}")
+
                             if banner.current_packs != old_packs:
                                 await self.db.update_banner_packs(
                                     banner.pack_id,
@@ -500,6 +514,50 @@ class GTCHABot(commands.Bot):
             logger.debug(f"Discord-Fehler bei Pack-Update: {e}")
         except Exception as e:
             logger.debug(f"Fehler bei Pack-Update für {pack_id}: {e}")
+
+    async def _update_thread_title(self, banner):
+        """Aktualisiert den Thread-Titel wenn sich Banner-Daten geändert haben."""
+        try:
+            thread_data = await self.db.get_thread_by_banner_id(banner.pack_id)
+            if not thread_data:
+                logger.debug(f"Kein Thread für Titel-Update {banner.pack_id}")
+                return
+
+            thread_id = thread_data.get('thread_id')
+            if not thread_id:
+                return
+
+            # Thread holen
+            thread = self.get_channel(int(thread_id))
+            if not thread:
+                try:
+                    thread = await self.fetch_channel(int(thread_id))
+                except discord.NotFound:
+                    logger.debug(f"Thread {thread_id} nicht gefunden")
+                    return
+                except Exception:
+                    return
+
+            if not isinstance(thread, discord.Thread):
+                return
+
+            # Neuen Titel generieren
+            price = banner.price_coins or 0
+            entries = banner.entries_per_day or 1
+            total = banner.total_packs or 0
+            new_title = f"ID: {banner.pack_id} / Kosten: {price} / Anzahl: {entries} / Gesamt: {total}"
+            if len(new_title) > 100:
+                new_title = new_title[:97] + "..."
+
+            # Nur updaten wenn sich Titel geändert hat
+            if thread.name != new_title:
+                await thread.edit(name=new_title)
+                logger.info(f"Thread-Titel aktualisiert: {new_title}")
+
+        except discord.HTTPException as e:
+            logger.debug(f"Discord-Fehler bei Titel-Update: {e}")
+        except Exception as e:
+            logger.debug(f"Fehler bei Titel-Update für {banner.pack_id}: {e}")
 
     async def _delete_banner_thread(self, pack_id: int) -> bool:
         """Löscht den Discord-Thread für einen Banner mit 0 Packs."""

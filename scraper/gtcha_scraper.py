@@ -296,7 +296,8 @@ class GTCHAScraper:
                     banner['price'] = int(price_match.group(1))
 
             # Entries per day aus .limit_detail
-            # "Beschränkt auf 10 Mal" oder "Beschränkt auf 10 Mal pro Tag"
+            # Deutsch: "Beschränkt auf 10 Mal" oder "Beschränkt auf 10 Mal pro Tag"
+            # Japanisch: "1日50回限定" (50 mal pro Tag limitiert)
             # Erst .limit_detail versuchen (spezifischer), dann .buy_limit
             limit_el = await el.query_selector('.limit_detail')
             if not limit_el:
@@ -306,12 +307,26 @@ class GTCHAScraper:
             if limit_el:
                 limit_text = await limit_el.inner_text()
                 logger.debug(f"   limit_detail Text für {pack_id}: '{limit_text}'")
-                limit_match = re.search(r'(\d+)', limit_text)
-                if limit_match:
-                    banner['entries_per_day'] = int(limit_match.group(1))
-                    logger.debug(f"   Entries für {pack_id}: {banner['entries_per_day']}")
+
+                # Japanisches Format: "1日50回限定" -> 50 (Zahl vor 回)
+                jp_match = re.search(r'(\d+)回', limit_text)
+                if jp_match:
+                    banner['entries_per_day'] = int(jp_match.group(1))
+                    logger.debug(f"   Entries für {pack_id}: {banner['entries_per_day']} (JP)")
                 else:
-                    logger.warning(f"   Entries-Pattern nicht gefunden für {pack_id}: '{limit_text}'")
+                    # Deutsches Format: "Beschränkt auf 10 Mal" -> 10
+                    de_match = re.search(r'(\d+)\s*Mal', limit_text, re.IGNORECASE)
+                    if de_match:
+                        banner['entries_per_day'] = int(de_match.group(1))
+                        logger.debug(f"   Entries für {pack_id}: {banner['entries_per_day']} (DE)")
+                    else:
+                        # Fallback: letzte Zahl im Text
+                        all_numbers = re.findall(r'(\d+)', limit_text)
+                        if all_numbers:
+                            banner['entries_per_day'] = int(all_numbers[-1])
+                            logger.debug(f"   Entries für {pack_id}: {banner['entries_per_day']} (Fallback)")
+                        else:
+                            logger.warning(f"   Entries-Pattern nicht gefunden für {pack_id}: '{limit_text}'")
             else:
                 logger.debug(f"   Kein .limit_detail/.buy_limit für {pack_id}")
 
