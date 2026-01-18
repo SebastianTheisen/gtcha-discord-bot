@@ -103,27 +103,39 @@ class GTCHABot(commands.Bot):
         logger.info("Prüfe Discord-Threads zur Wiederherstellung...")
         recovered_count = 0
 
+        # Alle Forum-Channel-IDs sammeln
+        forum_channel_ids = set()
+        channel_to_category = {}
         for category, channel_id in CHANNEL_IDS.items():
-            if not channel_id:
-                continue
+            if channel_id:
+                forum_channel_ids.add(int(channel_id))
+                channel_to_category[int(channel_id)] = category
 
+        # Alle aktiven Threads vom Server holen (nicht aus Cache!)
+        if GUILD_ID:
             try:
-                channel = self.get_channel(int(channel_id))
-                if not channel:
-                    try:
-                        channel = await self.fetch_channel(int(channel_id))
-                    except Exception:
-                        continue
+                guild = self.get_guild(int(GUILD_ID))
+                if not guild:
+                    guild = await self.fetch_guild(int(GUILD_ID))
 
-                if not isinstance(channel, discord.ForumChannel):
-                    continue
+                # Alle aktiven Threads im Guild abrufen
+                active_threads = await guild.fetch_active_threads()
+                logger.info(f"Gefundene aktive Threads im Guild: {len(active_threads.threads)}")
 
-                # Alle aktiven Threads im Forum durchgehen
-                for thread in channel.threads:
+                for thread in active_threads.threads:
                     try:
+                        # Nur Threads aus unseren Forum-Channels
+                        if thread.parent_id not in forum_channel_ids:
+                            continue
+
+                        category = channel_to_category.get(thread.parent_id)
+                        if not category:
+                            continue
+
                         # Thread-Titel parsen: "ID: 15257 / Kosten: 1111 / Anzahl: 10 / Gesamt: 500"
                         match = re.match(r'ID:\s*(\d+)', thread.name)
                         if not match:
+                            logger.debug(f"Thread-Titel passt nicht: {thread.name}")
                             continue
 
                         pack_id = int(match.group(1))
@@ -151,7 +163,7 @@ class GTCHABot(commands.Bot):
                         await self.db.save_thread(
                             banner_id=pack_id,
                             thread_id=thread.id,
-                            channel_id=channel.id,
+                            channel_id=thread.parent_id,
                             starter_message_id=starter_message_id or 0
                         )
 
@@ -171,12 +183,30 @@ class GTCHABot(commands.Bot):
 
                         await self.db.save_banner(banner)
                         recovered_count += 1
-                        logger.info(f"Thread wiederhergestellt: {pack_id} aus {channel.name}")
+                        logger.info(f"Thread wiederhergestellt: {pack_id} ({thread.name})")
 
                     except Exception as e:
                         logger.debug(f"Fehler bei Thread {thread.name}: {e}")
 
-                # Auch archivierte Threads prüfen
+            except Exception as e:
+                logger.warning(f"Fehler beim Abrufen aktiver Threads: {e}")
+
+        # Auch archivierte Threads prüfen
+        for category, channel_id in CHANNEL_IDS.items():
+            if not channel_id:
+                continue
+
+            try:
+                channel = self.get_channel(int(channel_id))
+                if not channel:
+                    try:
+                        channel = await self.fetch_channel(int(channel_id))
+                    except Exception:
+                        continue
+
+                if not isinstance(channel, discord.ForumChannel):
+                    continue
+
                 try:
                     async for thread in channel.archived_threads(limit=100):
                         try:
