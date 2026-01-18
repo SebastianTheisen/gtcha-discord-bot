@@ -157,6 +157,34 @@ class Database:
             """, (thread_id, tier, user_id, now))
             await db.commit()
 
+    async def get_thread_by_banner_id(self, banner_id: int) -> Optional[Dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM discord_threads WHERE banner_id = ?", (banner_id,)
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def delete_thread(self, banner_id: int) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            # Erst Medals löschen die zu diesem Thread gehören
+            await db.execute("""
+                DELETE FROM medals WHERE thread_id IN (
+                    SELECT thread_id FROM discord_threads WHERE banner_id = ?
+                )
+            """, (banner_id,))
+            # Dann Thread löschen
+            await db.execute(
+                "DELETE FROM discord_threads WHERE banner_id = ?", (banner_id,)
+            )
+            await db.commit()
+
+    async def delete_banner(self, pack_id: int) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("DELETE FROM banners WHERE pack_id = ?", (pack_id,))
+            await db.commit()
+
     async def get_stats(self) -> Dict[str, int]:
         async with aiosqlite.connect(self.db_path) as db:
             stats = {}

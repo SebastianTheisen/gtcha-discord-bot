@@ -94,16 +94,22 @@ class GTCHABot(commands.Bot):
                 # Verarbeite Banner
                 new_count = 0
                 skipped_empty = 0
+                deleted_count = 0
                 for banner in banners:
                     try:
-                        # Überspringe Banner ohne verfügbare Packs
+                        # Pruefe ob Banner neu ist
+                        existing = await self.db.get_banner(banner.pack_id)
+
+                        # Banner mit 0 Packs: Thread löschen falls vorhanden
                         if banner.current_packs is not None and banner.current_packs == 0:
+                            if existing:
+                                # Thread löschen
+                                deleted = await self._delete_banner_thread(banner.pack_id)
+                                if deleted:
+                                    deleted_count += 1
                             skipped_empty += 1
                             logger.debug(f"Übersprungen (0 Packs): {banner.pack_id}")
                             continue
-
-                        # Pruefe ob Banner neu ist
-                        existing = await self.db.get_banner(banner.pack_id)
 
                         if not existing:
                             # Neuer Banner - Best Hit erstmal NICHT laden (zu langsam)
@@ -138,7 +144,7 @@ class GTCHABot(commands.Bot):
                         logger.error(f"Fehler bei Banner {banner.pack_id}: {e}")
 
                 elapsed = (datetime.now() - start_time).total_seconds()
-                logger.info(f"Scrape done: {elapsed:.1f}s, {new_count} neue Banner, {skipped_empty} übersprungen (0 Packs)")
+                logger.info(f"Scrape done: {elapsed:.1f}s, {new_count} neu, {deleted_count} gelöscht, {skipped_empty} leer")
 
         except Exception as e:
             logger.error(f"Scrape-Fehler: {e}")
@@ -164,14 +170,17 @@ class GTCHABot(commands.Bot):
             logger.warning(f"Channel {channel.name} ist kein Forum!")
             return
 
-        # Thread-Titel
-        title = banner.title or f"Pack {banner.pack_id}"
+        # Thread-Titel: PackID/Kosten/Entries/TotalPacks
+        price = banner.price_coins or 0
+        entries = banner.entries_per_day or 1
+        total = banner.total_packs or 0
+        title = f"{banner.pack_id}/{price}/{entries}x/{total}"
         if len(title) > 100:
             title = title[:97] + "..."
 
         # Embed erstellen
         embed = discord.Embed(
-            title=title,
+            title=banner.title or f"Pack {banner.pack_id}",
             url=banner.detail_page_url,
             color=discord.Color.gold(),
             timestamp=datetime.now()
@@ -226,8 +235,41 @@ class GTCHABot(commands.Bot):
         except Exception as e:
             logger.error(f"Fehler beim Thread erstellen: {e}")
 
+    async def _delete_banner_thread(self, pack_id: int) -> bool:
+        """Löscht den Discord-Thread für einen Banner mit 0 Packs."""
+        try:
+            thread_data = await self.db.get_thread_by_banner_id(pack_id)
+            if not thread_data:
+                return False
+
+            thread_id = thread_data.get('thread_id')
+            if not thread_id:
+                return False
+
+            # Thread aus Discord löschen
+            thread = self.get_channel(int(thread_id))
+            if thread and isinstance(thread, discord.Thread):
+                await thread.delete(reason=f"Banner {pack_id} ausverkauft (0 Packs)")
+                logger.info(f"Thread gelöscht: {pack_id}")
+
+            # Aus DB entfernen
+            await self.db.delete_thread(pack_id)
+            await self.db.delete_banner(pack_id)
+
+            return True
+
+        except discord.HTTPException as e:
+            logger.error(f"Discord-Fehler beim Thread löschen: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Fehler beim Thread löschen für {pack_id}: {e}")
+            return False
+
     async def on_message(self, message: discord.Message):
         """Listener fuer T1/T2/T3 Reaktionen."""
+        # Erst Commands verarbeiten
+        await self.process_commands(message)
+
         if message.author.bot:
             return
 
@@ -239,30 +281,38 @@ class GTCHABot(commands.Bot):
         if content not in ['T1', 'T2', 'T3']:
             return
 
-        # Pruefe ob Thread zu einem Banner gehoert
-        thread_data = await self.db.get_thread_by_id(message.channel.id)
-        if not thread_data:
-            return
+        logger.debug(f"T-Nachricht erkannt: {content} von {message.author.name} in Thread {message.channel.id}")
 
-        tier = content
-        user_id = message.author.id
-        thread_id = message.channel.id
+        try:
+            # Pruefe ob Thread zu einem Banner gehoert
+            thread_data = await self.db.get_thread_by_id(message.channel.id)
+            if not thread_data:
+                logger.debug(f"Thread {message.channel.id} nicht in DB gefunden")
+                return
 
-        # Pruefe ob Medaille schon vergeben
-        existing = await self.db.get_medal(thread_id, tier)
-        if existing:
-            await message.reply(f"Fehler: {tier} wurde bereits von <@{existing['user_id']}> beansprucht!")
-            return
+            tier = content
+            user_id = message.author.id
+            thread_id = message.channel.id
 
-        # Medaille vergeben
-        await self.db.save_medal(thread_id, tier, user_id)
+            # Pruefe ob Medaille schon vergeben
+            existing = await self.db.get_medal(thread_id, tier)
+            if existing:
+                await message.reply(f"❌ {tier} wurde bereits von <@{existing['user_id']}> beansprucht!")
+                return
 
-        # Emoji-Reaktion
-        emoji = {'T1': '🥇', 'T2': '🥈', 'T3': '🥉'}[tier]
-        await message.add_reaction(emoji)
-        await message.reply(f"{emoji} {tier} geht an {message.author.mention}!")
+            # Medaille vergeben
+            await self.db.save_medal(thread_id, tier, user_id)
 
-        logger.info(f"Medaille: {tier} an {message.author.name} in {message.channel.name}")
+            # Emoji-Reaktion
+            emoji = {'T1': '🥇', 'T2': '🥈', 'T3': '🥉'}[tier]
+            await message.add_reaction(emoji)
+            await message.reply(f"{emoji} {tier} geht an {message.author.mention}!")
+
+            logger.info(f"Medaille: {tier} an {message.author.name} in {message.channel.name}")
+
+        except Exception as e:
+            logger.error(f"Fehler bei Medaillen-Vergabe: {e}")
+            await message.reply(f"❌ Fehler: {e}")
 
     # Slash Commands als Methoden
     async def refresh_command(self, interaction: discord.Interaction):
