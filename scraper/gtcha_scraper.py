@@ -144,7 +144,7 @@ class GTCHAScraper:
             "MIX": ["mix"],
             "Yu-Gi-Oh!": ["yu-gi-oh", "yugioh", "遊戯王"],
             "Pokémon": ["pokemon", "poke", "ポケモン"],
-            "Weiss Schwarz": ["weiss", "schwarz", "ヴァイスシュヴァルツ"],
+            "Weiss Schwarz": ["weiss", "schwarz", "ヴァイスシュヴァルツ", "ヴァイスシュバルツ"],
             "One piece": ["one piece", "onepiece", "ワンピース"],
             "Hobby": ["hobby", "ホビー"],
         }
