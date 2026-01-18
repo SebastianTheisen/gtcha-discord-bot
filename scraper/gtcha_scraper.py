@@ -1,14 +1,18 @@
 """
-GTCHA Webseiten-Scraper - FINALE VERSION
-Mit korrekten Browser-Argumenten für Container/Railway
+GTCHA Webseiten-Scraper - API INTERCEPTION VERSION
+
+Diese Version fängt die API-Requests ab die die Vue.js App macht,
+anstatt das gerenderte HTML zu parsen. Das ist viel zuverlässiger!
 """
 
 import asyncio
+import json
+import re
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict, Any
 from datetime import datetime
 
-from playwright.async_api import async_playwright, Page, Browser
+from playwright.async_api import async_playwright, Page, Browser, BrowserContext, Response
 from loguru import logger
 
 from .models import ScrapedBanner
@@ -21,9 +25,14 @@ class GTCHAScraper:
         self.headless = headless
         self._playwright = None
         self._browser: Optional[Browser] = None
+        self._context: Optional[BrowserContext] = None
         self._page: Optional[Page] = None
         self.debug_dir = Path("screenshots/debug")
         self.debug_dir.mkdir(parents=True, exist_ok=True)
+
+        # Store intercepted API data
+        self._api_responses: List[Dict[str, Any]] = []
+        self._captured_banners: Dict[int, Dict] = {}  # packId -> banner data
 
     async def __aenter__(self):
         await self.start()
@@ -36,8 +45,6 @@ class GTCHAScraper:
         logger.info("🌐 Starte Browser...")
         self._playwright = await async_playwright().start()
 
-        # These arguments are required for container environments
-        # Based on official Playwright documentation 2025
         self._browser = await self._playwright.chromium.launch(
             headless=self.headless,
             args=[
@@ -45,36 +52,114 @@ class GTCHAScraper:
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
                 '--disable-gpu',
-                '--disable-software-rasterizer',
+                '--no-first-run',
                 '--disable-background-networking',
                 '--disable-default-apps',
                 '--disable-extensions',
                 '--disable-sync',
                 '--disable-translate',
-                '--metrics-recording-only',
-                '--mute-audio',
-                '--no-first-run',
-                '--safebrowsing-disable-auto-update',
             ]
         )
 
-        # Browser context with all necessary settings
-        context = await self._browser.new_context(
+        self._context = await self._browser.new_context(
             viewport={"width": 1920, "height": 1080},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             java_script_enabled=True,
-            bypass_csp=True,
-            ignore_https_errors=True,
+            locale="ja-JP",
         )
 
-        self._page = await context.new_page()
+        self._page = await self._context.new_page()
 
-        # Error logging
-        self._page.on("pageerror", lambda e: logger.debug(f"Page Error: {e}"))
+        # Intercept network responses
+        self._page.on("response", self._handle_response)
 
-        logger.info("✅ Browser gestartet")
+        logger.info("✅ Browser gestartet mit API-Interception")
+
+    async def _handle_response(self, response: Response):
+        """Intercepts all network responses and looks for API data."""
+        url = response.url
+
+        # Log interesting requests
+        if any(keyword in url.lower() for keyword in ['api', 'pack', 'oripa', 'gacha', 'product', 'item', 'list']):
+            logger.debug(f"📡 Response: {url[:100]}")
+
+        # Try to parse JSON responses
+        try:
+            content_type = response.headers.get('content-type', '')
+            if 'application/json' in content_type or url.endswith('.json'):
+                try:
+                    data = await response.json()
+                    self._process_api_response(url, data)
+                except:
+                    pass
+        except:
+            pass
+
+    def _process_api_response(self, url: str, data: Any):
+        """Processes API responses and extracts banner data."""
+        logger.debug(f"📦 JSON Response von: {url[:80]}")
+
+        # Store all API responses for debug
+        self._api_responses.append({
+            "url": url,
+            "data": data,
+            "timestamp": datetime.now().isoformat()
+        })
+
+        # Try to extract banner data
+        self._extract_banners_from_json(data)
+
+    def _extract_banners_from_json(self, data: Any, path: str = ""):
+        """Recursively extract banner data from JSON."""
+
+        if isinstance(data, dict):
+            # Check if this is a banner/pack object
+            has_pack_indicators = any(key in data for key in [
+                'packId', 'pack_id', 'id', 'productId', 'product_id',
+                'oripaid', 'oripa_id', 'gachaId', 'gacha_id'
+            ])
+
+            has_price = any(key in data for key in [
+                'price', 'cost', 'coin', 'coins', 'point', 'points'
+            ])
+
+            has_stock = any(key in data for key in [
+                'stock', 'remaining', 'quantity', 'count', 'left',
+                'Rückstand', 'ruckstand', 'rest', 'available'
+            ])
+
+            if has_pack_indicators and (has_price or has_stock):
+                pack_id = (
+                    data.get('packId') or data.get('pack_id') or
+                    data.get('id') or data.get('productId') or
+                    data.get('oripaid') or data.get('gacha_id')
+                )
+
+                if pack_id and pack_id not in self._captured_banners:
+                    logger.info(f"   🎯 Banner gefunden: ID={pack_id}")
+                    self._captured_banners[pack_id] = data
+
+            # Recursively process all values
+            for key, value in data.items():
+                self._extract_banners_from_json(value, f"{path}.{key}")
+
+        elif isinstance(data, list):
+            for i, item in enumerate(data):
+                self._extract_banners_from_json(item, f"{path}[{i}]")
 
     async def close(self):
+        # Debug: Save all API responses
+        if self._api_responses:
+            debug_file = self.debug_dir / f"api_responses_{datetime.now().strftime('%H%M%S')}.json"
+            try:
+                with open(debug_file, 'w', encoding='utf-8') as f:
+                    json.dump(self._api_responses, f, indent=2, ensure_ascii=False, default=str)
+                logger.info(f"📝 API-Responses gespeichert: {debug_file}")
+            except Exception as e:
+                logger.warning(f"Konnte API-Responses nicht speichern: {e}")
+
+        if self._context:
+            await self._context.close()
         if self._browser:
             await self._browser.close()
         if self._playwright:
@@ -82,17 +167,20 @@ class GTCHAScraper:
         logger.info("🔒 Browser geschlossen")
 
     async def _save_debug_screenshot(self, name: str):
-        """Speichert Debug-Screenshot."""
         try:
             timestamp = datetime.now().strftime("%H%M%S")
             path = self.debug_dir / f"{timestamp}_{name}.png"
             await self._page.screenshot(path=str(path))
             logger.debug(f"📸 Screenshot: {path}")
         except Exception as e:
-            logger.debug(f"Screenshot fehlgeschlagen: {e}")
+            logger.warning(f"Screenshot error: {e}")
 
     async def scrape_all_banners(self) -> List[ScrapedBanner]:
-        all_banners = []
+        """Scrapes all banners via API interception."""
+
+        # Reset
+        self._api_responses = []
+        self._captured_banners = {}
 
         logger.info(f"📄 Lade Hauptseite: {self.base_url}")
 
@@ -104,266 +192,275 @@ class GTCHAScraper:
                 timeout=60000
             )
 
-            if response:
-                logger.info(f"📡 Status: {response.status}")
+            logger.info(f"📡 Status: {response.status if response else 'None'}")
 
-            # Wait for network idle
+            # Wait for network idle (API requests should happen here)
             try:
                 await self._page.wait_for_load_state("networkidle", timeout=30000)
             except:
-                logger.warning("Network idle timeout - fahre trotzdem fort")
+                logger.warning("Network idle timeout")
 
-            # Extra wait time for Vue.js/SPA
-            logger.info("⏳ Warte 8 Sekunden auf JavaScript...")
-            await asyncio.sleep(8)
+            # Wait for JavaScript
+            logger.info("⏳ Warte auf Vue.js App (20 Sekunden)...")
+            await asyncio.sleep(20)
 
             # Debug screenshot
             await self._save_debug_screenshot("01_hauptseite")
 
-            # Check if JS loaded
-            body_text = await self._page.inner_text("body")
-
-            if "JavaScript" in body_text and "enable" in body_text.lower():
-                logger.error("❌ JavaScript nicht ausgeführt!")
-                logger.info("🔄 Versuche nochmal mit mehr Wartezeit...")
-                await asyncio.sleep(10)
-                body_text = await self._page.inner_text("body")
-
-                if "JavaScript" in body_text and "enable" in body_text.lower():
-                    logger.error("❌ JavaScript immer noch nicht geladen!")
-                    await self._save_debug_screenshot("error_no_js")
-                    return []
-
-            # Check for banner content
-            if "Rückstand" in body_text or "kaufen" in body_text or "pro Tag" in body_text:
-                logger.info("✅ Banner-Content erkannt!")
-            else:
-                logger.warning("⚠️ Kein typischer Banner-Content gefunden")
-                logger.debug(f"Body (erste 500 Zeichen): {body_text[:500]}")
+            # Show what we intercepted
+            logger.info(f"📊 Abgefangene API-Responses: {len(self._api_responses)}")
+            logger.info(f"🎯 Gefundene Banner via API: {len(self._captured_banners)}")
 
         except Exception as e:
             logger.error(f"❌ Ladefehler: {e}")
             await self._save_debug_screenshot("error_load")
-            return []
 
-        # Process all categories
+        # Click through categories to trigger more API requests
         for category in CATEGORIES:
             try:
                 logger.info(f"🔍 Kategorie: {category}")
-                banners = await self._scrape_category(category)
-                all_banners.extend(banners)
-                logger.info(f"   → {len(banners)} Banner")
+                await self._click_category_tab(category)
+                await asyncio.sleep(5)  # Wait for API response
+
+                logger.debug(f"   Bisher {len(self._captured_banners)} Banner via API")
+
             except Exception as e:
-                logger.error(f"   ❌ Fehler: {e}")
+                logger.error(f"❌ Fehler bei {category}: {e}")
 
-        logger.info(f"✅ Fertig: {len(all_banners)} Banner total")
-        return all_banners
+        # Final statistics
+        logger.info(f"📊 Gesamt API-Responses: {len(self._api_responses)}")
+        logger.info(f"🎯 Gesamt Banner via API: {len(self._captured_banners)}")
 
-    async def _scrape_category(self, category: str) -> List[ScrapedBanner]:
-        # Click tab
-        await self._click_category_tab(category)
-        await asyncio.sleep(2)
+        # If no banners via API, try DOM fallback
+        if not self._captured_banners:
+            logger.warning("⚠️ Keine Banner via API - versuche DOM-Extraktion...")
+            await self._fallback_dom_extraction()
 
-        # Scroll for lazy loading
-        await self._scroll_to_load_all()
+        # Convert to ScrapedBanner objects
+        banners = self._convert_to_scraped_banners()
 
-        # Debug screenshot
-        safe_name = category.replace(" ", "_").replace("!", "").replace("-", "")
-        await self._save_debug_screenshot(f"kat_{safe_name}")
-
-        # Extract banners
-        return await self._extract_banners_from_page(category)
+        logger.info(f"✅ Fertig: {len(banners)} Banner")
+        return banners
 
     async def _click_category_tab(self, category: str) -> bool:
-        """Klickt auf Kategorie-Tab."""
+        """Clicks on a category tab."""
 
-        # Different spellings
-        variants = [category]
-        if "Pokémon" in category:
-            variants = ["Pokémon", "Pokemon", "POKEMON", "pokemon"]
-        elif "Yu-Gi-Oh" in category:
-            variants = ["Yu-Gi-Oh!", "Yu-Gi-Oh", "YuGiOh", "Yugioh", "yu-gi-oh"]
-        elif "One" in category.lower():
-            variants = ["One piece", "One Piece", "ONE PIECE", "Onepiece"]
-        elif "Weiss" in category:
-            variants = ["Weiss Schwarz", "Weiss", "WEISS SCHWARZ", "weiss schwarz"]
-        elif "Bonus" in category:
-            variants = ["Bonus", "BONUS", "bonus"]
-        elif "MIX" in category:
-            variants = ["MIX", "Mix", "mix"]
-        elif "Hobby" in category:
-            variants = ["Hobby", "HOBBY", "hobby"]
+        variants = {
+            "Pokémon": ["Pokémon", "Pokemon", "POKEMON"],
+            "Yu-Gi-Oh!": ["Yu-Gi-Oh!", "Yu-Gi-Oh", "YuGiOh"],
+            "One piece": ["One piece", "One Piece", "ONE PIECE"],
+            "Weiss Schwarz": ["Weiss Schwarz", "Weiss", "WEISS SCHWARZ"],
+            "Bonus": ["Bonus", "BONUS"],
+            "MIX": ["MIX", "Mix"],
+            "Hobby": ["Hobby", "HOBBY"],
+        }
 
-        for variant in variants:
+        search_terms = variants.get(category, [category])
+
+        for term in search_terms:
             try:
-                # Method 1: Playwright locator
-                loc = self._page.get_by_text(variant, exact=True)
-                if await loc.count() > 0:
-                    await loc.first.click()
-                    logger.debug(f"   ✅ Klick (locator): {variant}")
+                locator = self._page.get_by_text(term, exact=True)
+                if await locator.count() > 0:
+                    await locator.first.click()
+                    logger.debug(f"   ✅ Klick: {term}")
                     return True
             except:
                 pass
 
             try:
-                # Method 2: CSS text selector
-                await self._page.click(f"text={variant}", timeout=2000)
-                logger.debug(f"   ✅ Klick (text=): {variant}")
+                await self._page.click(f"text={term}", timeout=2000)
+                logger.debug(f"   ✅ Klick (text=): {term}")
                 return True
             except:
                 pass
 
-            try:
-                # Method 3: JavaScript
-                clicked = await self._page.evaluate(f"""
-                    () => {{
-                        const all = document.querySelectorAll('*');
-                        for (const el of all) {{
-                            const t = (el.innerText || '').trim();
-                            if (t === '{variant}' || (t.includes('{variant}') && t.length < 30)) {{
-                                el.click();
-                                return true;
-                            }}
-                        }}
-                        return false;
-                    }}
-                """)
-                if clicked:
-                    logger.debug(f"   ✅ Klick (JS): {variant}")
-                    return True
-            except:
-                pass
-
-        logger.debug(f"   ⚠️ Tab nicht gefunden: {category}")
         return False
 
-    async def _scroll_to_load_all(self):
-        """Scrollt für Lazy Loading."""
+    async def _fallback_dom_extraction(self):
+        """Fallback: Extract banners from DOM."""
+        logger.info("🔄 DOM-Fallback Extraktion...")
+
+        # Save complete HTML for debug
+        html = await self._page.content()
+        html_file = self.debug_dir / f"page_html_{datetime.now().strftime('%H%M%S')}.html"
         try:
-            for _ in range(5):
-                await self._page.evaluate("window.scrollBy(0, 500)")
-                await asyncio.sleep(0.4)
-            await self._page.evaluate("window.scrollTo(0, 0)")
-            await asyncio.sleep(0.5)
+            with open(html_file, 'w', encoding='utf-8') as f:
+                f.write(html)
+            logger.info(f"📝 HTML gespeichert: {html_file}")
         except:
             pass
 
-    async def _extract_banners_from_page(self, category: str) -> List[ScrapedBanner]:
-        """Extrahiert Banner von der Seite."""
-        banners = []
-
+        # Try to find packId links
         banner_data = await self._page.evaluate("""
             () => {
-                const banners = [];
+                const results = [];
                 const seen = new Set();
 
-                // Find all links with packId
-                document.querySelectorAll('a[href*="packId"]').forEach(link => {
-                    const match = link.href.match(/packId=(\\d+)/);
-                    if (!match || seen.has(match[1])) return;
-                    seen.add(match[1]);
-
-                    // Find container element
-                    let container = link;
-                    for (let i = 0; i < 10; i++) {
-                        if (!container.parentElement) break;
-                        container = container.parentElement;
-                        const text = container.innerText || '';
-                        if (text.includes('Rückstand') || text.includes('kaufen')) break;
+                // Method 1: Links with packId
+                document.querySelectorAll('a[href*="packId"], a[href*="pack-detail"]').forEach(link => {
+                    const match = link.href.match(/packId[=:]?(\\d+)/i);
+                    if (match && !seen.has(match[1])) {
+                        seen.add(match[1]);
+                        results.push({
+                            packId: match[1],
+                            href: link.href,
+                            text: link.innerText.substring(0, 200)
+                        });
                     }
-
-                    const text = container.innerText || '';
-                    const img = container.querySelector('img');
-
-                    // Extract data
-                    const packs = text.match(/Rückstand\\s*(\\d+)\\s*\\/\\s*(\\d+)/i);
-                    const entries = text.match(/(\\d+)\\s*(?:Mal\\s*)?pro\\s*Tag/i);
-                    const date = text.match(/Verkauf bis\\s*([\\d\\/]+(?:\\s*JST)?)/i);
-
-                    // Find price
-                    let price = null;
-                    const priceEl = container.querySelector('[class*="price"], [class*="coin"]');
-                    if (priceEl) {
-                        const m = priceEl.innerText.match(/(\\d[\\d.,]*)/);
-                        if (m) price = m[1].replace(/[.,]/g, '');
-                    }
-                    if (!price) {
-                        const m = text.match(/(\\d{2,5})(?=\\s*$|\\s*kaufen)/m);
-                        if (m) price = m[1];
-                    }
-
-                    banners.push({
-                        packId: match[1],
-                        price,
-                        currentPacks: packs ? packs[1] : null,
-                        totalPacks: packs ? packs[2] : null,
-                        entriesPerDay: entries ? entries[1] : null,
-                        saleEndDate: date ? date[1] : null,
-                        imageUrl: img ? img.src : null
-                    });
                 });
 
-                return banners;
+                // Method 2: Elements with onclick
+                document.querySelectorAll('[onclick]').forEach(el => {
+                    const onclick = el.getAttribute('onclick') || '';
+                    const match = onclick.match(/packId[=:]?(\\d+)/i) || onclick.match(/(\\d{4,6})/);
+                    if (match && !seen.has(match[1])) {
+                        seen.add(match[1]);
+                        results.push({
+                            packId: match[1],
+                            onclick: onclick.substring(0, 100),
+                            text: el.innerText.substring(0, 200)
+                        });
+                    }
+                });
+
+                // Method 3: Data attributes
+                document.querySelectorAll('[data-pack-id], [data-id], [data-product-id]').forEach(el => {
+                    const packId = el.getAttribute('data-pack-id') ||
+                                   el.getAttribute('data-id') ||
+                                   el.getAttribute('data-product-id');
+                    if (packId && !seen.has(packId)) {
+                        seen.add(packId);
+                        results.push({
+                            packId: packId,
+                            text: el.innerText.substring(0, 200)
+                        });
+                    }
+                });
+
+                return results;
             }
         """)
 
-        logger.debug(f"   Rohdaten: {len(banner_data)} Banner")
+        logger.info(f"   DOM-Extraktion: {len(banner_data)} Elemente")
 
         for data in banner_data:
-            try:
-                pack_id = int(data.get("packId", 0))
-                if pack_id == 0:
-                    continue
+            pack_id = data.get('packId')
+            if pack_id and pack_id not in self._captured_banners:
+                self._captured_banners[pack_id] = {
+                    'id': pack_id,
+                    'source': 'dom_fallback',
+                    'raw': data
+                }
 
-                banners.append(ScrapedBanner(
-                    pack_id=pack_id,
-                    category=category,
-                    price_coins=int(data["price"]) if data.get("price") else None,
-                    current_packs=int(data["currentPacks"]) if data.get("currentPacks") else None,
-                    total_packs=int(data["totalPacks"]) if data.get("totalPacks") else None,
-                    entries_per_day=int(data["entriesPerDay"]) if data.get("entriesPerDay") else None,
-                    sale_end_date=data.get("saleEndDate"),
-                    image_url=data.get("imageUrl"),
+    def _convert_to_scraped_banners(self) -> List[ScrapedBanner]:
+        """Converts collected data to ScrapedBanner objects."""
+        banners = []
+
+        for pack_id, data in self._captured_banners.items():
+            try:
+                # Extract fields with various possible names
+                price = (
+                    data.get('price') or data.get('cost') or
+                    data.get('coin') or data.get('coins') or
+                    data.get('point') or data.get('points')
+                )
+
+                current_packs = (
+                    data.get('remaining') or data.get('stock') or
+                    data.get('quantity') or data.get('left') or
+                    data.get('available') or data.get('rest')
+                )
+
+                total_packs = (
+                    data.get('total') or data.get('totalStock') or
+                    data.get('total_stock') or data.get('max') or
+                    data.get('initialStock')
+                )
+
+                entries = (
+                    data.get('limit') or data.get('dailyLimit') or
+                    data.get('daily_limit') or data.get('perDay') or
+                    data.get('maxPerDay')
+                )
+
+                title = (
+                    data.get('name') or data.get('title') or
+                    data.get('productName') or data.get('packName')
+                )
+
+                image = (
+                    data.get('image') or data.get('imageUrl') or
+                    data.get('thumbnail') or data.get('img')
+                )
+
+                category = (
+                    data.get('category') or data.get('categoryName') or
+                    data.get('type') or "Unknown"
+                )
+
+                banner = ScrapedBanner(
+                    pack_id=int(pack_id),
+                    category=str(category),
+                    title=str(title) if title else None,
+                    price_coins=int(price) if price else None,
+                    current_packs=int(current_packs) if current_packs else None,
+                    total_packs=int(total_packs) if total_packs else None,
+                    entries_per_day=int(entries) if entries else None,
+                    image_url=str(image) if image else None,
                     detail_page_url=f"{self.base_url}/pack-detail?packId={pack_id}",
-                ))
+                )
+
+                banners.append(banner)
+                logger.debug(f"   ✅ Banner: {banner}")
+
             except Exception as e:
-                logger.debug(f"   Parse-Fehler: {e}")
+                logger.warning(f"   Konvertierung fehlgeschlagen für {pack_id}: {e}")
 
         return banners
 
     async def scrape_banner_details(self, pack_id: int) -> Tuple[Optional[str], Optional[bytes]]:
-        """Scrapet Banner-Details."""
+        """Scrapes banner details."""
         url = f"{self.base_url}/pack-detail?packId={pack_id}"
 
         try:
             await self._page.goto(url, wait_until="networkidle", timeout=30000)
-            await asyncio.sleep(4)
+            await asyncio.sleep(5)
 
             screenshot = await self._page.screenshot()
 
-            best_hit = await self._page.evaluate("""
-                () => {
-                    const sels = ['[class*="hit"]', '[class*="prize"]', '[class*="card"]', '[class*="item"]'];
-                    for (const sel of sels) {
-                        const el = document.querySelector(sel);
-                        if (el && el.innerText) {
-                            const text = el.innerText.split('\\n')[0].trim();
-                            if (text.length > 2 && text.length < 100) return text;
+            # Best hit from API data or DOM
+            best_hit = None
+
+            # Try from intercepted data
+            if pack_id in self._captured_banners:
+                data = self._captured_banners[pack_id]
+                best_hit = data.get('bestHit') or data.get('topPrize') or data.get('firstPrize')
+
+            # Fallback: DOM
+            if not best_hit:
+                best_hit = await self._page.evaluate("""
+                    () => {
+                        const selectors = ['[class*="hit"]', '[class*="prize"]', '[class*="card"]'];
+                        for (const sel of selectors) {
+                            const el = document.querySelector(sel);
+                            if (el && el.innerText) {
+                                return el.innerText.split('\\n')[0].substring(0, 100);
+                            }
                         }
+                        const m = document.body.innerText.match(/(PSA\\s*\\d+[^\\n]{0,50})/i);
+                        return m ? m[1] : null;
                     }
-                    const m = document.body.innerText.match(/(PSA\\s*\\d+[^\\n]{0,50})/i);
-                    return m ? m[1].trim() : null;
-                }
-            """)
+                """)
 
             return best_hit, screenshot
+
         except Exception as e:
-            logger.debug(f"Detail-Fehler: {e}")
+            logger.error(f"Detail-Fehler: {e}")
             return None, None
 
     async def download_image(self, url: str) -> Optional[bytes]:
         try:
-            resp = await self._page.request.get(url)
-            return await resp.body() if resp.ok else None
+            response = await self._page.request.get(url)
+            return await response.body() if response.ok else None
         except:
             return None
