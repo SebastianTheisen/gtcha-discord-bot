@@ -1,141 +1,173 @@
+"""
+Datenbank-Operationen
+"""
+
+import aiosqlite
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, Dict, Any, List
 from datetime import datetime
-from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from sqlalchemy.orm import selectinload
+
 from loguru import logger
-from .models import Base, Banner, DiscordThread, PackHistory, Medal
+from config import DATABASE_PATH
 
 
 class Database:
-    def __init__(self, database_path: Path):
-        self.database_path = database_path
-        database_path.parent.mkdir(parents=True, exist_ok=True)
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}", echo=False)
-        self.async_session = async_sessionmaker(self.engine, class_=AsyncSession, expire_on_commit=False)
+    def __init__(self, db_path: str = DATABASE_PATH):
+        self.db_path = db_path
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
-    async def init_db(self) -> None:
-        async with self.engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        logger.info(f"Datenbank initialisiert: {self.database_path}")
+    async def init(self):
+        """Erstellt Tabellen."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.executescript("""
+                CREATE TABLE IF NOT EXISTS banners (
+                    pack_id INTEGER PRIMARY KEY,
+                    category TEXT,
+                    title TEXT,
+                    best_hit TEXT,
+                    price_coins INTEGER,
+                    current_packs INTEGER,
+                    total_packs INTEGER,
+                    entries_per_day INTEGER,
+                    sale_end_date TEXT,
+                    image_url TEXT,
+                    detail_page_url TEXT,
+                    is_active INTEGER DEFAULT 1,
+                    created_at TEXT,
+                    updated_at TEXT
+                );
 
-    async def get_banner_by_pack_id(self, pack_id: int) -> Optional[Banner]:
-        async with self.async_session() as session:
-            result = await session.execute(
-                select(Banner)
-                .options(selectinload(Banner.discord_thread))
-                .where(Banner.pack_id == pack_id)
+                CREATE TABLE IF NOT EXISTS discord_threads (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    banner_id INTEGER,
+                    thread_id INTEGER UNIQUE,
+                    channel_id INTEGER,
+                    starter_message_id INTEGER,
+                    is_expired INTEGER DEFAULT 0,
+                    created_at TEXT,
+                    FOREIGN KEY (banner_id) REFERENCES banners(pack_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS medals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    thread_id INTEGER,
+                    tier TEXT,
+                    user_id INTEGER,
+                    created_at TEXT,
+                    UNIQUE(thread_id, tier)
+                );
+
+                CREATE TABLE IF NOT EXISTS pack_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    banner_id INTEGER,
+                    old_count INTEGER,
+                    new_count INTEGER,
+                    changed_at TEXT,
+                    FOREIGN KEY (banner_id) REFERENCES banners(pack_id)
+                );
+            """)
+            await db.commit()
+
+    async def get_banner(self, pack_id: int) -> Optional[Dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM banners WHERE pack_id = ?", (pack_id,)
             )
-            return result.scalar_one_or_none()
+            row = await cursor.fetchone()
+            return dict(row) if row else None
 
-    async def get_all_active_banners(self) -> List[Banner]:
-        async with self.async_session() as session:
-            result = await session.execute(
-                select(Banner)
-                .options(selectinload(Banner.discord_thread))
-                .where(Banner.is_active == True)
+    async def save_banner(self, banner) -> None:
+        now = datetime.now().isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("""
+                INSERT OR REPLACE INTO banners
+                (pack_id, category, title, best_hit, price_coins, current_packs,
+                 total_packs, entries_per_day, sale_end_date, image_url,
+                 detail_page_url, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+            """, (
+                banner.pack_id, banner.category, banner.title, banner.best_hit,
+                banner.price_coins, banner.current_packs, banner.total_packs,
+                banner.entries_per_day, banner.sale_end_date, banner.image_url,
+                banner.detail_page_url, now, now
+            ))
+            await db.commit()
+
+    async def update_banner_packs(self, pack_id: int, new_count: int) -> None:
+        now = datetime.now().isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            # Hole alten Wert
+            cursor = await db.execute(
+                "SELECT current_packs FROM banners WHERE pack_id = ?", (pack_id,)
             )
-            return list(result.scalars().all())
+            row = await cursor.fetchone()
+            old_count = row[0] if row else None
 
-    async def create_banner(self, **kwargs) -> Banner:
-        async with self.async_session() as session:
-            banner = Banner(**kwargs)
-            session.add(banner)
-            await session.commit()
-            await session.refresh(banner)
-            return banner
-
-    async def update_banner(self, pack_id: int, **kwargs) -> Optional[Banner]:
-        async with self.async_session() as session:
-            result = await session.execute(select(Banner).where(Banner.pack_id == pack_id))
-            banner = result.scalar_one_or_none()
-            if banner:
-                for key, value in kwargs.items():
-                    setattr(banner, key, value)
-                banner.updated_at = datetime.utcnow()
-                await session.commit()
-                await session.refresh(banner)
-            return banner
-
-    async def mark_banner_inactive(self, pack_id: int) -> Optional[Banner]:
-        return await self.update_banner(pack_id, is_active=False)
-
-    async def get_all_pack_ids(self) -> List[int]:
-        async with self.async_session() as session:
-            result = await session.execute(select(Banner.pack_id))
-            return [row[0] for row in result.fetchall()]
-
-    async def get_thread_by_thread_id(self, thread_id: int) -> Optional[DiscordThread]:
-        async with self.async_session() as session:
-            result = await session.execute(
-                select(DiscordThread)
-                .options(selectinload(DiscordThread.banner))
-                .where(DiscordThread.thread_id == thread_id)
+            # Update Banner
+            await db.execute(
+                "UPDATE banners SET current_packs = ?, updated_at = ? WHERE pack_id = ?",
+                (new_count, now, pack_id)
             )
-            return result.scalar_one_or_none()
 
-    async def create_discord_thread(
-        self,
-        banner_id: int,
-        thread_id: int,
-        channel_id: int,
-        starter_message_id: Optional[int] = None
-    ) -> DiscordThread:
-        async with self.async_session() as session:
-            discord_thread = DiscordThread(
-                banner_id=banner_id,
-                thread_id=thread_id,
-                channel_id=channel_id,
-                starter_message_id=starter_message_id
+            # History speichern
+            if old_count is not None:
+                await db.execute("""
+                    INSERT INTO pack_history (banner_id, old_count, new_count, changed_at)
+                    VALUES (?, ?, ?, ?)
+                """, (pack_id, old_count, new_count, now))
+
+            await db.commit()
+
+    async def save_thread(self, banner_id: int, thread_id: int, channel_id: int, starter_message_id: int) -> None:
+        now = datetime.now().isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("""
+                INSERT OR REPLACE INTO discord_threads
+                (banner_id, thread_id, channel_id, starter_message_id, created_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (banner_id, thread_id, channel_id, starter_message_id, now))
+            await db.commit()
+
+    async def get_thread_by_id(self, thread_id: int) -> Optional[Dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM discord_threads WHERE thread_id = ?", (thread_id,)
             )
-            session.add(discord_thread)
-            await session.commit()
-            await session.refresh(discord_thread)
-            return discord_thread
+            row = await cursor.fetchone()
+            return dict(row) if row else None
 
-    async def mark_thread_expired(self, thread_id: int) -> None:
-        async with self.async_session() as session:
-            await session.execute(
-                update(DiscordThread)
-                .where(DiscordThread.thread_id == thread_id)
-                .values(is_expired=True)
+    async def get_medal(self, thread_id: int, tier: str) -> Optional[Dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM medals WHERE thread_id = ? AND tier = ?",
+                (thread_id, tier)
             )
-            await session.commit()
+            row = await cursor.fetchone()
+            return dict(row) if row else None
 
-    async def add_pack_history(self, banner_id: int, old_count: int, new_count: int) -> PackHistory:
-        async with self.async_session() as session:
-            history = PackHistory(banner_id=banner_id, old_count=old_count, new_count=new_count)
-            session.add(history)
-            await session.commit()
-            return history
+    async def save_medal(self, thread_id: int, tier: str, user_id: int) -> None:
+        now = datetime.now().isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("""
+                INSERT INTO medals (thread_id, tier, user_id, created_at)
+                VALUES (?, ?, ?, ?)
+            """, (thread_id, tier, user_id, now))
+            await db.commit()
 
-    async def is_tier_claimed(self, thread_id: int, tier: str) -> bool:
-        async with self.async_session() as session:
-            result = await session.execute(
-                select(Medal).where(Medal.thread_id == thread_id, Medal.tier == tier)
-            )
-            return result.scalar_one_or_none() is not None
+    async def get_stats(self) -> Dict[str, int]:
+        async with aiosqlite.connect(self.db_path) as db:
+            stats = {}
 
-    async def claim_medal(self, thread_id: int, tier: str, user_id: int) -> Optional[Medal]:
-        if await self.is_tier_claimed(thread_id, tier):
-            return None
-        async with self.async_session() as session:
-            medal = Medal(thread_id=thread_id, tier=tier, user_id=user_id)
-            session.add(medal)
-            await session.commit()
-            await session.refresh(medal)
-            return medal
+            cursor = await db.execute("SELECT COUNT(*) FROM banners WHERE is_active = 1")
+            stats['total_banners'] = (await cursor.fetchone())[0]
 
-    async def get_stats(self) -> dict:
-        async with self.async_session() as session:
-            active = await session.execute(select(Banner).where(Banner.is_active == True))
-            total = await session.execute(select(Banner))
-            threads = await session.execute(select(DiscordThread))
-            medals = await session.execute(select(Medal))
-            return {
-                "active_banners": len(list(active.scalars().all())),
-                "total_banners": len(list(total.scalars().all())),
-                "total_threads": len(list(threads.scalars().all())),
-                "total_medals": len(list(medals.scalars().all())),
-            }
+            cursor = await db.execute("SELECT COUNT(*) FROM discord_threads WHERE is_expired = 0")
+            stats['active_threads'] = (await cursor.fetchone())[0]
+
+            cursor = await db.execute("SELECT COUNT(*) FROM medals")
+            stats['total_medals'] = (await cursor.fetchone())[0]
+
+            return stats

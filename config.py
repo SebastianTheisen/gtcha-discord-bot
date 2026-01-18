@@ -1,3 +1,7 @@
+"""
+GTCHA Discord Bot - Konfiguration
+"""
+
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -57,5 +61,23 @@ except ValueError as e:
     print(f"Konfigurationsfehler: {e}")
     config = None
 
+# Direkte Exporte fuer einfachen Import
 CATEGORIES = ["Bonus", "MIX", "Yu-Gi-Oh!", "Pokémon", "Weiss Schwarz", "One piece", "Hobby"]
 MEDAL_EMOJIS = {"T1": "🥇", "T2": "🥈", "T3": "🥉"}
+
+# Kompatibilitaets-Exporte
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+GUILD_ID = os.getenv("GUILD_ID")
+BASE_URL = os.getenv("BASE_URL", "https://gtchaxonline.com")
+SCRAPE_INTERVAL_MINUTES = int(os.getenv("SCRAPE_INTERVAL_MINUTES", "5"))
+DATABASE_PATH = os.getenv("DATABASE_PATH", "data/gtcha_bot.db")
+
+CHANNEL_IDS = {
+    "Bonus": int(os.getenv("CHANNEL_BONUS", "0")),
+    "MIX": int(os.getenv("CHANNEL_MIX", "0")),
+    "Yu-Gi-Oh!": int(os.getenv("CHANNEL_YUGIOH", "0")),
+    "Pokémon": int(os.getenv("CHANNEL_POKEMON", "0")),
+    "Weiss Schwarz": int(os.getenv("CHANNEL_WEISS_SCHWARZ", "0")),
+    "One piece": int(os.getenv("CHANNEL_ONE_PIECE", "0")),
+    "Hobby": int(os.getenv("CHANNEL_HOBBY", "0")),
+}
