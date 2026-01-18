@@ -136,18 +136,19 @@ class GTCHAScraper:
 
     async def _click_category_tab(self, category: str) -> bool:
         """Klickt auf einen Kategorie-Tab im Menü."""
-        # Exakte Tab-Namen wie sie im DOM stehen
-        tab_names = {
-            "Bonus": "Bonus",
-            "MIX": "MIX",
-            "Yu-Gi-Oh!": "Yu-Gi-Oh!",
-            "Pokémon": "Pokémon",
-            "Weiss Schwarz": "Weiss Schwarz",
-            "One piece": "One piece",
-            "Hobby": "Hobby",
+        # Mapping: Config-Name -> mögliche DOM-Texte (lowercase für Vergleich)
+        # Wir nutzen contains-Matching für robustere Erkennung
+        category_keywords = {
+            "Bonus": ["bonus"],
+            "MIX": ["mix"],
+            "Yu-Gi-Oh!": ["yu-gi-oh", "yugioh"],
+            "Pokémon": ["pokemon", "poke"],  # Ohne Sonderzeichen für sicheren Vergleich
+            "Weiss Schwarz": ["weiss", "schwarz"],
+            "One piece": ["one piece", "onepiece"],
+            "Hobby": ["hobby"],
         }
 
-        target_name = tab_names.get(category, category)
+        keywords = category_keywords.get(category, [category.lower()])
 
         # Retry-Mechanismus
         for attempt in range(3):
@@ -155,20 +156,33 @@ class GTCHAScraper:
                 # Warte kurz damit die Seite stabil ist
                 await asyncio.sleep(0.5)
 
-                # Methode 1: Direkt über CSS Selektor mit exaktem Text
-                # .menu-item mit genau diesem Text
+                # Finde alle menu-items
                 menu_items = await self._page.query_selector_all('.menu-item')
+
+                if attempt == 0:
+                    # Log alle gefundenen Tabs beim ersten Versuch
+                    all_tabs = []
+                    for item in menu_items:
+                        try:
+                            t = await item.inner_text()
+                            all_tabs.append(t.strip())
+                        except:
+                            pass
+                    logger.debug(f"   Gefundene Tabs: {all_tabs}")
 
                 for item in menu_items:
                     try:
                         text = await item.inner_text()
                         text_clean = text.strip()
+                        text_lower = text_clean.lower()
 
-                        if text_clean == target_name:
-                            await item.click()
-                            logger.debug(f"   Klick: '{text_clean}'")
-                            await asyncio.sleep(1)  # Warte nach Klick
-                            return True
+                        # Prüfe ob einer der Keywords im Tab-Text vorkommt
+                        for keyword in keywords:
+                            if keyword in text_lower:
+                                await item.click()
+                                logger.debug(f"   Klick: '{text_clean}' (keyword: {keyword})")
+                                await asyncio.sleep(1)
+                                return True
                     except Exception as inner_e:
                         logger.debug(f"   Item-Fehler: {inner_e}")
                         continue
