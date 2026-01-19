@@ -20,6 +20,13 @@ from config import (
 )
 from scraper.gtcha_scraper import GTCHAScraper
 from database.db import Database
+from utils.webhook import (
+    notify_scrape_error, notify_low_banner_count,
+    notify_all_retries_failed, notify_critical_error
+)
+from utils.rate_limiter import discord_rate_limiter
+from utils.memory_monitor import memory_monitor
+from utils.cache import banner_cache
 
 
 @dataclass
@@ -93,6 +100,9 @@ class GTCHABot(commands.Bot):
 
     async def on_ready(self):
         logger.info(f"Bot online: {self.user}")
+
+        # Memory-Monitor starten
+        await memory_monitor.start()
 
         # Threads aus Discord wiederherstellen (falls DB leer nach Neustart)
         await self._recover_threads_from_discord()
@@ -382,6 +392,14 @@ class GTCHABot(commands.Bot):
                                 else:
                                     logger.debug(f"Initiales Pack-Update für {banner.pack_id}: {banner.current_packs} (kein Post)")
 
+                        # Banner im Cache aktualisieren
+                        await banner_cache.set(banner.pack_id, {
+                            'current_packs': banner.current_packs,
+                            'price_coins': banner.price_coins,
+                            'entries_per_day': banner.entries_per_day,
+                            'total_packs': banner.total_packs
+                        })
+
                     except Exception as e:
                         logger.error(f"Fehler bei Banner {banner.pack_id}: {e}")
 
@@ -392,25 +410,35 @@ class GTCHABot(commands.Bot):
                 # Hole alle bekannten Banner aus der DB
                 db_banner_ids = set(await self.db.get_all_active_banner_ids())
 
-                # Für gefundene Banner: Zähler zurücksetzen
-                for pack_id in found_banner_ids:
-                    if pack_id in db_banner_ids:
-                        await self.db.reset_not_found_count(pack_id)
-
-                # Für NICHT gefundene Banner: Zähler erhöhen
+                # SCHUTZ: Nur tracken wenn mindestens 5 Banner gefunden wurden
+                # Verhindert Massen-Löschung bei fehlgeschlagenem Scrape
+                MIN_BANNERS_FOR_TRACKING = 5
                 expired_count = 0
-                not_found_ids = db_banner_ids - found_banner_ids
-                for pack_id in not_found_ids:
-                    count = await self.db.increment_not_found_count(pack_id)
-                    logger.debug(f"Banner {pack_id} nicht gefunden (Zähler: {count})")
 
-                    # Bei 20x nicht gefunden: Banner löschen
-                    if count >= 20:
-                        logger.info(f"Banner {pack_id} 20x nicht gefunden - lösche Thread")
-                        deleted = await self._delete_banner_thread(pack_id)
-                        if deleted:
-                            expired_count += 1
-                            logger.info(f"   Banner {pack_id} (abgelaufen) Thread gelöscht!")
+                if len(found_banner_ids) < MIN_BANNERS_FOR_TRACKING:
+                    logger.warning(f"⚠️ Nur {len(found_banner_ids)} Banner gefunden - Not-Found-Tracking übersprungen!")
+                    logger.warning("   Mögliche Ursache: Website-Problem oder Scrape-Fehler")
+                    # Webhook-Benachrichtigung
+                    await notify_low_banner_count(len(found_banner_ids), MIN_BANNERS_FOR_TRACKING)
+                else:
+                    # Für gefundene Banner: Zähler zurücksetzen
+                    for pack_id in found_banner_ids:
+                        if pack_id in db_banner_ids:
+                            await self.db.reset_not_found_count(pack_id)
+
+                    # Für NICHT gefundene Banner: Zähler erhöhen
+                    not_found_ids = db_banner_ids - found_banner_ids
+                    for pack_id in not_found_ids:
+                        count = await self.db.increment_not_found_count(pack_id)
+                        logger.debug(f"Banner {pack_id} nicht gefunden (Zähler: {count})")
+
+                        # Bei 20x nicht gefunden: Banner löschen
+                        if count >= 20:
+                            logger.info(f"Banner {pack_id} 20x nicht gefunden - lösche Thread")
+                            deleted = await self._delete_banner_thread(pack_id)
+                            if deleted:
+                                expired_count += 1
+                                logger.info(f"   Banner {pack_id} (abgelaufen) Thread gelöscht!")
 
                 elapsed = (datetime.now() - start_time).total_seconds()
                 logger.info(f"Scrape done: {elapsed:.1f}s, {new_count} neu, {deleted_count} gelöscht, {expired_count} abgelaufen, {skipped_empty} leer")
@@ -421,21 +449,62 @@ class GTCHABot(commands.Bot):
             self._scraper = None
 
     async def _scrape_with_timeout(self):
-        """Wrapper für scrape_and_post mit 3-Minuten-Timeout."""
+        """Wrapper für scrape_and_post mit 3-Minuten-Timeout und Retry-Logik."""
         timeout_seconds = 180  # 3 Minuten
-        try:
-            await asyncio.wait_for(self.scrape_and_post(), timeout=timeout_seconds)
-        except asyncio.TimeoutError:
-            logger.error(f"TIMEOUT: Scrape-Job nach {timeout_seconds}s abgebrochen!")
-            # Scraper aufräumen falls noch aktiv
-            if self._scraper:
-                try:
-                    await self._scraper.close()
-                except Exception:
-                    pass
-                self._scraper = None
-        except Exception as e:
-            logger.error(f"Fehler im Scrape-Job: {e}")
+        max_retries = 2
+        retry_delay = 30  # Sekunden zwischen Retries
+
+        for attempt in range(max_retries + 1):
+            try:
+                if attempt > 0:
+                    logger.info(f"Retry {attempt}/{max_retries} - warte {retry_delay}s...")
+                    await asyncio.sleep(retry_delay)
+
+                await asyncio.wait_for(self.scrape_and_post(), timeout=timeout_seconds)
+                return  # Erfolg - beenden
+
+            except asyncio.TimeoutError:
+                logger.error(f"TIMEOUT: Scrape-Job nach {timeout_seconds}s abgebrochen! (Versuch {attempt + 1}/{max_retries + 1})")
+                # Webhook-Benachrichtigung
+                await notify_scrape_error(
+                    "Timeout",
+                    f"Scrape-Job nach {timeout_seconds}s abgebrochen",
+                    attempt, max_retries
+                )
+                # Scraper aufräumen falls noch aktiv
+                if self._scraper:
+                    try:
+                        await self._scraper.close()
+                    except Exception:
+                        pass
+                    self._scraper = None
+
+                if attempt < max_retries:
+                    continue  # Retry
+                else:
+                    logger.error("Alle Retries fehlgeschlagen!")
+                    await notify_all_retries_failed()
+
+            except Exception as e:
+                logger.error(f"Fehler im Scrape-Job: {e} (Versuch {attempt + 1}/{max_retries + 1})")
+                # Webhook-Benachrichtigung
+                await notify_scrape_error(
+                    "Exception",
+                    str(e),
+                    attempt, max_retries
+                )
+                if self._scraper:
+                    try:
+                        await self._scraper.close()
+                    except Exception:
+                        pass
+                    self._scraper = None
+
+                if attempt < max_retries:
+                    continue  # Retry
+                else:
+                    logger.error("Alle Retries fehlgeschlagen!")
+                    await notify_all_retries_failed()
 
     async def _post_banner_to_discord(self, banner):
         """Postet einen Banner als Thread in Discord."""
@@ -499,6 +568,9 @@ class GTCHABot(commands.Bot):
             embed.set_image(url=banner.image_url)
 
         try:
+            # Rate-Limiting für Discord API
+            await discord_rate_limiter.acquire("thread_create")
+
             # Thread erstellen
             thread, message = await channel.create_thread(
                 name=title,
@@ -562,6 +634,7 @@ class GTCHABot(commands.Bot):
 
             message = f"{emoji} **Pack-Update:** {old_packs} → {new_packs} ({change})"
 
+            await discord_rate_limiter.acquire("message_send")
             await thread.send(message)
             logger.debug(f"Pack-Update gepostet in Thread {thread_id}")
 
@@ -606,6 +679,7 @@ class GTCHABot(commands.Bot):
 
             # Nur updaten wenn sich Titel geändert hat
             if thread.name != new_title:
+                await discord_rate_limiter.acquire("thread_edit")
                 await thread.edit(name=new_title)
                 logger.info(f"Thread-Titel aktualisiert: {new_title}")
 
@@ -615,15 +689,15 @@ class GTCHABot(commands.Bot):
             logger.debug(f"Fehler bei Titel-Update für {banner.pack_id}: {e}")
 
     async def _delete_banner_thread(self, pack_id: int) -> bool:
-        """Löscht den Discord-Thread für einen Banner mit 0 Packs."""
+        """Archiviert den Discord-Thread für einen abgelaufenen Banner (statt löschen)."""
         try:
-            logger.info(f"   Lösche Thread für Banner {pack_id}...")
+            logger.info(f"   Archiviere Thread für Banner {pack_id}...")
 
             thread_data = await self.db.get_thread_by_banner_id(pack_id)
             if not thread_data:
                 logger.warning(f"   Kein Thread in DB für Banner {pack_id}")
-                # Trotzdem Banner aus DB löschen
-                await self.db.delete_banner(pack_id)
+                # Banner als inaktiv markieren
+                await self.db.mark_banner_inactive(pack_id)
                 return False
 
             thread_id = thread_data.get('thread_id')
@@ -633,17 +707,15 @@ class GTCHABot(commands.Bot):
                 logger.warning(f"   Keine thread_id in Daten für {pack_id}")
                 return False
 
-            # Thread aus Discord löschen
-            # Erst aus Cache versuchen
+            # Thread aus Discord holen
             thread = self.get_channel(int(thread_id))
-            logger.info(f"   Thread aus Cache: {thread}")
+            logger.debug(f"   Thread aus Cache: {thread}")
 
             # Falls nicht im Cache, von API holen
             if not thread:
                 try:
-                    logger.info(f"   Hole Thread {thread_id} von API...")
+                    logger.debug(f"   Hole Thread {thread_id} von API...")
                     thread = await self.fetch_channel(int(thread_id))
-                    logger.info(f"   Thread von API: {thread}")
                 except discord.NotFound:
                     logger.info(f"   Thread {thread_id} existiert nicht mehr in Discord")
                     thread = None
@@ -652,25 +724,39 @@ class GTCHABot(commands.Bot):
                     thread = None
 
             if thread and isinstance(thread, discord.Thread):
-                logger.info(f"   Lösche Discord-Thread {thread_id}...")
-                await thread.delete(reason=f"Banner {pack_id} ausverkauft (0 Packs)")
-                logger.info(f"   Discord-Thread {thread_id} gelöscht!")
-            else:
-                logger.info(f"   Kein gültiger Thread zum Löschen gefunden")
+                # Thread archivieren und sperren (statt löschen)
+                logger.info(f"   Archiviere Discord-Thread {thread_id}...")
+                try:
+                    # Abschluss-Nachricht posten
+                    await discord_rate_limiter.acquire("message_send")
+                    await thread.send("🔒 **Banner abgelaufen** - Dieser Thread wurde archiviert.")
+                except:
+                    pass
 
-            # Aus DB entfernen (auch wenn Thread schon gelöscht war)
-            logger.info(f"   Entferne aus DB...")
-            await self.db.delete_thread(pack_id)
-            await self.db.delete_banner(pack_id)
-            logger.info(f"   DB-Einträge für {pack_id} entfernt")
+                # Thread archivieren und sperren
+                await discord_rate_limiter.acquire("thread_edit")
+                await thread.edit(
+                    archived=True,
+                    locked=True,
+                    reason=f"Banner {pack_id} abgelaufen/ausverkauft"
+                )
+                logger.info(f"   Discord-Thread {thread_id} archiviert!")
+            else:
+                logger.info(f"   Kein gültiger Thread zum Archivieren gefunden")
+
+            # In DB als inaktiv/expired markieren (nicht löschen!)
+            logger.debug(f"   Markiere als inaktiv in DB...")
+            await self.db.mark_banner_inactive(pack_id)
+            await self.db.mark_thread_expired(pack_id)
+            logger.info(f"   Banner {pack_id} als inaktiv markiert")
 
             return True
 
         except discord.NotFound:
-            # Thread existiert nicht mehr - trotzdem aus DB entfernen
-            logger.debug(f"Thread für {pack_id} nicht gefunden - entferne aus DB")
-            await self.db.delete_thread(pack_id)
-            await self.db.delete_banner(pack_id)
+            # Thread existiert nicht mehr
+            logger.debug(f"Thread für {pack_id} nicht gefunden - markiere als inaktiv")
+            await self.db.mark_banner_inactive(pack_id)
+            await self.db.mark_thread_expired(pack_id)
             return True
         except discord.HTTPException as e:
             logger.error(f"Discord-Fehler beim Thread löschen: {e}")

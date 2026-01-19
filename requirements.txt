@@ -22,3 +22,6 @@ aiohttp>=3.9.0
 
 # Images
 Pillow>=10.0.0
+
+# System Monitoring
+psutil>=5.9.0

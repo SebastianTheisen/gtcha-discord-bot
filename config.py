@@ -81,3 +81,6 @@ CHANNEL_IDS = {
     "One piece": int(os.getenv("CHANNEL_ONE_PIECE", "0")),
     "Hobby": int(os.getenv("CHANNEL_HOBBY", "0")),
 }
+
+# Webhook für Fehler-Benachrichtigungen (optional)
+ERROR_WEBHOOK_URL = os.getenv("ERROR_WEBHOOK_URL", "")
