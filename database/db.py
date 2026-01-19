@@ -76,6 +76,14 @@ class Database:
             except:
                 pass  # Spalte existiert bereits
 
+            # Migration: Füge probability_message_id Spalte hinzu falls nicht vorhanden
+            try:
+                await db.execute("ALTER TABLE discord_threads ADD COLUMN probability_message_id INTEGER")
+                await db.commit()
+                logger.info("Migration: probability_message_id Spalte hinzugefügt")
+            except:
+                pass  # Spalte existiert bereits
+
             await db.commit()
 
     async def get_banner(self, pack_id: int) -> Optional[Dict]:
@@ -282,3 +290,42 @@ class Database:
                 (banner_id,)
             )
             await db.commit()
+
+    async def get_medal_count(self, thread_id: int) -> int:
+        """Gibt die Anzahl der bereits vergebenen Medaillen für einen Thread zurück."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM medals WHERE thread_id = ?",
+                (thread_id,)
+            )
+            row = await cursor.fetchone()
+            return row[0] if row else 0
+
+    async def get_medals_for_thread(self, thread_id: int) -> List[str]:
+        """Gibt Liste der vergebenen Medaillen-Tiers für einen Thread zurück."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT tier FROM medals WHERE thread_id = ?",
+                (thread_id,)
+            )
+            rows = await cursor.fetchall()
+            return [row[0] for row in rows]
+
+    async def update_probability_message_id(self, thread_id: int, message_id: int) -> None:
+        """Speichert die Message-ID der Wahrscheinlichkeits-Nachricht."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE discord_threads SET probability_message_id = ? WHERE thread_id = ?",
+                (message_id, thread_id)
+            )
+            await db.commit()
+
+    async def get_probability_message_id(self, thread_id: int) -> Optional[int]:
+        """Gibt die Message-ID der Wahrscheinlichkeits-Nachricht zurück."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT probability_message_id FROM discord_threads WHERE thread_id = ?",
+                (thread_id,)
+            )
+            row = await cursor.fetchone()
+            return row[0] if row and row[0] else None
