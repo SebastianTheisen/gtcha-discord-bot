@@ -17,7 +17,7 @@ from loguru import logger
 
 from config import (
     GUILD_ID, SCRAPE_INTERVAL_MINUTES, BASE_URL,
-    CHANNEL_IDS, CATEGORIES
+    CHANNEL_IDS, CATEGORIES, SCRAPE_TIMEOUT_SECONDS
 )
 from scraper.gtcha_scraper import GTCHAScraper
 from database.db import Database
@@ -507,8 +507,8 @@ class GTCHABot(commands.Bot):
             self._scraper = None
 
     async def _scrape_with_timeout(self):
-        """Wrapper für scrape_and_post mit 3-Minuten-Timeout und Retry-Logik."""
-        timeout_seconds = 180  # 3 Minuten
+        """Wrapper für scrape_and_post mit konfigurierbarem Timeout und Retry-Logik."""
+        timeout_seconds = SCRAPE_TIMEOUT_SECONDS
         max_retries = 2
         retry_delay = 30  # Sekunden zwischen Retries
 

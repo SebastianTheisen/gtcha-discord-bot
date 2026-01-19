@@ -93,3 +93,6 @@ MEMORY_CRITICAL_MB = int(os.getenv("MEMORY_CRITICAL_MB", "500"))
 
 # Paralleles Scrapen aktivieren (kann mehr RAM verbrauchen)
 PARALLEL_SCRAPING = os.getenv("PARALLEL_SCRAPING", "false").lower() == "true"
+
+# Scraper-Timeout in Sekunden (default: 180 = 3 Minuten)
+SCRAPE_TIMEOUT_SECONDS = int(os.getenv("SCRAPE_TIMEOUT_SECONDS", "180"))
