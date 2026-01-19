@@ -17,7 +17,8 @@ from loguru import logger
 
 from config import (
     GUILD_ID, SCRAPE_INTERVAL_MINUTES, BASE_URL,
-    CHANNEL_IDS, CATEGORIES, SCRAPE_TIMEOUT_SECONDS
+    CHANNEL_IDS, CATEGORIES, SCRAPE_TIMEOUT_SECONDS,
+    MENTION_ON_NEW_THREAD, MENTION_ON_PACK_UPDATE
 )
 from scraper.gtcha_scraper import GTCHAScraper
 from database.db import Database
@@ -438,6 +439,14 @@ class GTCHABot(commands.Bot):
                             # Embed IMMER aktualisieren (für Countdown-Refresh und Pack-Anzeige)
                             await self._update_thread_embed(banner)
 
+                            # Wahrscheinlichkeit aktualisieren
+                            thread_data = await self.db.get_thread_by_banner_id(banner.pack_id)
+                            if thread_data and thread_data.get('thread_id'):
+                                await self._update_probability_message(
+                                    thread_data['thread_id'],
+                                    banner.pack_id
+                                )
+
                         # Banner im Cache aktualisieren
                         await banner_cache.set(banner.pack_id, {
                             'current_packs': banner.current_packs,
@@ -663,6 +672,14 @@ class GTCHABot(commands.Bot):
                 starter_message_id=message.id
             )
 
+            # @everyone Mention bei neuem Thread
+            if MENTION_ON_NEW_THREAD:
+                await discord_rate_limiter.acquire("message_send")
+                await thread.send("@everyone Neuer Banner verfügbar!")
+
+            # Wahrscheinlichkeit initial posten
+            await self._update_probability_message(thread.id, banner.pack_id)
+
             logger.info(f"Thread erstellt: {title} in #{channel.name}")
 
         except discord.HTTPException as e:
@@ -721,6 +738,10 @@ class GTCHABot(commands.Bot):
             message = f"{emoji} **Pack-Update:** {old_packs} → {new_packs} ({change})"
             if progress:
                 message += f"\n{progress}"
+
+            # @everyone Mention bei Pack-Update
+            if MENTION_ON_PACK_UPDATE:
+                message = f"@everyone\n{message}"
 
             await discord_rate_limiter.acquire("message_send")
             await thread.send(message)
@@ -819,6 +840,75 @@ class GTCHABot(commands.Bot):
             logger.debug(f"Discord-Fehler bei Embed-Update: {e}")
         except Exception as e:
             logger.debug(f"Fehler bei Embed-Update für {banner.pack_id}: {e}")
+
+    async def _update_probability_message(self, thread_id: int, banner_id: int):
+        """Erstellt oder aktualisiert die Wahrscheinlichkeits-Nachricht im Thread."""
+        try:
+            # Banner-Daten holen
+            banner = await self.db.get_banner(banner_id)
+            if not banner:
+                return
+
+            current_packs = banner.get('current_packs', 0)
+            if not current_packs or current_packs <= 0:
+                return
+
+            # Medaillen-Status holen
+            medals = await self.db.get_medals_for_thread(thread_id)
+            hits_remaining = 3 - len(medals)
+
+            if hits_remaining <= 0:
+                # Alle Hits gezogen - keine Wahrscheinlichkeit mehr
+                probability_text = "🎯 **Hit-Chance:** Alle Hits wurden gezogen!"
+            else:
+                # Wahrscheinlichkeit berechnen
+                probability = (hits_remaining / current_packs) * 100
+                probability_text = f"🎯 **Hit-Chance:** {probability:.2f}% ({hits_remaining} Hits / {current_packs} Packs)"
+
+            # Medal-Status anzeigen
+            t1_status = "🥇" if "T1" not in medals else "~~🥇~~"
+            t2_status = "🥈" if "T2" not in medals else "~~🥈~~"
+            t3_status = "🥉" if "T3" not in medals else "~~🥉~~"
+            medal_line = f"Verbleibend: {t1_status} {t2_status} {t3_status}"
+
+            full_message = f"{probability_text}\n{medal_line}"
+
+            # Thread holen
+            thread = self.get_channel(int(thread_id))
+            if not thread:
+                try:
+                    thread = await self.fetch_channel(int(thread_id))
+                except (discord.NotFound, Exception):
+                    return
+
+            if not isinstance(thread, discord.Thread):
+                return
+
+            # Prüfe ob bereits eine Probability-Message existiert
+            existing_msg_id = await self.db.get_probability_message_id(thread_id)
+
+            if existing_msg_id:
+                # Versuche bestehende Nachricht zu editieren
+                try:
+                    existing_msg = await thread.fetch_message(int(existing_msg_id))
+                    await discord_rate_limiter.acquire("message_edit")
+                    await existing_msg.edit(content=full_message)
+                    logger.debug(f"Probability-Message aktualisiert in Thread {thread_id}")
+                    return
+                except discord.NotFound:
+                    # Message wurde gelöscht, neue erstellen
+                    pass
+                except Exception as e:
+                    logger.debug(f"Fehler beim Editieren der Probability-Message: {e}")
+
+            # Neue Nachricht erstellen
+            await discord_rate_limiter.acquire("message_send")
+            new_msg = await thread.send(full_message)
+            await self.db.update_probability_message_id(thread_id, new_msg.id)
+            logger.debug(f"Neue Probability-Message erstellt in Thread {thread_id}")
+
+        except Exception as e:
+            logger.debug(f"Fehler bei Probability-Update: {e}")
 
     async def _delete_banner_thread(self, pack_id: int) -> bool:
         """Archiviert den Discord-Thread für einen abgelaufenen Banner (statt löschen)."""
@@ -958,6 +1048,11 @@ class GTCHABot(commands.Bot):
             await message.reply(f"{emoji} {tier} geht an {message.author.mention}!")
 
             logger.info(f"Medaille: {tier} an {message.author.name} in {message.channel.name}")
+
+            # Wahrscheinlichkeit aktualisieren
+            banner_id = thread_data.get('banner_id')
+            if banner_id:
+                await self._update_probability_message(thread_id, banner_id)
 
         except Exception as e:
             logger.error(f"Fehler bei Medaillen-Vergabe: {e}")
