@@ -265,21 +265,25 @@ class GTCHABot(commands.Bot):
                             starter_message_id=starter_message_id or 0
                         )
 
-                        # Banner-Daten aus Thread-Titel extrahieren
-                        price_match = re.search(r'Kosten:\s*(\d+)', thread_name)
-                        entries_match = re.search(r'Anzahl:\s*(\d+)', thread_name)
-                        total_match = re.search(r'Gesamt:\s*(\d+)', thread_name)
+                        # Prüfen ob Banner schon in DB existiert - wenn ja, NICHT überschreiben!
+                        # (sonst wird image_url/detail_page_url mit NULL überschrieben)
+                        existing_banner = await self.db.get_banner(pack_id)
+                        if not existing_banner:
+                            # Banner-Daten aus Thread-Titel extrahieren
+                            price_match = re.search(r'Kosten:\s*(\d+)', thread_name)
+                            entries_match = re.search(r'Anzahl:\s*(\d+)', thread_name)
+                            total_match = re.search(r'Gesamt:\s*(\d+)', thread_name)
 
-                        banner = RecoveredBanner(
-                            pack_id=pack_id,
-                            category=category,
-                            price_coins=int(price_match.group(1)) if price_match else None,
-                            entries_per_day=int(entries_match.group(1)) if entries_match else None,
-                            total_packs=int(total_match.group(1)) if total_match else None,
-                            current_packs=None,  # Unbekannt bei Wiederherstellung - kein falsches Update
-                        )
+                            banner = RecoveredBanner(
+                                pack_id=pack_id,
+                                category=category,
+                                price_coins=int(price_match.group(1)) if price_match else None,
+                                entries_per_day=int(entries_match.group(1)) if entries_match else None,
+                                total_packs=int(total_match.group(1)) if total_match else None,
+                                current_packs=None,  # Unbekannt bei Wiederherstellung - kein falsches Update
+                            )
 
-                        await self.db.save_banner(banner)
+                            await self.db.save_banner(banner)
                         recovered_count += 1
                         logger.info(f"Thread wiederhergestellt: {pack_id} ({thread_name})")
 
@@ -336,20 +340,23 @@ class GTCHABot(commands.Bot):
                                 starter_message_id=starter_message_id or 0
                             )
 
-                            price_match = re.search(r'Kosten:\s*(\d+)', thread.name)
-                            entries_match = re.search(r'Anzahl:\s*(\d+)', thread.name)
-                            total_match = re.search(r'Gesamt:\s*(\d+)', thread.name)
+                            # Prüfen ob Banner schon in DB existiert - wenn ja, NICHT überschreiben!
+                            existing_banner = await self.db.get_banner(pack_id)
+                            if not existing_banner:
+                                price_match = re.search(r'Kosten:\s*(\d+)', thread.name)
+                                entries_match = re.search(r'Anzahl:\s*(\d+)', thread.name)
+                                total_match = re.search(r'Gesamt:\s*(\d+)', thread.name)
 
-                            banner = RecoveredBanner(
-                                pack_id=pack_id,
-                                category=category,
-                                price_coins=int(price_match.group(1)) if price_match else None,
-                                entries_per_day=int(entries_match.group(1)) if entries_match else None,
-                                total_packs=int(total_match.group(1)) if total_match else None,
-                                current_packs=None,  # Unbekannt bei Wiederherstellung
-                            )
+                                banner = RecoveredBanner(
+                                    pack_id=pack_id,
+                                    category=category,
+                                    price_coins=int(price_match.group(1)) if price_match else None,
+                                    entries_per_day=int(entries_match.group(1)) if entries_match else None,
+                                    total_packs=int(total_match.group(1)) if total_match else None,
+                                    current_packs=None,  # Unbekannt bei Wiederherstellung
+                                )
 
-                            await self.db.save_banner(banner)
+                                await self.db.save_banner(banner)
                             recovered_count += 1
                             logger.info(f"Archivierter Thread wiederhergestellt: {pack_id}")
 
@@ -493,6 +500,18 @@ class GTCHABot(commands.Bot):
                             old_packs = existing.get('current_packs')
                             old_entries = existing.get('entries_per_day')
                             title_updated = False
+
+                            # URLs aktualisieren falls fehlend (Reparatur nach RecoveredBanner-Überschreibung)
+                            if banner.image_url or banner.detail_page_url:
+                                old_image = existing.get('image_url')
+                                old_detail = existing.get('detail_page_url')
+                                if (not old_image and banner.image_url) or (not old_detail and banner.detail_page_url):
+                                    await self.db.update_banner_urls(
+                                        banner.pack_id,
+                                        banner.image_url,
+                                        banner.detail_page_url
+                                    )
+                                    logger.debug(f"URLs repariert für Banner {banner.pack_id}")
 
                             # Prüfe ob entries_per_day sich geändert hat (Titel-Update nötig)
                             # Auch updaten wenn neuer Wert None (unbegrenzt) ist!
@@ -1421,6 +1440,10 @@ class GTCHABot(commands.Bot):
             medal_count = banner.get('medal_count', 0) or 0
             hits_remaining = 3 - medal_count
 
+            # DEBUG: Prüfen ob image_url und detail_page_url vorhanden sind
+            logger.debug(f"Hot-Banner {pack_id} - image_url: {banner.get('image_url')}")
+            logger.debug(f"Hot-Banner {pack_id} - detail_page_url: {banner.get('detail_page_url')}")
+
             # Thread-Titel: IDENTISCH wie normale Banner
             price = banner.get('price_coins') or 0
             entries = banner.get('entries_per_day') if banner.get('entries_per_day') else "unbegrenzt"
@@ -1431,6 +1454,10 @@ class GTCHABot(commands.Bot):
 
             # Embed erstellen: IDENTISCH wie normale Banner
             embed = self._build_banner_embed(banner)
+
+            # DEBUG: Prüfen ob Embed korrekt erstellt wurde
+            logger.debug(f"Hot-Banner {pack_id} - Embed URL: {embed.url}")
+            logger.debug(f"Hot-Banner {pack_id} - Embed Image: {embed.image.url if embed.image else 'NONE'}")
 
             # NUR die Hit-Chance als zusätzliches Feld am Anfang einfügen
             original_fields = embed.fields.copy()

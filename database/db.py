@@ -181,6 +181,23 @@ class Database:
             )
             await db.commit()
 
+    async def update_banner_urls(self, pack_id: int, image_url: str, detail_page_url: str) -> None:
+        """Aktualisiert image_url und detail_page_url für einen Banner (falls nicht NULL)."""
+        now = datetime.now().isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            # Nur updaten wenn neuer Wert nicht None ist
+            if image_url:
+                await db.execute(
+                    "UPDATE banners SET image_url = ?, updated_at = ? WHERE pack_id = ?",
+                    (image_url, now, pack_id)
+                )
+            if detail_page_url:
+                await db.execute(
+                    "UPDATE banners SET detail_page_url = ?, updated_at = ? WHERE pack_id = ?",
+                    (detail_page_url, now, pack_id)
+                )
+            await db.commit()
+
     async def save_thread(self, banner_id: int, thread_id: int, channel_id: int, starter_message_id: int) -> None:
         now = datetime.now().isoformat()
         async with aiosqlite.connect(self.db_path) as db:
@@ -399,7 +416,11 @@ class Database:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute("""
-                SELECT b.*, dt.thread_id,
+                SELECT b.pack_id, b.category, b.title, b.best_hit, b.price_coins,
+                       b.current_packs, b.total_packs, b.entries_per_day, b.sale_end_date,
+                       b.image_url, b.detail_page_url, b.is_active, b.not_found_count,
+                       b.created_at, b.updated_at,
+                       dt.thread_id,
                        (SELECT COUNT(*) FROM medals m WHERE m.thread_id = dt.thread_id) as medal_count
                 FROM banners b
                 LEFT JOIN discord_threads dt ON b.pack_id = dt.banner_id
