@@ -544,19 +544,31 @@ class GTCHABot(commands.Bot):
             logger.warning(f"Channel {channel.name} ist kein Forum!")
             return
 
-        # Thread-Titel: ID: X / Kosten: Y / Anzahl: Z / Gesamt: W
+        # Thread-Titel Format
         price = banner.price_coins or 0
         entries = banner.entries_per_day if banner.entries_per_day else "unbegrenzt"
         total = banner.total_packs or 0
-        title = f"ID: {banner.pack_id} / Kosten: {price} / Anzahl: {entries} / Gesamt: {total}"
+        title = f"ID: {banner.pack_id} / Kosten: {price} Coins / Anzahl Pulls: {entries} / Pulls Gesamt: {total}"
         if len(title) > 100:
             title = title[:97] + "..."
+
+        # Kategorie-Farben
+        category_colors = {
+            "Bonus": 0xFFD700,      # Gold
+            "MIX": 0x9B59B6,        # Lila
+            "Yu-Gi-Oh!": 0x8B4513,  # Braun
+            "Pokémon": 0xFFCC00,    # Pokémon-Gelb
+            "Weiss Schwarz": 0x2C3E50,  # Dunkelblau
+            "One piece": 0xE74C3C,  # Rot
+            "Hobby": 0x27AE60,      # Grün
+        }
+        embed_color = category_colors.get(banner.category, 0xFFD700)
 
         # Embed erstellen
         embed = discord.Embed(
             title=banner.title or f"Pack {banner.pack_id}",
             url=banner.detail_page_url,
-            color=discord.Color.gold(),
+            color=embed_color,
             timestamp=datetime.now()
         )
 
@@ -651,7 +663,18 @@ class GTCHABot(commands.Bot):
                 emoji = "📈"
                 change = f"+{new_packs - old_packs}"
 
+            # Fortschrittsbalken erstellen
+            if total > 0:
+                percent = (new_packs / total) * 100
+                filled = int(percent / 10)
+                bar = "█" * filled + "░" * (10 - filled)
+                progress = f"`{bar}` {percent:.0f}%"
+            else:
+                progress = ""
+
             message = f"{emoji} **Pack-Update:** {old_packs} → {new_packs} ({change})"
+            if progress:
+                message += f"\n{progress}"
 
             await discord_rate_limiter.acquire("message_send")
             await thread.send(message)
@@ -692,7 +715,7 @@ class GTCHABot(commands.Bot):
             price = banner.price_coins or 0
             entries = banner.entries_per_day if banner.entries_per_day else "unbegrenzt"
             total = banner.total_packs or 0
-            new_title = f"ID: {banner.pack_id} / Kosten: {price} / Anzahl: {entries} / Gesamt: {total}"
+            new_title = f"ID: {banner.pack_id} / Kosten: {price} Coins / Anzahl Pulls: {entries} / Pulls Gesamt: {total}"
             if len(new_title) > 100:
                 new_title = new_title[:97] + "..."
 
