@@ -329,3 +329,17 @@ class Database:
             )
             row = await cursor.fetchone()
             return row[0] if row and row[0] else None
+
+    async def get_all_active_banners_with_threads(self) -> List[Dict]:
+        """Gibt alle aktiven Banner mit Thread-Daten und Medaillen-Anzahl zurück."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("""
+                SELECT b.*, dt.thread_id,
+                       (SELECT COUNT(*) FROM medals m WHERE m.thread_id = dt.thread_id) as medal_count
+                FROM banners b
+                LEFT JOIN discord_threads dt ON b.pack_id = dt.banner_id
+                WHERE b.is_active = 1 AND b.current_packs > 0
+            """)
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]

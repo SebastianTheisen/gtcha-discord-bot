@@ -6,6 +6,7 @@ import asyncio
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from math import comb
 import re as regex_module
 from typing import Optional
 
@@ -18,7 +19,8 @@ from loguru import logger
 from config import (
     GUILD_ID, SCRAPE_INTERVAL_MINUTES, BASE_URL,
     CHANNEL_IDS, CATEGORIES, SCRAPE_TIMEOUT_SECONDS,
-    MENTION_ON_NEW_THREAD, MENTION_ON_PACK_UPDATE
+    MENTION_ON_NEW_THREAD, MENTION_ON_PACK_UPDATE,
+    HOT_BANNER_CHANNEL_ID
 )
 from scraper.gtcha_scraper import GTCHAScraper
 from database.db import Database
@@ -116,10 +118,13 @@ class GTCHABot(commands.Bot):
         ))
 
         # Scheduler starten (mit Timeout-Wrapper)
+        # Läuft alle 5 Minuten um xx:00:20, xx:05:20, xx:10:20, etc.
+        # (20 Sekunden nach der vollen Minute, da neue Banner um :00 und :30 kommen)
         self.scheduler.add_job(
             self._scrape_with_timeout,
-            'interval',
-            minutes=SCRAPE_INTERVAL_MINUTES,
+            'cron',
+            minute='*/5',  # Alle 5 Minuten
+            second=20,     # 20 Sekunden nach der Minute
             id='scrape_job',
             replace_existing=True,
             coalesce=True,  # Verpasste Jobs zusammenfassen
@@ -127,7 +132,21 @@ class GTCHABot(commands.Bot):
             misfire_grace_time=300,  # Job kann bis zu 5 Min verspätet starten
         )
         self.scheduler.start()
-        logger.info(f"Scheduler: Alle {SCRAPE_INTERVAL_MINUTES} Min")
+        logger.info("Scheduler: Alle 5 Min um xx:xx:20")
+
+        # Hot-Banner Job (alle 30 Min um xx:00:20 und xx:30:20)
+        if HOT_BANNER_CHANNEL_ID:
+            self.scheduler.add_job(
+                self._update_hot_banners,
+                'cron',
+                minute='0,30',  # Um :00 und :30
+                second=20,      # 20 Sekunden nach der Minute
+                id='hot_banner_job',
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
+            )
+            logger.info("Hot-Banner Scheduler: Alle 30 Min um xx:00:20 und xx:30:20")
 
         # Commands synchronisieren
         if GUILD_ID:
@@ -853,6 +872,9 @@ class GTCHABot(commands.Bot):
             if not current_packs or current_packs <= 0:
                 return
 
+            # Pulls pro Tag (entries_per_day), None = unbegrenzt
+            pulls_per_day = banner.get('entries_per_day')
+
             # Medaillen-Status holen
             medals = await self.db.get_medals_for_thread(thread_id)
             hits_remaining = 3 - len(medals)
@@ -860,10 +882,27 @@ class GTCHABot(commands.Bot):
             if hits_remaining <= 0:
                 # Alle Hits gezogen - keine Wahrscheinlichkeit mehr
                 probability_text = "🎯 **Hit-Chance:** Alle Hits wurden gezogen!"
-            else:
-                # Wahrscheinlichkeit berechnen
+            elif pulls_per_day is None or pulls_per_day <= 0:
+                # Unbegrenzte Pulls - zeige einfache Wahrscheinlichkeit pro Pull
                 probability = (hits_remaining / current_packs) * 100
-                probability_text = f"🎯 **Hit-Chance:** {probability:.2f}% ({hits_remaining} Hits / {current_packs} Packs)"
+                probability_text = f"🎯 **Hit-Chance:** {probability:.2f}% pro Pull ({hits_remaining} Hits / {current_packs} Packs)"
+            else:
+                # Hypergeometrische Verteilung: P(X ≥ 1) = 1 - P(X = 0)
+                # P(X = 0) = C(N-n, k) / C(N, k)
+                # N = current_packs, n = hits_remaining, k = pulls_per_day
+                N = current_packs
+                n = hits_remaining
+                k = min(pulls_per_day, N)  # k kann nicht größer als N sein
+
+                # Wenn k > N-n, dann ist mindestens 1 Hit garantiert
+                if k > N - n:
+                    probability = 100.0
+                else:
+                    # P(X = 0) = C(N-n, k) / C(N, k)
+                    p_zero = comb(N - n, k) / comb(N, k)
+                    probability = (1 - p_zero) * 100
+
+                probability_text = f"🎯 **Hit-Chance:** {probability:.2f}% bei {k} Pulls ({hits_remaining} Hits / {current_packs} Packs)\n*(gilt bei max. Anzahl der möglichen Züge pro Tag)*"
 
             # Medal-Status anzeigen
             t1_status = "🥇" if "T1" not in medals else "~~🥇~~"
@@ -1010,53 +1049,306 @@ class GTCHABot(commands.Bot):
         logger.debug(f"T-Nachricht erkannt: {tier} von {message.author.name} in Thread {message.channel.id}")
 
         try:
-            # Pruefe ob Thread zu einem Banner gehoert
-            thread_data = await self.db.get_thread_by_id(message.channel.id)
-            if not thread_data:
-                logger.debug(f"Thread {message.channel.id} nicht in DB gefunden")
-                return
-
             user_id = message.author.id
             thread_id = message.channel.id
-
-            # Pruefe ob Medaille schon vergeben
-            existing = await self.db.get_medal(thread_id, tier)
-            if existing:
-                await message.reply(f"❌ {tier} wurde bereits von <@{existing['user_id']}> beansprucht!")
-                return
-
-            # Medaille vergeben
-            await self.db.save_medal(thread_id, tier, user_id)
-
-            # Emoji-Reaktion auf die ERSTE Nachricht im Thread (Banner-Post)
             emoji = {'T1': '🥇', 'T2': '🥈', 'T3': '🥉'}[tier]
 
-            # Hole die Starter-Message (erste Nachricht im Thread)
-            starter_message_id = thread_data.get('starter_message_id')
-            if starter_message_id:
-                try:
-                    starter_message = await message.channel.fetch_message(int(starter_message_id))
-                    await starter_message.add_reaction(emoji)
-                except Exception as e:
-                    logger.debug(f"Konnte Starter-Message nicht finden: {e}")
-                    # Fallback: Reaktion auf aktuelle Nachricht
-                    await message.add_reaction(emoji)
-            else:
-                # Fallback: Reaktion auf aktuelle Nachricht
+            # Prüfe ob Thread im Hot-Banner Channel ist
+            is_hot_banner = (message.channel.parent_id == HOT_BANNER_CHANNEL_ID)
+
+            if is_hot_banner:
+                # Hot-Banner Thread: Extrahiere Pack-ID aus Thread-Titel
+                # Format: "#1 | 25.3% | ID: 15393 | 5 Pulls"
+                id_match = re.search(r'ID:\s*(\d+)', message.channel.name)
+                if not id_match:
+                    await message.reply("❌ Konnte Pack-ID nicht aus Thread-Titel extrahieren!")
+                    return
+
+                pack_id = int(id_match.group(1))
+
+                # Original-Thread finden
+                original_thread_data = await self.db.get_thread_by_banner_id(pack_id)
+                if not original_thread_data:
+                    await message.reply("❌ Original-Thread nicht gefunden!")
+                    return
+
+                original_thread_id = original_thread_data.get('thread_id')
+
+                # Prüfe ob Medaille schon vergeben (im Original-Thread)
+                existing = await self.db.get_medal(original_thread_id, tier)
+                if existing:
+                    await message.reply(f"❌ {tier} wurde bereits von <@{existing['user_id']}> beansprucht!")
+                    return
+
+                # Medaille im Original-Thread speichern
+                await self.db.save_medal(original_thread_id, tier, user_id)
+
+                # Reaktion auf Hot-Banner Thread
                 await message.add_reaction(emoji)
 
-            await message.reply(f"{emoji} {tier} geht an {message.author.mention}!")
+                # Auch auf Original-Thread Reaktion setzen
+                try:
+                    original_thread = self.get_channel(int(original_thread_id))
+                    if not original_thread:
+                        original_thread = await self.fetch_channel(int(original_thread_id))
 
-            logger.info(f"Medaille: {tier} an {message.author.name} in {message.channel.name}")
+                    starter_msg_id = original_thread_data.get('starter_message_id')
+                    if starter_msg_id and original_thread:
+                        starter_msg = await original_thread.fetch_message(int(starter_msg_id))
+                        await starter_msg.add_reaction(emoji)
+                except Exception as e:
+                    logger.debug(f"Konnte Original-Thread nicht updaten: {e}")
 
-            # Wahrscheinlichkeit aktualisieren
-            banner_id = thread_data.get('banner_id')
-            if banner_id:
-                await self._update_probability_message(thread_id, banner_id)
+                await message.reply(f"{emoji} {tier} geht an {message.author.mention}!\n*(Auch im Original-Thread gesetzt)*")
+
+                logger.info(f"Medaille (Hot-Banner): {tier} an {message.author.name} für Pack {pack_id}")
+
+                # Wahrscheinlichkeit im Original-Thread aktualisieren
+                await self._update_probability_message(original_thread_id, pack_id)
+
+            else:
+                # Normaler Thread
+                thread_data = await self.db.get_thread_by_id(thread_id)
+                if not thread_data:
+                    logger.debug(f"Thread {thread_id} nicht in DB gefunden")
+                    return
+
+                # Pruefe ob Medaille schon vergeben
+                existing = await self.db.get_medal(thread_id, tier)
+                if existing:
+                    await message.reply(f"❌ {tier} wurde bereits von <@{existing['user_id']}> beansprucht!")
+                    return
+
+                # Medaille vergeben
+                await self.db.save_medal(thread_id, tier, user_id)
+
+                # Hole die Starter-Message (erste Nachricht im Thread)
+                starter_message_id = thread_data.get('starter_message_id')
+                if starter_message_id:
+                    try:
+                        starter_message = await message.channel.fetch_message(int(starter_message_id))
+                        await starter_message.add_reaction(emoji)
+                    except Exception as e:
+                        logger.debug(f"Konnte Starter-Message nicht finden: {e}")
+                        await message.add_reaction(emoji)
+                else:
+                    await message.add_reaction(emoji)
+
+                await message.reply(f"{emoji} {tier} geht an {message.author.mention}!")
+
+                logger.info(f"Medaille: {tier} an {message.author.name} in {message.channel.name}")
+
+                # Wahrscheinlichkeit aktualisieren
+                banner_id = thread_data.get('banner_id')
+                if banner_id:
+                    await self._update_probability_message(thread_id, banner_id)
 
         except Exception as e:
             logger.error(f"Fehler bei Medaillen-Vergabe: {e}")
             await message.reply(f"❌ Fehler: {e}")
+
+    def _calculate_banner_probability(self, banner: dict) -> float:
+        """Berechnet die Hit-Wahrscheinlichkeit für ein Banner für das Ranking."""
+        current_packs = banner.get('current_packs', 0)
+        if not current_packs or current_packs <= 0:
+            return 0.0
+
+        pulls_per_day = banner.get('entries_per_day')
+        medal_count = banner.get('medal_count', 0) or 0
+        hits_remaining = 3 - medal_count
+
+        if hits_remaining <= 0:
+            return 0.0
+
+        if pulls_per_day is None or pulls_per_day <= 0:
+            # Unbegrenzte Pulls - einfache Wahrscheinlichkeit pro Pull
+            return (hits_remaining / current_packs) * 100
+        else:
+            # Hypergeometrische Verteilung
+            N = current_packs
+            n = hits_remaining
+            k = min(pulls_per_day, N)
+
+            if k > N - n:
+                return 100.0
+            else:
+                p_zero = comb(N - n, k) / comb(N, k)
+                return (1 - p_zero) * 100
+
+    async def _cleanup_hot_banner_threads(self, channel: discord.ForumChannel):
+        """Löscht alle Threads im Hot-Banner Channel."""
+        try:
+            deleted_count = 0
+            # Alle Threads im Channel holen (archived und active)
+            threads_to_delete = []
+
+            # Aktive Threads
+            for thread in channel.threads:
+                threads_to_delete.append(thread)
+
+            # Archivierte Threads
+            async for thread in channel.archived_threads(limit=100):
+                threads_to_delete.append(thread)
+
+            # Threads löschen
+            for thread in threads_to_delete:
+                try:
+                    await discord_rate_limiter.acquire("thread_delete")
+                    await thread.delete()
+                    deleted_count += 1
+                except Exception as e:
+                    logger.debug(f"Konnte Hot-Banner Thread nicht löschen: {e}")
+
+            if deleted_count > 0:
+                logger.info(f"Hot-Banner Cleanup: {deleted_count} alte Threads gelöscht")
+
+        except Exception as e:
+            logger.error(f"Fehler bei Hot-Banner Cleanup: {e}")
+
+    async def _update_hot_banners(self):
+        """Postet die Top 10 Banner mit höchster Hit-Chance in den Hot-Banner Channel."""
+        try:
+            if not HOT_BANNER_CHANNEL_ID:
+                return
+
+            logger.info("Hot-Banner Update gestartet...")
+
+            # Channel holen
+            channel = self.get_channel(HOT_BANNER_CHANNEL_ID)
+            if not channel:
+                try:
+                    channel = await self.fetch_channel(HOT_BANNER_CHANNEL_ID)
+                except Exception as e:
+                    logger.error(f"Hot-Banner Channel nicht gefunden: {e}")
+                    return
+
+            if not isinstance(channel, discord.ForumChannel):
+                logger.error(f"Hot-Banner Channel ist kein Forum-Channel!")
+                return
+
+            # Alte Hot-Banner Threads löschen
+            await self._cleanup_hot_banner_threads(channel)
+
+            # Alle aktiven Banner mit Medaillen-Count holen
+            banners = await self.db.get_all_active_banners_with_threads()
+
+            # Filter: Nur Nicht-Bonus und nicht alle Hits gezogen
+            filtered_banners = []
+            for b in banners:
+                # Bonus exkludieren
+                if b.get('category') == 'Bonus':
+                    continue
+                # Banners ohne Packs exkludieren
+                if not b.get('current_packs') or b.get('current_packs') <= 0:
+                    continue
+                # Banners mit allen Hits gezogen exkludieren
+                medal_count = b.get('medal_count', 0) or 0
+                if medal_count >= 3:
+                    continue
+                filtered_banners.append(b)
+
+            # Wahrscheinlichkeit berechnen und sortieren
+            for b in filtered_banners:
+                b['probability'] = self._calculate_banner_probability(b)
+
+            # Nach Wahrscheinlichkeit sortieren (höchste zuerst)
+            sorted_banners = sorted(filtered_banners, key=lambda x: x['probability'], reverse=True)[:10]
+
+            if not sorted_banners:
+                logger.info("Keine Banner für Hot-Banner gefunden")
+                return
+
+            # Für jeden Hot-Banner einen Thread erstellen/aktualisieren
+            for rank, banner in enumerate(sorted_banners, 1):
+                await self._post_hot_banner(channel, banner, rank)
+                await asyncio.sleep(1)  # Rate-Limiting
+
+            logger.info(f"Hot-Banner Update abgeschlossen: {len(sorted_banners)} Banner")
+
+        except Exception as e:
+            logger.error(f"Fehler bei Hot-Banner Update: {e}")
+
+    async def _post_hot_banner(self, channel: discord.ForumChannel, banner: dict, rank: int):
+        """Postet einen einzelnen Hot-Banner als Thread."""
+        try:
+            pack_id = banner.get('pack_id')
+            probability = banner.get('probability', 0)
+            pulls = banner.get('entries_per_day')
+            medal_count = banner.get('medal_count', 0) or 0
+            hits_remaining = 3 - medal_count
+
+            # Thread-Titel
+            pulls_text = f"{pulls} Pulls" if pulls else "unbegrenzt"
+            title = f"#{rank} | {probability:.1f}% | ID: {pack_id} | {pulls_text}"
+            if len(title) > 100:
+                title = title[:97] + "..."
+
+            # Embed erstellen
+            category_colors = {
+                "MIX": 0x9B59B6,
+                "Yu-Gi-Oh!": 0x8B4513,
+                "Pokémon": 0xFFCC00,
+                "Weiss Schwarz": 0x2C3E50,
+                "One piece": 0xE74C3C,
+                "Hobby": 0x27AE60,
+            }
+            embed_color = category_colors.get(banner.get('category'), 0xFF6B6B)
+
+            embed = discord.Embed(
+                title=f"🔥 #{rank} Hot Banner",
+                url=banner.get('detail_page_url'),
+                color=embed_color,
+                timestamp=datetime.now()
+            )
+
+            embed.add_field(
+                name="Hit-Chance",
+                value=f"**{probability:.2f}%**",
+                inline=True
+            )
+            embed.add_field(
+                name="Packs",
+                value=f"{banner.get('current_packs')} / {banner.get('total_packs')}",
+                inline=True
+            )
+            embed.add_field(
+                name="Pulls/Tag",
+                value=pulls_text,
+                inline=True
+            )
+            embed.add_field(
+                name="Hits verbleibend",
+                value=f"{hits_remaining} / 3",
+                inline=True
+            )
+            embed.add_field(
+                name="Kategorie",
+                value=banner.get('category', 'Unbekannt'),
+                inline=True
+            )
+            embed.add_field(
+                name="Preis",
+                value=f"{banner.get('price_coins', 0):,} Coins",
+                inline=True
+            )
+
+            if banner.get('image_url'):
+                embed.set_image(url=banner.get('image_url'))
+
+            embed.set_footer(text=f"Pack ID: {pack_id} | Aktualisiert")
+
+            # Thread erstellen
+            await discord_rate_limiter.acquire("thread_create")
+            thread, message = await channel.create_thread(
+                name=title,
+                embed=embed,
+                reason=f"Hot Banner #{rank}: {pack_id}"
+            )
+
+            logger.debug(f"Hot-Banner Thread erstellt: #{rank} - {pack_id}")
+
+        except Exception as e:
+            logger.error(f"Fehler beim Posten von Hot-Banner {banner.get('pack_id')}: {e}")
 
     # Slash Commands als Methoden
     async def refresh_command(self, interaction: discord.Interaction):
