@@ -6,6 +6,7 @@ import asyncio
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from math import comb
 import re as regex_module
 from typing import Optional
 
@@ -853,6 +854,9 @@ class GTCHABot(commands.Bot):
             if not current_packs or current_packs <= 0:
                 return
 
+            # Pulls pro Tag (entries_per_day), None = unbegrenzt
+            pulls_per_day = banner.get('entries_per_day')
+
             # Medaillen-Status holen
             medals = await self.db.get_medals_for_thread(thread_id)
             hits_remaining = 3 - len(medals)
@@ -860,10 +864,27 @@ class GTCHABot(commands.Bot):
             if hits_remaining <= 0:
                 # Alle Hits gezogen - keine Wahrscheinlichkeit mehr
                 probability_text = "🎯 **Hit-Chance:** Alle Hits wurden gezogen!"
-            else:
-                # Wahrscheinlichkeit berechnen
+            elif pulls_per_day is None or pulls_per_day <= 0:
+                # Unbegrenzte Pulls - zeige einfache Wahrscheinlichkeit pro Pull
                 probability = (hits_remaining / current_packs) * 100
-                probability_text = f"🎯 **Hit-Chance:** {probability:.2f}% ({hits_remaining} Hits / {current_packs} Packs)"
+                probability_text = f"🎯 **Hit-Chance:** {probability:.2f}% pro Pull ({hits_remaining} Hits / {current_packs} Packs)"
+            else:
+                # Hypergeometrische Verteilung: P(X ≥ 1) = 1 - P(X = 0)
+                # P(X = 0) = C(N-n, k) / C(N, k)
+                # N = current_packs, n = hits_remaining, k = pulls_per_day
+                N = current_packs
+                n = hits_remaining
+                k = min(pulls_per_day, N)  # k kann nicht größer als N sein
+
+                # Wenn k > N-n, dann ist mindestens 1 Hit garantiert
+                if k > N - n:
+                    probability = 100.0
+                else:
+                    # P(X = 0) = C(N-n, k) / C(N, k)
+                    p_zero = comb(N - n, k) / comb(N, k)
+                    probability = (1 - p_zero) * 100
+
+                probability_text = f"🎯 **Hit-Chance:** {probability:.2f}% bei {k} Pulls ({hits_remaining} Hits / {current_packs} Packs)"
 
             # Medal-Status anzeigen
             t1_status = "🥇" if "T1" not in medals else "~~🥇~~"
