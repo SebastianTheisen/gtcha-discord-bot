@@ -82,5 +82,6 @@ CHANNEL_IDS = {
     "Hobby": int(os.getenv("CHANNEL_HOBBY", "0")),
 }
 
-# Webhook für Fehler-Benachrichtigungen (optional)
-ERROR_WEBHOOK_URL = os.getenv("ERROR_WEBHOOK_URL", "")
+# Admin-Channel für Bot-Benachrichtigungen (optional)
+# Der Bot postet hier Status-Updates, Fehler und Erfolge
+ADMIN_CHANNEL_ID = int(os.getenv("ADMIN_CHANNEL_ID", "0"))

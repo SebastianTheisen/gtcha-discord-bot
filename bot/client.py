@@ -20,9 +20,10 @@ from config import (
 )
 from scraper.gtcha_scraper import GTCHAScraper
 from database.db import Database
-from utils.webhook import (
-    notify_scrape_error, notify_low_banner_count,
-    notify_all_retries_failed, notify_critical_error
+from utils.notifications import (
+    set_bot_client, notify_scrape_error, notify_low_banner_count,
+    notify_all_retries_failed, notify_critical_error,
+    notify_scrape_success, notify_bot_started
 )
 from utils.rate_limiter import discord_rate_limiter
 from utils.memory_monitor import memory_monitor
@@ -101,8 +102,14 @@ class GTCHABot(commands.Bot):
     async def on_ready(self):
         logger.info(f"Bot online: {self.user}")
 
+        # Notification-System initialisieren
+        set_bot_client(self)
+
         # Memory-Monitor starten
         await memory_monitor.start()
+
+        # Startup-Benachrichtigung senden
+        await notify_bot_started()
 
         # Threads aus Discord wiederherstellen (falls DB leer nach Neustart)
         await self._recover_threads_from_discord()
@@ -442,6 +449,15 @@ class GTCHABot(commands.Bot):
 
                 elapsed = (datetime.now() - start_time).total_seconds()
                 logger.info(f"Scrape done: {elapsed:.1f}s, {new_count} neu, {deleted_count} gelöscht, {expired_count} abgelaufen, {skipped_empty} leer")
+
+                # Erfolgs-Benachrichtigung senden (nur bei Änderungen)
+                await notify_scrape_success(
+                    new_banners=new_count,
+                    deleted_banners=deleted_count,
+                    expired_banners=expired_count,
+                    duration_seconds=elapsed,
+                    total_banners=len(banners)
+                )
 
         except Exception as e:
             logger.error(f"Scrape-Fehler: {e}")
