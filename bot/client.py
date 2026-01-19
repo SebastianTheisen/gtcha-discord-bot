@@ -385,8 +385,35 @@ class GTCHABot(commands.Bot):
                     except Exception as e:
                         logger.error(f"Fehler bei Banner {banner.pack_id}: {e}")
 
+                # === NICHT-GEFUNDEN-TRACKING ===
+                # Sammle alle gefundenen Banner-IDs (inkl. der mit 0 Packs)
+                found_banner_ids = {b.pack_id for b in banners}
+
+                # Hole alle bekannten Banner aus der DB
+                db_banner_ids = set(await self.db.get_all_active_banner_ids())
+
+                # Für gefundene Banner: Zähler zurücksetzen
+                for pack_id in found_banner_ids:
+                    if pack_id in db_banner_ids:
+                        await self.db.reset_not_found_count(pack_id)
+
+                # Für NICHT gefundene Banner: Zähler erhöhen
+                expired_count = 0
+                not_found_ids = db_banner_ids - found_banner_ids
+                for pack_id in not_found_ids:
+                    count = await self.db.increment_not_found_count(pack_id)
+                    logger.debug(f"Banner {pack_id} nicht gefunden (Zähler: {count})")
+
+                    # Bei 2x nicht gefunden: Banner löschen
+                    if count >= 2:
+                        logger.info(f"Banner {pack_id} 2x nicht gefunden - lösche Thread")
+                        deleted = await self._delete_banner_thread(pack_id)
+                        if deleted:
+                            expired_count += 1
+                            logger.info(f"   Banner {pack_id} (abgelaufen) Thread gelöscht!")
+
                 elapsed = (datetime.now() - start_time).total_seconds()
-                logger.info(f"Scrape done: {elapsed:.1f}s, {new_count} neu, {deleted_count} gelöscht, {skipped_empty} leer")
+                logger.info(f"Scrape done: {elapsed:.1f}s, {new_count} neu, {deleted_count} gelöscht, {expired_count} abgelaufen, {skipped_empty} leer")
 
         except Exception as e:
             logger.error(f"Scrape-Fehler: {e}")
