@@ -404,9 +404,9 @@ class GTCHABot(commands.Bot):
                     count = await self.db.increment_not_found_count(pack_id)
                     logger.debug(f"Banner {pack_id} nicht gefunden (Zähler: {count})")
 
-                    # Bei 2x nicht gefunden: Banner löschen
-                    if count >= 2:
-                        logger.info(f"Banner {pack_id} 2x nicht gefunden - lösche Thread")
+                    # Bei 20x nicht gefunden: Banner löschen
+                    if count >= 20:
+                        logger.info(f"Banner {pack_id} 20x nicht gefunden - lösche Thread")
                         deleted = await self._delete_banner_thread(pack_id)
                         if deleted:
                             expired_count += 1
