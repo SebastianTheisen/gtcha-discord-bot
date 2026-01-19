@@ -102,3 +102,8 @@ SCRAPE_TIMEOUT_SECONDS = int(os.getenv("SCRAPE_TIMEOUT_SECONDS", "180"))
 # MENTION_ON_PACK_UPDATE: @everyone wenn Pack-Update gepostet wird
 MENTION_ON_NEW_THREAD = os.getenv("MENTION_ON_NEW_THREAD", "true").lower() == "true"
 MENTION_ON_PACK_UPDATE = os.getenv("MENTION_ON_PACK_UPDATE", "true").lower() == "true"
+
+# Hot-Banner Channel (Forum) - Top 10 Banner mit höchster Hit-Chance
+# Wird alle 30 Minuten aktualisiert, exkludiert nur Bonus-Kategorie
+# Unbegrenzte Pulls werden mit einfacher Wahrscheinlichkeit (hits/packs) berechnet
+HOT_BANNER_CHANNEL_ID = int(os.getenv("HOT_BANNER_CHANNEL_ID", "0"))
