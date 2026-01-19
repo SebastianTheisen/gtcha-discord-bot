@@ -10,6 +10,7 @@ from math import comb
 import re as regex_module
 from typing import Optional
 
+import aiosqlite
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -174,6 +175,9 @@ class GTCHABot(commands.Bot):
 
         # Threads aus Discord wiederherstellen (falls DB leer nach Neustart)
         await self._recover_threads_from_discord()
+
+        # Medaillen von Discord-Reaktionen synchronisieren
+        await self._sync_medals_from_discord()
 
         # Erster Scrape nach 10 Sekunden - über Scheduler triggern statt direkt aufrufen
         # Das vermeidet Konflikte mit dem regulären Scheduler-Job
@@ -361,6 +365,68 @@ class GTCHABot(commands.Bot):
             logger.info(f"Thread-Wiederherstellung abgeschlossen: {recovered_count} Threads wiederhergestellt")
         else:
             logger.info("Keine Threads zur Wiederherstellung gefunden")
+
+    async def _sync_medals_from_discord(self):
+        """Synchronisiert Medaillen-Reaktionen von Discord in die Datenbank."""
+        logger.info("Synchronisiere Medaillen von Discord-Reaktionen...")
+        synced_count = 0
+
+        # Alle aktiven Threads aus der DB holen
+        try:
+            async with aiosqlite.connect(self.db.db_path) as db:
+                db.row_factory = aiosqlite.Row
+                cursor = await db.execute(
+                    "SELECT thread_id, starter_message_id, t1_claimed, t2_claimed, t3_claimed FROM discord_threads WHERE is_expired = 0"
+                )
+                threads = await cursor.fetchall()
+
+            for thread_row in threads:
+                thread_id = thread_row['thread_id']
+                starter_message_id = thread_row['starter_message_id']
+
+                if not starter_message_id:
+                    continue
+
+                try:
+                    # Thread und Starter-Message holen
+                    thread = self.get_channel(thread_id)
+                    if not thread:
+                        thread = await self.fetch_channel(thread_id)
+
+                    if not thread or not isinstance(thread, discord.Thread):
+                        continue
+
+                    # Medaillen von Reaktionen lesen
+                    reaction_medals = await self._get_medals_from_reactions(thread, starter_message_id)
+
+                    if reaction_medals:
+                        # Prüfen welche Medaillen noch nicht in DB gesetzt sind
+                        for tier in reaction_medals:
+                            col_map = {'T1': 't1_claimed', 'T2': 't2_claimed', 'T3': 't3_claimed'}
+                            col = col_map.get(tier)
+                            if col and not thread_row[col]:
+                                # Medaille ist auf Discord aber nicht in DB - synchronisieren
+                                async with aiosqlite.connect(self.db.db_path) as db:
+                                    await db.execute(
+                                        f"UPDATE discord_threads SET {col} = 1 WHERE thread_id = ?",
+                                        (thread_id,)
+                                    )
+                                    await db.commit()
+                                synced_count += 1
+                                logger.debug(f"Medaille {tier} für Thread {thread_id} synchronisiert")
+
+                except discord.NotFound:
+                    logger.debug(f"Thread {thread_id} nicht mehr gefunden")
+                except Exception as e:
+                    logger.debug(f"Fehler bei Medal-Sync für Thread {thread_id}: {e}")
+
+        except Exception as e:
+            logger.error(f"Fehler bei Medal-Synchronisation: {e}")
+
+        if synced_count > 0:
+            logger.info(f"Medal-Synchronisation abgeschlossen: {synced_count} Medaillen synchronisiert")
+        else:
+            logger.info("Keine Medaillen zur Synchronisation gefunden")
 
     async def scrape_and_post(self):
         """Hauptfunktion: Scrapen und neue Banner posten."""
