@@ -17,7 +17,8 @@ from loguru import logger
 
 from config import (
     GUILD_ID, SCRAPE_INTERVAL_MINUTES, BASE_URL,
-    CHANNEL_IDS, CATEGORIES, SCRAPE_TIMEOUT_SECONDS
+    CHANNEL_IDS, CATEGORIES, SCRAPE_TIMEOUT_SECONDS,
+    MENTION_ON_NEW_THREAD, MENTION_ON_PACK_UPDATE
 )
 from scraper.gtcha_scraper import GTCHAScraper
 from database.db import Database
@@ -663,6 +664,11 @@ class GTCHABot(commands.Bot):
                 starter_message_id=message.id
             )
 
+            # @everyone Mention bei neuem Thread
+            if MENTION_ON_NEW_THREAD:
+                await discord_rate_limiter.acquire("message_send")
+                await thread.send("@everyone Neuer Banner verfügbar!")
+
             logger.info(f"Thread erstellt: {title} in #{channel.name}")
 
         except discord.HTTPException as e:
@@ -721,6 +727,10 @@ class GTCHABot(commands.Bot):
             message = f"{emoji} **Pack-Update:** {old_packs} → {new_packs} ({change})"
             if progress:
                 message += f"\n{progress}"
+
+            # @everyone Mention bei Pack-Update
+            if MENTION_ON_PACK_UPDATE:
+                message = f"@everyone\n{message}"
 
             await discord_rate_limiter.acquire("message_send")
             await thread.send(message)

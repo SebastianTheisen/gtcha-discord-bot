@@ -96,3 +96,9 @@ PARALLEL_SCRAPING = os.getenv("PARALLEL_SCRAPING", "false").lower() == "true"
 
 # Scraper-Timeout in Sekunden (default: 180 = 3 Minuten)
 SCRAPE_TIMEOUT_SECONDS = int(os.getenv("SCRAPE_TIMEOUT_SECONDS", "180"))
+
+# @everyone Mentions bei neuen Threads und Updates
+# MENTION_ON_NEW_THREAD: @everyone wenn neuer Banner-Thread erstellt wird
+# MENTION_ON_PACK_UPDATE: @everyone wenn Pack-Update gepostet wird
+MENTION_ON_NEW_THREAD = os.getenv("MENTION_ON_NEW_THREAD", "true").lower() == "true"
+MENTION_ON_PACK_UPDATE = os.getenv("MENTION_ON_PACK_UPDATE", "true").lower() == "true"
