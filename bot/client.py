@@ -1045,49 +1045,99 @@ class GTCHABot(commands.Bot):
         logger.debug(f"T-Nachricht erkannt: {tier} von {message.author.name} in Thread {message.channel.id}")
 
         try:
-            # Pruefe ob Thread zu einem Banner gehoert
-            thread_data = await self.db.get_thread_by_id(message.channel.id)
-            if not thread_data:
-                logger.debug(f"Thread {message.channel.id} nicht in DB gefunden")
-                return
-
             user_id = message.author.id
             thread_id = message.channel.id
-
-            # Pruefe ob Medaille schon vergeben
-            existing = await self.db.get_medal(thread_id, tier)
-            if existing:
-                await message.reply(f"❌ {tier} wurde bereits von <@{existing['user_id']}> beansprucht!")
-                return
-
-            # Medaille vergeben
-            await self.db.save_medal(thread_id, tier, user_id)
-
-            # Emoji-Reaktion auf die ERSTE Nachricht im Thread (Banner-Post)
             emoji = {'T1': '🥇', 'T2': '🥈', 'T3': '🥉'}[tier]
 
-            # Hole die Starter-Message (erste Nachricht im Thread)
-            starter_message_id = thread_data.get('starter_message_id')
-            if starter_message_id:
-                try:
-                    starter_message = await message.channel.fetch_message(int(starter_message_id))
-                    await starter_message.add_reaction(emoji)
-                except Exception as e:
-                    logger.debug(f"Konnte Starter-Message nicht finden: {e}")
-                    # Fallback: Reaktion auf aktuelle Nachricht
-                    await message.add_reaction(emoji)
-            else:
-                # Fallback: Reaktion auf aktuelle Nachricht
+            # Prüfe ob Thread im Hot-Banner Channel ist
+            is_hot_banner = (message.channel.parent_id == HOT_BANNER_CHANNEL_ID)
+
+            if is_hot_banner:
+                # Hot-Banner Thread: Extrahiere Pack-ID aus Thread-Titel
+                # Format: "#1 | 25.3% | ID: 15393 | 5 Pulls"
+                id_match = re.search(r'ID:\s*(\d+)', message.channel.name)
+                if not id_match:
+                    await message.reply("❌ Konnte Pack-ID nicht aus Thread-Titel extrahieren!")
+                    return
+
+                pack_id = int(id_match.group(1))
+
+                # Original-Thread finden
+                original_thread_data = await self.db.get_thread_by_banner_id(pack_id)
+                if not original_thread_data:
+                    await message.reply("❌ Original-Thread nicht gefunden!")
+                    return
+
+                original_thread_id = original_thread_data.get('thread_id')
+
+                # Prüfe ob Medaille schon vergeben (im Original-Thread)
+                existing = await self.db.get_medal(original_thread_id, tier)
+                if existing:
+                    await message.reply(f"❌ {tier} wurde bereits von <@{existing['user_id']}> beansprucht!")
+                    return
+
+                # Medaille im Original-Thread speichern
+                await self.db.save_medal(original_thread_id, tier, user_id)
+
+                # Reaktion auf Hot-Banner Thread
                 await message.add_reaction(emoji)
 
-            await message.reply(f"{emoji} {tier} geht an {message.author.mention}!")
+                # Auch auf Original-Thread Reaktion setzen
+                try:
+                    original_thread = self.get_channel(int(original_thread_id))
+                    if not original_thread:
+                        original_thread = await self.fetch_channel(int(original_thread_id))
 
-            logger.info(f"Medaille: {tier} an {message.author.name} in {message.channel.name}")
+                    starter_msg_id = original_thread_data.get('starter_message_id')
+                    if starter_msg_id and original_thread:
+                        starter_msg = await original_thread.fetch_message(int(starter_msg_id))
+                        await starter_msg.add_reaction(emoji)
+                except Exception as e:
+                    logger.debug(f"Konnte Original-Thread nicht updaten: {e}")
 
-            # Wahrscheinlichkeit aktualisieren
-            banner_id = thread_data.get('banner_id')
-            if banner_id:
-                await self._update_probability_message(thread_id, banner_id)
+                await message.reply(f"{emoji} {tier} geht an {message.author.mention}!\n*(Auch im Original-Thread gesetzt)*")
+
+                logger.info(f"Medaille (Hot-Banner): {tier} an {message.author.name} für Pack {pack_id}")
+
+                # Wahrscheinlichkeit im Original-Thread aktualisieren
+                await self._update_probability_message(original_thread_id, pack_id)
+
+            else:
+                # Normaler Thread
+                thread_data = await self.db.get_thread_by_id(thread_id)
+                if not thread_data:
+                    logger.debug(f"Thread {thread_id} nicht in DB gefunden")
+                    return
+
+                # Pruefe ob Medaille schon vergeben
+                existing = await self.db.get_medal(thread_id, tier)
+                if existing:
+                    await message.reply(f"❌ {tier} wurde bereits von <@{existing['user_id']}> beansprucht!")
+                    return
+
+                # Medaille vergeben
+                await self.db.save_medal(thread_id, tier, user_id)
+
+                # Hole die Starter-Message (erste Nachricht im Thread)
+                starter_message_id = thread_data.get('starter_message_id')
+                if starter_message_id:
+                    try:
+                        starter_message = await message.channel.fetch_message(int(starter_message_id))
+                        await starter_message.add_reaction(emoji)
+                    except Exception as e:
+                        logger.debug(f"Konnte Starter-Message nicht finden: {e}")
+                        await message.add_reaction(emoji)
+                else:
+                    await message.add_reaction(emoji)
+
+                await message.reply(f"{emoji} {tier} geht an {message.author.mention}!")
+
+                logger.info(f"Medaille: {tier} an {message.author.name} in {message.channel.name}")
+
+                # Wahrscheinlichkeit aktualisieren
+                banner_id = thread_data.get('banner_id')
+                if banner_id:
+                    await self._update_probability_message(thread_id, banner_id)
 
         except Exception as e:
             logger.error(f"Fehler bei Medaillen-Vergabe: {e}")
@@ -1121,6 +1171,36 @@ class GTCHABot(commands.Bot):
                 p_zero = comb(N - n, k) / comb(N, k)
                 return (1 - p_zero) * 100
 
+    async def _cleanup_hot_banner_threads(self, channel: discord.ForumChannel):
+        """Löscht alle Threads im Hot-Banner Channel."""
+        try:
+            deleted_count = 0
+            # Alle Threads im Channel holen (archived und active)
+            threads_to_delete = []
+
+            # Aktive Threads
+            for thread in channel.threads:
+                threads_to_delete.append(thread)
+
+            # Archivierte Threads
+            async for thread in channel.archived_threads(limit=100):
+                threads_to_delete.append(thread)
+
+            # Threads löschen
+            for thread in threads_to_delete:
+                try:
+                    await discord_rate_limiter.acquire("thread_delete")
+                    await thread.delete()
+                    deleted_count += 1
+                except Exception as e:
+                    logger.debug(f"Konnte Hot-Banner Thread nicht löschen: {e}")
+
+            if deleted_count > 0:
+                logger.info(f"Hot-Banner Cleanup: {deleted_count} alte Threads gelöscht")
+
+        except Exception as e:
+            logger.error(f"Fehler bei Hot-Banner Cleanup: {e}")
+
     async def _update_hot_banners(self):
         """Postet die Top 10 Banner mit höchster Hit-Chance in den Hot-Banner Channel."""
         try:
@@ -1141,6 +1221,9 @@ class GTCHABot(commands.Bot):
             if not isinstance(channel, discord.ForumChannel):
                 logger.error(f"Hot-Banner Channel ist kein Forum-Channel!")
                 return
+
+            # Alte Hot-Banner Threads löschen
+            await self._cleanup_hot_banner_threads(channel)
 
             # Alle aktiven Banner mit Medaillen-Count holen
             banners = await self.db.get_all_active_banners_with_threads()
