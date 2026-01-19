@@ -95,64 +95,75 @@ class GTCHAScraper:
         heartbeat_task = asyncio.create_task(self._heartbeat(start_time))
 
         try:
-            self._current_status = "Seite laden"
-            await self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=60000)
-            logger.info("Seite geladen, warte 5s auf JS...")
-            await asyncio.sleep(5)
-
-        except Exception as e:
-            logger.error(f"Ladefehler: {e}")
-            heartbeat_task.cancel()
-            return []
-
-        # Durch alle Kategorien klicken und Banner aus DOM lesen
-        for category in CATEGORIES:
+            # === HAUPTLOGIK ===
             try:
-                self._current_status = f"Kategorie: {category}"
-                logger.info(f"Kategorie: {category}")
+                self._current_status = "Seite laden"
+                await self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=60000)
+                logger.info("Seite geladen, warte 5s auf JS...")
+                await asyncio.sleep(5)
 
-                # Tab klicken
-                clicked = await self._click_category_tab(category)
-                if not clicked:
-                    logger.warning(f"   Tab nicht gefunden: {category}")
-                    continue
-
-                # Warte auf DOM-Update und Stabilisierung
-                await asyncio.sleep(3)
-                try:
-                    await self._page.wait_for_load_state("domcontentloaded", timeout=5000)
-                except:
-                    pass
-
-                # Banner aus DOM extrahieren
-                self._current_status = f"Extrahiere: {category}"
-                count = await self._extract_banners_from_dom(category)
-                logger.info(f"   -> {count} Banner in {category}")
-
+            except asyncio.CancelledError:
+                # Extern abgebrochen (z.B. durch Timeout) - weiterleiten
+                raise
             except Exception as e:
-                logger.warning(f"   Fehler bei {category}: {e}")
+                logger.error(f"Ladefehler: {e}")
+                return []
 
-        # Heartbeat stoppen
-        heartbeat_task.cancel()
-        try:
-            await heartbeat_task
-        except asyncio.CancelledError:
-            pass
+            # Durch alle Kategorien klicken und Banner aus DOM lesen
+            for category in CATEGORIES:
+                try:
+                    self._current_status = f"Kategorie: {category}"
+                    logger.info(f"Kategorie: {category}")
 
-        # Statistik
-        self._current_status = "Abschluss"
-        logger.info(f"Gesamt aktive Banner: {len(self._captured_banners)}")
+                    # Tab klicken
+                    clicked = await self._click_category_tab(category)
+                    if not clicked:
+                        logger.warning(f"   Tab nicht gefunden: {category}")
+                        continue
 
-        for cat in CATEGORIES:
-            count = len(self._category_banners.get(cat, set()))
-            if count > 0:
-                logger.info(f"   {cat}: {count} Banner")
+                    # Warte auf DOM-Update und Stabilisierung
+                    await asyncio.sleep(3)
+                    try:
+                        await self._page.wait_for_load_state("domcontentloaded", timeout=5000)
+                    except asyncio.CancelledError:
+                        raise
+                    except:
+                        pass
 
-        # Konvertieren
-        banners = self._convert_to_scraped_banners()
+                    # Banner aus DOM extrahieren
+                    self._current_status = f"Extrahiere: {category}"
+                    count = await self._extract_banners_from_dom(category)
+                    logger.info(f"   -> {count} Banner in {category}")
 
-        logger.info(f"Fertig: {len(banners)} Banner")
-        return banners
+                except asyncio.CancelledError:
+                    # Extern abgebrochen - weiterleiten
+                    raise
+                except Exception as e:
+                    logger.warning(f"   Fehler bei {category}: {e}")
+
+            # Statistik
+            self._current_status = "Abschluss"
+            logger.info(f"Gesamt aktive Banner: {len(self._captured_banners)}")
+
+            for cat in CATEGORIES:
+                count = len(self._category_banners.get(cat, set()))
+                if count > 0:
+                    logger.info(f"   {cat}: {count} Banner")
+
+            # Konvertieren
+            banners = self._convert_to_scraped_banners()
+
+            logger.info(f"Fertig: {len(banners)} Banner")
+            return banners
+
+        finally:
+            # WICHTIG: Heartbeat IMMER stoppen, auch bei Timeout/Cancel!
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
+            logger.debug("Heartbeat gestoppt")
 
     async def _click_category_tab(self, category: str) -> bool:
         """Klickt auf einen Kategorie-Tab im Menü."""
