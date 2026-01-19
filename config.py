@@ -85,3 +85,11 @@ CHANNEL_IDS = {
 # Admin-Channel für Bot-Benachrichtigungen (optional)
 # Der Bot postet hier Status-Updates, Fehler und Erfolge
 ADMIN_CHANNEL_ID = int(os.getenv("ADMIN_CHANNEL_ID", "0"))
+
+# Memory-Monitor Schwellwerte (in MB)
+# Für kleine Server können diese Werte reduziert werden
+MEMORY_WARNING_MB = int(os.getenv("MEMORY_WARNING_MB", "300"))
+MEMORY_CRITICAL_MB = int(os.getenv("MEMORY_CRITICAL_MB", "500"))
+
+# Paralleles Scrapen aktivieren (kann mehr RAM verbrauchen)
+PARALLEL_SCRAPING = os.getenv("PARALLEL_SCRAPING", "false").lower() == "true"

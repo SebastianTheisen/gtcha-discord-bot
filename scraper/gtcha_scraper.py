@@ -17,7 +17,7 @@ from playwright.async_api import async_playwright, Page, Browser, BrowserContext
 from loguru import logger
 
 from .models import ScrapedBanner
-from config import CATEGORIES
+from config import CATEGORIES, PARALLEL_SCRAPING
 
 JST = timezone(timedelta(hours=9))
 
@@ -101,6 +101,11 @@ class GTCHAScraper:
 
     async def scrape_all_banners(self) -> List[ScrapedBanner]:
         """Scrapet alle aktiven Banner aus dem DOM."""
+
+        # Parallel-Modus wenn aktiviert
+        if PARALLEL_SCRAPING:
+            logger.info("Paralleles Scraping aktiviert")
+            return await self.scrape_all_banners_parallel()
 
         self._captured_banners = {}
         self._category_banners = {cat: set() for cat in CATEGORIES}
@@ -202,6 +207,210 @@ class GTCHAScraper:
             except asyncio.CancelledError:
                 pass
             logger.debug("Heartbeat gestoppt")
+
+    async def scrape_all_banners_parallel(self) -> List[ScrapedBanner]:
+        """Scrapet alle Kategorien parallel mit mehreren Browser-Tabs."""
+
+        self._captured_banners = {}
+        self._category_banners = {cat: set() for cat in CATEGORIES}
+        self._current_status = "Parallel-Scraping"
+
+        now_jst = datetime.now(JST)
+        start_time = now_jst
+        logger.info(f"PARALLEL SCRAPING: {self.base_url}")
+        logger.info(f"JST: {now_jst.strftime('%Y-%m-%d %H:%M')}")
+
+        # Heartbeat-Task starten
+        heartbeat_task = asyncio.create_task(self._heartbeat(start_time))
+
+        try:
+            # Kategorien in Gruppen aufteilen (max 3 parallel für kleinen Server)
+            MAX_PARALLEL = 3
+            category_groups = [CATEGORIES[i:i+MAX_PARALLEL] for i in range(0, len(CATEGORIES), MAX_PARALLEL)]
+
+            failed_categories = []
+            successful_categories = []
+
+            for group_idx, category_group in enumerate(category_groups):
+                logger.info(f"Gruppe {group_idx + 1}/{len(category_groups)}: {', '.join(category_group)}")
+
+                # Für jede Kategorie eine eigene Page erstellen und parallel scrapen
+                tasks = []
+                pages = []
+
+                for category in category_group:
+                    page = await self._context.new_page()
+                    pages.append(page)
+                    task = self._scrape_single_category_parallel(page, category)
+                    tasks.append(task)
+
+                # Parallel ausführen
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                # Pages schließen
+                for page in pages:
+                    try:
+                        await page.close()
+                    except:
+                        pass
+
+                # Ergebnisse verarbeiten
+                for category, result in zip(category_group, results):
+                    if isinstance(result, Exception):
+                        logger.warning(f"   Fehler bei {category}: {result}")
+                        failed_categories.append((category, str(result)))
+                    elif result is not None:
+                        count, banners_data = result
+                        # Banner-Daten mergen
+                        for pack_id, data in banners_data.items():
+                            if pack_id not in self._captured_banners:
+                                self._captured_banners[pack_id] = data
+                            self._category_banners[category].add(pack_id)
+                        successful_categories.append((category, count))
+                        logger.info(f"   -> {count} Banner in {category}")
+
+                # Kurze Pause zwischen Gruppen
+                if group_idx < len(category_groups) - 1:
+                    await self._random_delay(1.0, 2.0)
+
+            # Zusammenfassung
+            if failed_categories:
+                logger.warning(f"Fehlgeschlagene Kategorien: {len(failed_categories)}/{len(CATEGORIES)}")
+                for cat, reason in failed_categories:
+                    logger.warning(f"   - {cat}: {reason}")
+
+            if successful_categories:
+                logger.info(f"Erfolgreiche Kategorien: {len(successful_categories)}/{len(CATEGORIES)}")
+
+            # Statistik
+            self._current_status = "Abschluss"
+            logger.info(f"Gesamt aktive Banner: {len(self._captured_banners)}")
+
+            for cat in CATEGORIES:
+                count = len(self._category_banners.get(cat, set()))
+                if count > 0:
+                    logger.info(f"   {cat}: {count} Banner")
+
+            # Konvertieren
+            banners = self._convert_to_scraped_banners()
+            logger.info(f"Fertig: {len(banners)} Banner")
+            return banners
+
+        finally:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
+            logger.debug("Heartbeat gestoppt")
+
+    async def _scrape_single_category_parallel(self, page: Page, category: str) -> Tuple[int, Dict[int, Dict]]:
+        """Scrapet eine einzelne Kategorie auf einer eigenen Page."""
+        banners_data = {}
+
+        try:
+            # Seite laden
+            await page.goto(self.base_url, wait_until="domcontentloaded", timeout=60000)
+            await asyncio.sleep(3)
+
+            # Tab klicken
+            clicked = await self._click_category_tab_on_page(page, category)
+            if not clicked:
+                return (0, {})
+
+            # Warten auf DOM-Update
+            await self._random_delay(2.0, 3.0)
+
+            # Banner extrahieren
+            count = await self._extract_banners_from_page(page, category, banners_data)
+            return (count, banners_data)
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.debug(f"Parallel-Scrape Fehler für {category}: {e}")
+            raise
+
+    async def _click_category_tab_on_page(self, page: Page, category: str) -> bool:
+        """Klickt auf einen Kategorie-Tab auf einer spezifischen Page."""
+        category_keywords = {
+            "Bonus": ["bonus", "ボーナス"],
+            "MIX": ["mix"],
+            "Yu-Gi-Oh!": ["yu-gi-oh", "yugioh", "遊戯王"],
+            "Pokémon": ["pokemon", "poke", "ポケモン"],
+            "Weiss Schwarz": ["weiss", "schwarz", "ヴァイスシュヴァルツ", "ヴァイスシュバルツ"],
+            "One piece": ["one piece", "onepiece", "ワンピース"],
+            "Hobby": ["hobby", "ホビー"],
+        }
+
+        keywords = category_keywords.get(category, [category.lower()])
+
+        for attempt in range(3):
+            try:
+                tabs = await page.query_selector_all('.tab-item, .category-tab, [role="tab"], .nav-item, .menu-item')
+
+                for tab in tabs:
+                    try:
+                        text = await tab.inner_text()
+                        text_lower = text.lower().strip()
+
+                        for keyword in keywords:
+                            if keyword in text_lower:
+                                await tab.click()
+                                return True
+                    except:
+                        continue
+
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                if "crashed" in str(e).lower():
+                    try:
+                        await page.reload(wait_until="domcontentloaded", timeout=30000)
+                        await self._random_delay(2.0, 4.0)
+                    except:
+                        pass
+
+            if attempt < 2:
+                await asyncio.sleep(2)
+
+        return False
+
+    async def _extract_banners_from_page(self, page: Page, category: str, banners_data: Dict[int, Dict]) -> int:
+        """Extrahiert Banner aus einer spezifischen Page."""
+        count = 0
+
+        try:
+            banner_elements = await page.query_selector_all('[data-pack-id]')
+
+            for el in banner_elements:
+                try:
+                    is_visible = await el.is_visible()
+                    if not is_visible:
+                        continue
+
+                    pack_id_str = await el.get_attribute('data-pack-id')
+                    if not pack_id_str or not pack_id_str.isdigit():
+                        continue
+
+                    pack_id = int(pack_id_str)
+
+                    if pack_id in banners_data:
+                        count += 1
+                        continue
+
+                    banner = await self._parse_banner_element(el, pack_id, category)
+                    if banner:
+                        banners_data[pack_id] = banner
+                        count += 1
+
+                except Exception as e:
+                    logger.debug(f"   Banner-Element Fehler: {e}")
+
+        except Exception as e:
+            logger.warning(f"   DOM-Extraktion Fehler: {e}")
+
+        return count
 
     async def _click_category_tab(self, category: str) -> bool:
         """Klickt auf einen Kategorie-Tab im Menü."""

@@ -6,6 +6,8 @@ import os
 import asyncio
 from loguru import logger
 
+from config import MEMORY_WARNING_MB, MEMORY_CRITICAL_MB
+
 # psutil ist optional - falls nicht installiert, wird Monitoring deaktiviert
 try:
     import psutil
@@ -118,5 +120,8 @@ class MemoryMonitor:
         logger.info("Memory-Monitor gestoppt")
 
 
-# Globale Instanz
-memory_monitor = MemoryMonitor()
+# Globale Instanz mit konfigurierbaren Schwellwerten
+memory_monitor = MemoryMonitor(
+    warning_threshold_mb=MEMORY_WARNING_MB,
+    critical_threshold_mb=MEMORY_CRITICAL_MB
+)
