@@ -1414,36 +1414,36 @@ class GTCHABot(commands.Bot):
             logger.error(f"Fehler bei Hot-Banner Update: {e}")
 
     async def _post_hot_banner(self, channel: discord.ForumChannel, banner: dict, rank: int):
-        """Postet einen einzelnen Hot-Banner als Thread (gleiches Format wie normale Banner + Hit-Chance)."""
+        """Postet einen einzelnen Hot-Banner als Thread (identisches Format wie normale Banner + Hit-Chance)."""
         try:
             pack_id = banner.get('pack_id')
             probability = banner.get('probability', 0)
-            pulls = banner.get('entries_per_day')
             medal_count = banner.get('medal_count', 0) or 0
             hits_remaining = 3 - medal_count
 
-            # Thread-Titel
-            pulls_text = f"{pulls}" if pulls else "unbegrenzt"
-            title = f"#{rank} | {probability:.1f}% | ID: {pack_id} | {pulls_text} Pulls"
+            # Thread-Titel: IDENTISCH wie normale Banner
+            price = banner.get('price_coins') or 0
+            entries = banner.get('entries_per_day') if banner.get('entries_per_day') else "unbegrenzt"
+            total = banner.get('total_packs') or 0
+            title = f"ID: {pack_id} / Kosten: {price} Coins / Anzahl Pulls: {entries} / Pulls Gesamt: {total}"
             if len(title) > 100:
                 title = title[:97] + "..."
 
-            # Embed erstellen mit gemeinsamer Funktion (gleiches Format wie normale Banner)
-            embed = self._build_banner_embed(banner, title_prefix=f"🔥 #{rank}")
+            # Embed erstellen: IDENTISCH wie normale Banner
+            embed = self._build_banner_embed(banner)
 
-            # Hit-Chance als erstes Feld einfügen (nach dem Titel, vor allen anderen Feldern)
-            # Wir müssen die Felder neu anordnen
+            # NUR die Hit-Chance als zusätzliches Feld am Anfang einfügen
             original_fields = embed.fields.copy()
             embed.clear_fields()
 
-            # Erst Hit-Chance
+            # Rang und Hit-Chance als erstes Feld
             embed.add_field(
-                name="🎯 Hit-Chance",
+                name=f"🔥 #{rank} | 🎯 Hit-Chance",
                 value=f"**{probability:.2f}%** ({hits_remaining}/3 Hits)",
                 inline=False
             )
 
-            # Dann alle anderen Felder vom Original-Embed
+            # Dann alle Original-Felder
             for field in original_fields:
                 embed.add_field(name=field.name, value=field.value, inline=field.inline)
 
