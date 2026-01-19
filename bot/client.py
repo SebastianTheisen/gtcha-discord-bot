@@ -116,6 +116,11 @@ class GTCHABot(commands.Bot):
             description="Bot-Status anzeigen",
             callback=self.status_command
         ))
+        self.tree.add_command(app_commands.Command(
+            name="hotbanner",
+            description="Hot-Banner manuell aktualisieren",
+            callback=self.hotbanner_command
+        ))
 
         # Scheduler starten (mit Timeout-Wrapper)
         # Läuft alle 5 Minuten um xx:00:20, xx:05:20, xx:10:20, etc.
@@ -1371,3 +1376,13 @@ class GTCHABot(commands.Bot):
         embed.add_field(name="Medaillen", value=str(stats.get('total_medals', 0)), inline=True)
 
         await interaction.response.send_message(embed=embed)
+
+    async def hotbanner_command(self, interaction: discord.Interaction):
+        """Hot-Banner manuell aktualisieren."""
+        if not HOT_BANNER_CHANNEL_ID:
+            await interaction.response.send_message("❌ HOT_BANNER_CHANNEL_ID nicht konfiguriert!")
+            return
+
+        await interaction.response.defer()
+        await self._update_hot_banners()
+        await interaction.followup.send("🔥 Hot-Banner aktualisiert!")
