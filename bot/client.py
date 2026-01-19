@@ -5,7 +5,8 @@ Discord Bot Client - Forum-Channel Version
 import asyncio
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
+import re as regex_module
 from typing import Optional
 
 import discord
@@ -28,6 +29,41 @@ from utils.notifications import (
 from utils.rate_limiter import discord_rate_limiter
 from utils.memory_monitor import memory_monitor
 from utils.cache import banner_cache
+
+
+def format_end_date_countdown(sale_end_date: str) -> str:
+    """Konvertiert Enddatum zu Countdown-Format (z.B. 'Endet in 3 Tagen')."""
+    if not sale_end_date:
+        return None
+
+    try:
+        # Versuche Datum aus String zu extrahieren (Format: "2026/01/23 まで販売" oder "2026/01/23")
+        date_match = regex_module.search(r'(\d{4})/(\d{2})/(\d{2})', sale_end_date)
+        if not date_match:
+            return sale_end_date  # Fallback zum Original
+
+        year, month, day = int(date_match.group(1)), int(date_match.group(2)), int(date_match.group(3))
+        end_date = datetime(year, month, day, 23, 59, 59)  # Ende des Tages
+
+        now = datetime.now()
+        delta = end_date - now
+        days = delta.days
+
+        if days < 0:
+            return "Abgelaufen"
+        elif days == 0:
+            return "Endet heute!"
+        elif days == 1:
+            return "Endet morgen"
+        elif days <= 7:
+            return f"Endet in {days} Tagen"
+        else:
+            # Deutsches Datumsformat für längere Zeiträume
+            months_de = ["", "Januar", "Februar", "März", "April", "Mai", "Juni",
+                        "Juli", "August", "September", "Oktober", "November", "Dezember"]
+            return f"{day}. {months_de[month]} {year}"
+    except Exception:
+        return sale_end_date  # Fallback zum Original
 
 
 @dataclass
@@ -590,7 +626,8 @@ class GTCHABot(commands.Bot):
             embed.add_field(name="Best Hit", value=banner.best_hit, inline=False)
 
         if banner.sale_end_date:
-            embed.add_field(name="Ende", value=banner.sale_end_date, inline=True)
+            countdown = format_end_date_countdown(banner.sale_end_date)
+            embed.add_field(name="Ende", value=countdown, inline=True)
 
         embed.set_footer(text=f"Pack ID: {banner.pack_id}")
 
