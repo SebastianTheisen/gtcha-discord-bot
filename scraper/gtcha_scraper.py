@@ -70,34 +70,45 @@ class GTCHAScraper:
             await self._playwright.stop()
         logger.info("Browser geschlossen")
 
+    async def _heartbeat(self, start_time: datetime):
+        """Heartbeat-Task der alle 30 Sekunden den Status loggt."""
+        while True:
+            await asyncio.sleep(30)
+            elapsed = (datetime.now(JST) - start_time).total_seconds()
+            status = getattr(self, '_current_status', 'unbekannt')
+            banner_count = len(self._captured_banners)
+            logger.info(f"[HEARTBEAT] {elapsed:.0f}s - Status: {status} - Banner bisher: {banner_count}")
+
     async def scrape_all_banners(self) -> List[ScrapedBanner]:
         """Scrapet alle aktiven Banner aus dem DOM."""
 
         self._captured_banners = {}
         self._category_banners = {cat: set() for cat in CATEGORIES}
+        self._current_status = "Initialisierung"
 
         now_jst = datetime.now(JST)
+        start_time = now_jst
         logger.info(f"Lade: {self.base_url}")
         logger.info(f"JST: {now_jst.strftime('%Y-%m-%d %H:%M')}")
 
+        # Heartbeat-Task starten
+        heartbeat_task = asyncio.create_task(self._heartbeat(start_time))
+
         try:
+            self._current_status = "Seite laden"
             await self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=60000)
-
-            try:
-                await self._page.wait_for_load_state("networkidle", timeout=20000)
-            except:
-                pass
-
-            logger.info("Warte auf Seite (5s)...")
+            logger.info("Seite geladen, warte 5s auf JS...")
             await asyncio.sleep(5)
 
         except Exception as e:
             logger.error(f"Ladefehler: {e}")
+            heartbeat_task.cancel()
             return []
 
         # Durch alle Kategorien klicken und Banner aus DOM lesen
         for category in CATEGORIES:
             try:
+                self._current_status = f"Kategorie: {category}"
                 logger.info(f"Kategorie: {category}")
 
                 # Tab klicken
@@ -114,13 +125,22 @@ class GTCHAScraper:
                     pass
 
                 # Banner aus DOM extrahieren
+                self._current_status = f"Extrahiere: {category}"
                 count = await self._extract_banners_from_dom(category)
                 logger.info(f"   -> {count} Banner in {category}")
 
             except Exception as e:
                 logger.warning(f"   Fehler bei {category}: {e}")
 
+        # Heartbeat stoppen
+        heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except asyncio.CancelledError:
+            pass
+
         # Statistik
+        self._current_status = "Abschluss"
         logger.info(f"Gesamt aktive Banner: {len(self._captured_banners)}")
 
         for cat in CATEGORIES:

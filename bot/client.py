@@ -70,9 +70,9 @@ class GTCHABot(commands.Bot):
             callback=self.status_command
         ))
 
-        # Scheduler starten
+        # Scheduler starten (mit Timeout-Wrapper)
         self.scheduler.add_job(
-            self.scrape_and_post,
+            self._scrape_with_timeout,
             'interval',
             minutes=SCRAPE_INTERVAL_MINUTES,
             id='scrape_job',
@@ -393,6 +393,23 @@ class GTCHABot(commands.Bot):
         finally:
             self._scraper = None
 
+    async def _scrape_with_timeout(self):
+        """Wrapper für scrape_and_post mit 10-Minuten-Timeout."""
+        timeout_seconds = 600  # 10 Minuten
+        try:
+            await asyncio.wait_for(self.scrape_and_post(), timeout=timeout_seconds)
+        except asyncio.TimeoutError:
+            logger.error(f"TIMEOUT: Scrape-Job nach {timeout_seconds}s abgebrochen!")
+            # Scraper aufräumen falls noch aktiv
+            if self._scraper:
+                try:
+                    await self._scraper.close()
+                except Exception:
+                    pass
+                self._scraper = None
+        except Exception as e:
+            logger.error(f"Fehler im Scrape-Job: {e}")
+
     async def _post_banner_to_discord(self, banner):
         """Postet einen Banner als Thread in Discord."""
 
@@ -705,7 +722,7 @@ class GTCHABot(commands.Bot):
     async def refresh_command(self, interaction: discord.Interaction):
         """Manuelles Scraping starten."""
         await interaction.response.defer()
-        await self.scrape_and_post()
+        await self._scrape_with_timeout()
         await interaction.followup.send("Scrape abgeschlossen!")
 
     async def status_command(self, interaction: discord.Interaction):
