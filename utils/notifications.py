@@ -155,21 +155,22 @@ async def notify_scrape_success(
     total_banners: int = 0
 ):
     """Benachrichtigt über erfolgreichen Scrape-Durchlauf."""
-    # Nur benachrichtigen wenn es Änderungen gab
-    if new_banners == 0 and deleted_banners == 0 and expired_banners == 0:
-        return
-
     changes = []
     if new_banners > 0:
         changes.append(f"+{new_banners} neu")
     if deleted_banners > 0:
-        changes.append(f"-{deleted_banners} gelöscht")
+        changes.append(f"-{deleted_banners} archiviert")
     if expired_banners > 0:
         changes.append(f"-{expired_banners} abgelaufen")
 
+    if changes:
+        description = f"**Änderungen:** {', '.join(changes)}"
+    else:
+        description = "Keine Änderungen"
+
     await send_notification(
         title="Scrape erfolgreich",
-        description=f"**Änderungen:** {', '.join(changes)}",
+        description=description,
         color=0x2ECC71,  # Grün
         fields=[
             {"name": "Dauer", "value": f"{duration_seconds:.1f}s", "inline": True},

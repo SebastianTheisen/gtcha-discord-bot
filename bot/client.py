@@ -319,25 +319,25 @@ class GTCHABot(commands.Bot):
                 new_count = 0
                 skipped_empty = 0
                 deleted_count = 0
+                skipped_inactive = 0
                 for banner in banners:
                     try:
                         # Pruefe ob Banner neu ist
                         existing = await self.db.get_banner(banner.pack_id)
 
-                        # Banner mit 0 Packs: Thread löschen falls vorhanden
+                        # Bereits inaktive Banner komplett überspringen
+                        if existing and existing.get('is_active') == 0:
+                            skipped_inactive += 1
+                            continue
+
+                        # Banner mit 0 Packs: Thread archivieren falls vorhanden
                         if banner.current_packs is not None and banner.current_packs == 0:
-                            logger.info(f"Banner {banner.pack_id} hat 0 Packs - prüfe Löschung")
-                            if existing:
-                                logger.info(f"   Banner {banner.pack_id} existiert in DB - lösche Thread")
-                                # Thread löschen
+                            if existing and existing.get('is_active') == 1:
+                                logger.info(f"Banner {banner.pack_id} hat 0 Packs - archiviere Thread")
                                 deleted = await self._delete_banner_thread(banner.pack_id)
                                 if deleted:
                                     deleted_count += 1
-                                    logger.info(f"   Banner {banner.pack_id} Thread gelöscht!")
-                                else:
-                                    logger.warning(f"   Banner {banner.pack_id} konnte nicht gelöscht werden")
-                            else:
-                                logger.debug(f"   Banner {banner.pack_id} nicht in DB")
+                                    logger.info(f"   Banner {banner.pack_id} Thread archiviert!")
                             skipped_empty += 1
                             continue
 
@@ -417,9 +417,10 @@ class GTCHABot(commands.Bot):
                 # Hole alle bekannten Banner aus der DB
                 db_banner_ids = set(await self.db.get_all_active_banner_ids())
 
-                # SCHUTZ: Nur tracken wenn mindestens 5 Banner gefunden wurden
+                # SCHUTZ: Nur tracken wenn mindestens 60 Banner gefunden wurden
                 # Verhindert Massen-Löschung bei fehlgeschlagenem Scrape
-                MIN_BANNERS_FOR_TRACKING = 5
+                # (Website hat normalerweise 50-100 Banner)
+                MIN_BANNERS_FOR_TRACKING = 60
                 expired_count = 0
 
                 if len(found_banner_ids) < MIN_BANNERS_FOR_TRACKING:
@@ -448,9 +449,11 @@ class GTCHABot(commands.Bot):
                                 logger.info(f"   Banner {pack_id} (abgelaufen) Thread gelöscht!")
 
                 elapsed = (datetime.now() - start_time).total_seconds()
-                logger.info(f"Scrape done: {elapsed:.1f}s, {new_count} neu, {deleted_count} gelöscht, {expired_count} abgelaufen, {skipped_empty} leer")
+                if skipped_inactive > 0:
+                    logger.debug(f"Übersprungen: {skipped_inactive} inaktive Banner")
+                logger.info(f"Scrape done: {elapsed:.1f}s, {new_count} neu, {deleted_count} archiviert, {expired_count} abgelaufen")
 
-                # Erfolgs-Benachrichtigung senden (nur bei Änderungen)
+                # Erfolgs-Benachrichtigung immer senden
                 await notify_scrape_success(
                     new_banners=new_count,
                     deleted_banners=deleted_count,
