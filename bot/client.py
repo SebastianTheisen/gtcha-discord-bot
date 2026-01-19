@@ -663,8 +663,17 @@ class GTCHABot(commands.Bot):
                     logger.error("Alle Retries fehlgeschlagen!")
                     await notify_all_retries_failed()
 
-    def _build_banner_embed(self, banner) -> discord.Embed:
-        """Erstellt ein Embed für einen Banner (wird für neue und Updates verwendet)."""
+    def _get_banner_value(self, banner, key, default=None):
+        """Holt einen Wert aus Banner-Objekt oder Dict."""
+        if isinstance(banner, dict):
+            return banner.get(key, default)
+        return getattr(banner, key, default)
+
+    def _build_banner_embed(self, banner, title_prefix: str = None) -> discord.Embed:
+        """Erstellt ein Embed für einen Banner (funktioniert mit Objekt oder Dict)."""
+        # Helper für Zugriff
+        get = lambda key, default=None: self._get_banner_value(banner, key, default)
+
         # Kategorie-Farben
         category_colors = {
             "Bonus": 0xFFD700,      # Gold
@@ -675,41 +684,46 @@ class GTCHABot(commands.Bot):
             "One piece": 0xE74C3C,  # Rot
             "Hobby": 0x27AE60,      # Grün
         }
-        embed_color = category_colors.get(banner.category, 0xFFD700)
+        embed_color = category_colors.get(get('category'), 0xFFD700)
+
+        # Titel (mit optionalem Prefix für Hot-Banner)
+        banner_title = get('title') or f"Pack {get('pack_id')}"
+        if title_prefix:
+            banner_title = f"{title_prefix} | {banner_title}"
 
         embed = discord.Embed(
-            title=banner.title or f"Pack {banner.pack_id}",
-            url=banner.detail_page_url,
+            title=banner_title,
+            url=get('detail_page_url'),
             color=embed_color,
             timestamp=datetime.now()
         )
 
         # Felder hinzufügen
-        if banner.price_coins:
-            embed.add_field(name="Preis", value=f"{banner.price_coins:,} Coins", inline=True)
+        if get('price_coins'):
+            embed.add_field(name="Preis", value=f"{get('price_coins'):,} Coins", inline=True)
 
-        if banner.current_packs is not None and banner.total_packs:
+        if get('current_packs') is not None and get('total_packs'):
             embed.add_field(
                 name="Packs",
-                value=f"{banner.current_packs} / {banner.total_packs}",
+                value=f"{get('current_packs')} / {get('total_packs')}",
                 inline=True
             )
 
-        if banner.entries_per_day:
-            embed.add_field(name="Pro Tag", value=f"{banner.entries_per_day}x", inline=True)
+        if get('entries_per_day'):
+            embed.add_field(name="Pro Tag", value=f"{get('entries_per_day')}x", inline=True)
 
-        if banner.best_hit:
-            embed.add_field(name="Best Hit", value=banner.best_hit, inline=False)
+        if get('best_hit'):
+            embed.add_field(name="Best Hit", value=get('best_hit'), inline=False)
 
-        if banner.sale_end_date:
-            countdown = format_end_date_countdown(banner.sale_end_date)
+        if get('sale_end_date'):
+            countdown = format_end_date_countdown(get('sale_end_date'))
             embed.add_field(name="Ende", value=countdown, inline=True)
 
-        embed.set_footer(text=f"Pack ID: {banner.pack_id}")
+        embed.set_footer(text=f"Pack ID: {get('pack_id')}")
 
         # Bild hinzufügen falls vorhanden
-        if banner.image_url:
-            embed.set_image(url=banner.image_url)
+        if get('image_url'):
+            embed.set_image(url=get('image_url'))
 
         return embed
 
@@ -1400,83 +1414,38 @@ class GTCHABot(commands.Bot):
             logger.error(f"Fehler bei Hot-Banner Update: {e}")
 
     async def _post_hot_banner(self, channel: discord.ForumChannel, banner: dict, rank: int):
-        """Postet einen einzelnen Hot-Banner als Thread."""
+        """Postet einen einzelnen Hot-Banner als Thread (identisches Format wie normale Banner + Hit-Chance)."""
         try:
             pack_id = banner.get('pack_id')
             probability = banner.get('probability', 0)
-            pulls = banner.get('entries_per_day')
             medal_count = banner.get('medal_count', 0) or 0
             hits_remaining = 3 - medal_count
 
-            # Thread-Titel (wie normal aber mit Rang und Wahrscheinlichkeit)
-            pulls_text = f"{pulls}" if pulls else "unbegrenzt"
-            title = f"#{rank} | {probability:.1f}% | ID: {pack_id} | {pulls_text} Pulls"
+            # Thread-Titel: IDENTISCH wie normale Banner
+            price = banner.get('price_coins') or 0
+            entries = banner.get('entries_per_day') if banner.get('entries_per_day') else "unbegrenzt"
+            total = banner.get('total_packs') or 0
+            title = f"ID: {pack_id} / Kosten: {price} Coins / Anzahl Pulls: {entries} / Pulls Gesamt: {total}"
             if len(title) > 100:
                 title = title[:97] + "..."
 
-            # Embed erstellen (wie normaler Banner aber mit Hit-Chance)
-            category_colors = {
-                "Bonus": 0xFFD700,
-                "MIX": 0x9B59B6,
-                "Yu-Gi-Oh!": 0x8B4513,
-                "Pokémon": 0xFFCC00,
-                "Weiss Schwarz": 0x2C3E50,
-                "One piece": 0xE74C3C,
-                "Hobby": 0x27AE60,
-            }
-            embed_color = category_colors.get(banner.get('category'), 0xFFD700)
+            # Embed erstellen: IDENTISCH wie normale Banner
+            embed = self._build_banner_embed(banner)
 
-            # Titel: Rang + Banner-Titel
-            banner_title = banner.get('title') or f"Pack {pack_id}"
-            embed = discord.Embed(
-                title=f"🔥 #{rank} | {banner_title}",
-                url=banner.get('detail_page_url'),
-                color=embed_color,
-                timestamp=datetime.now()
-            )
+            # NUR die Hit-Chance als zusätzliches Feld am Anfang einfügen
+            original_fields = embed.fields.copy()
+            embed.clear_fields()
 
-            # Hit-Chance prominent anzeigen
+            # Rang und Hit-Chance als erstes Feld
             embed.add_field(
-                name="🎯 Hit-Chance",
+                name=f"🔥 #{rank} | 🎯 Hit-Chance",
                 value=f"**{probability:.2f}%** ({hits_remaining}/3 Hits)",
                 inline=False
             )
 
-            # Preis
-            if banner.get('price_coins'):
-                embed.add_field(name="Preis", value=f"{banner.get('price_coins'):,} Coins", inline=True)
-
-            # Packs
-            if banner.get('current_packs') is not None and banner.get('total_packs'):
-                embed.add_field(
-                    name="Packs",
-                    value=f"{banner.get('current_packs')} / {banner.get('total_packs')}",
-                    inline=True
-                )
-
-            # Pro Tag
-            if pulls:
-                embed.add_field(name="Pro Tag", value=f"{pulls}x", inline=True)
-            else:
-                embed.add_field(name="Pro Tag", value="unbegrenzt", inline=True)
-
-            # Best Hit
-            if banner.get('best_hit'):
-                embed.add_field(name="Best Hit", value=banner.get('best_hit'), inline=False)
-
-            # Ende (Countdown)
-            if banner.get('sale_end_date'):
-                countdown = format_end_date_countdown(banner.get('sale_end_date'))
-                embed.add_field(name="Ende", value=countdown, inline=True)
-
-            # Kategorie
-            embed.add_field(name="Kategorie", value=banner.get('category', 'Unbekannt'), inline=True)
-
-            embed.set_footer(text=f"Pack ID: {pack_id}")
-
-            # Bild
-            if banner.get('image_url'):
-                embed.set_image(url=banner.get('image_url'))
+            # Dann alle Original-Felder
+            for field in original_fields:
+                embed.add_field(name=field.name, value=field.value, inline=field.inline)
 
             # Thread erstellen
             await discord_rate_limiter.acquire("thread_create")
