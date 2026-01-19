@@ -8,6 +8,7 @@ GTCHA Webseiten-Scraper - VERSION v6 (Pure DOM)
 
 import asyncio
 import re
+import random
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Set
 from datetime import datetime, timezone, timedelta
@@ -19,6 +20,16 @@ from .models import ScrapedBanner
 from config import CATEGORIES
 
 JST = timezone(timedelta(hours=9))
+
+# User-Agent Pool für Rotation
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
+]
 
 
 class GTCHAScraper:
@@ -52,9 +63,13 @@ class GTCHAScraper:
             args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
         )
 
+        # Zufälligen User-Agent auswählen
+        user_agent = random.choice(USER_AGENTS)
+        logger.debug(f"User-Agent: {user_agent[:50]}...")
+
         self._context = await self._browser.new_context(
             viewport={"width": 1920, "height": 1080},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            user_agent=user_agent,
             locale="ja-JP",
         )
 
@@ -69,6 +84,11 @@ class GTCHAScraper:
         if self._playwright:
             await self._playwright.stop()
         logger.info("Browser geschlossen")
+
+    async def _random_delay(self, min_sec: float = 1.0, max_sec: float = 3.0):
+        """Zufällige Verzögerung um menschliches Verhalten zu simulieren."""
+        delay = random.uniform(min_sec, max_sec)
+        await asyncio.sleep(delay)
 
     async def _heartbeat(self, start_time: datetime):
         """Heartbeat-Task der alle 30 Sekunden den Status loggt."""
@@ -110,6 +130,10 @@ class GTCHAScraper:
                 return []
 
             # Durch alle Kategorien klicken und Banner aus DOM lesen
+            # Graceful Degradation: Fehler in einer Kategorie stoppen nicht die anderen
+            failed_categories = []
+            successful_categories = []
+
             for category in CATEGORIES:
                 try:
                     self._current_status = f"Kategorie: {category}"
@@ -119,10 +143,11 @@ class GTCHAScraper:
                     clicked = await self._click_category_tab(category)
                     if not clicked:
                         logger.warning(f"   Tab nicht gefunden: {category}")
+                        failed_categories.append((category, "Tab nicht gefunden"))
                         continue
 
-                    # Warte auf DOM-Update und Stabilisierung
-                    await asyncio.sleep(3)
+                    # Warte auf DOM-Update und Stabilisierung (zufällige Verzögerung)
+                    await self._random_delay(2.0, 4.0)
                     try:
                         await self._page.wait_for_load_state("domcontentloaded", timeout=5000)
                     except asyncio.CancelledError:
@@ -134,12 +159,25 @@ class GTCHAScraper:
                     self._current_status = f"Extrahiere: {category}"
                     count = await self._extract_banners_from_dom(category)
                     logger.info(f"   -> {count} Banner in {category}")
+                    successful_categories.append((category, count))
 
                 except asyncio.CancelledError:
                     # Extern abgebrochen - weiterleiten
                     raise
                 except Exception as e:
                     logger.warning(f"   Fehler bei {category}: {e}")
+                    failed_categories.append((category, str(e)))
+                    # Wichtig: Weiter zur nächsten Kategorie!
+                    continue
+
+            # Zusammenfassung der Ergebnisse
+            if failed_categories:
+                logger.warning(f"Fehlgeschlagene Kategorien: {len(failed_categories)}/{len(CATEGORIES)}")
+                for cat, reason in failed_categories:
+                    logger.warning(f"   - {cat}: {reason}")
+
+            if successful_categories:
+                logger.info(f"Erfolgreiche Kategorien: {len(successful_categories)}/{len(CATEGORIES)}")
 
             # Statistik
             self._current_status = "Abschluss"
@@ -226,7 +264,7 @@ class GTCHAScraper:
                     try:
                         logger.warning(f"   Seite crasht - lade neu...")
                         await self._page.reload(wait_until="domcontentloaded", timeout=30000)
-                        await asyncio.sleep(3)
+                        await self._random_delay(2.0, 4.0)
                     except:
                         pass
 
@@ -439,7 +477,7 @@ class GTCHAScraper:
         try:
             logger.debug(f"   Lade Detail-Seite: {detail_url}")
             await self._page.goto(detail_url, wait_until="domcontentloaded", timeout=30000)
-            await asyncio.sleep(3)
+            await self._random_delay(2.0, 4.0)
 
             # Suche nach der ersten Karte (Rang 1)
             # Die erste .card-container hat rank-icon-1

@@ -263,3 +263,22 @@ class Database:
             )
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
+
+    async def mark_banner_inactive(self, pack_id: int) -> None:
+        """Markiert einen Banner als inaktiv (statt löschen)."""
+        now = datetime.now().isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE banners SET is_active = 0, updated_at = ? WHERE pack_id = ?",
+                (now, pack_id)
+            )
+            await db.commit()
+
+    async def mark_thread_expired(self, banner_id: int) -> None:
+        """Markiert einen Thread als abgelaufen (statt löschen)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE discord_threads SET is_expired = 1 WHERE banner_id = ?",
+                (banner_id,)
+            )
+            await db.commit()

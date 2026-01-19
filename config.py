@@ -81,3 +81,7 @@ CHANNEL_IDS = {
     "One piece": int(os.getenv("CHANNEL_ONE_PIECE", "0")),
     "Hobby": int(os.getenv("CHANNEL_HOBBY", "0")),
 }
+
+# Admin-Channel für Bot-Benachrichtigungen (optional)
+# Der Bot postet hier Status-Updates, Fehler und Erfolge
+ADMIN_CHANNEL_ID = int(os.getenv("ADMIN_CHANNEL_ID", "0"))
