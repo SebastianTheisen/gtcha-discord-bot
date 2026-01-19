@@ -865,6 +865,25 @@ class GTCHABot(commands.Bot):
         except Exception as e:
             logger.debug(f"Fehler bei Embed-Update für {banner.pack_id}: {e}")
 
+    async def _get_medals_from_reactions(self, thread, starter_message_id: int) -> list:
+        """Liest Medaillen von Discord-Reaktionen auf der Starter-Message."""
+        medals = []
+        try:
+            if not starter_message_id:
+                return medals
+
+            starter_msg = await thread.fetch_message(int(starter_message_id))
+            for reaction in starter_msg.reactions:
+                if str(reaction.emoji) == '🥇':
+                    medals.append('T1')
+                elif str(reaction.emoji) == '🥈':
+                    medals.append('T2')
+                elif str(reaction.emoji) == '🥉':
+                    medals.append('T3')
+        except Exception as e:
+            logger.debug(f"Fehler beim Lesen der Reaktionen: {e}")
+        return medals
+
     async def _update_probability_message(self, thread_id: int, banner_id: int):
         """Erstellt oder aktualisiert die Wahrscheinlichkeits-Nachricht im Thread."""
         try:
@@ -880,8 +899,38 @@ class GTCHABot(commands.Bot):
             # Pulls pro Tag (entries_per_day), None = unbegrenzt
             pulls_per_day = banner.get('entries_per_day')
 
-            # Medaillen-Status holen
-            medals = await self.db.get_medals_for_thread(thread_id)
+            # Thread-Daten für starter_message_id holen
+            thread_data = await self.db.get_thread_by_banner_id(banner_id)
+            starter_message_id = thread_data.get('starter_message_id') if thread_data else None
+
+            # Medaillen-Status holen (thread_id als int sicherstellen)
+            thread_id_int = int(thread_id)
+            medals = await self.db.get_medals_for_thread(thread_id_int)
+            logger.debug(f"Probability Update - Thread: {thread_id_int}, Banner: {banner_id}, DB Medals: {medals}")
+
+            # Fallback: Wenn keine Medaillen in DB, von Discord-Reaktionen lesen
+            if not medals and starter_message_id:
+                # Thread holen für Reaktions-Check
+                thread = self.get_channel(thread_id_int)
+                if not thread:
+                    try:
+                        thread = await self.fetch_channel(thread_id_int)
+                    except (discord.NotFound, Exception):
+                        thread = None
+
+                if thread and isinstance(thread, discord.Thread):
+                    reaction_medals = await self._get_medals_from_reactions(thread, starter_message_id)
+                    if reaction_medals:
+                        logger.info(f"Medaillen aus Reaktionen gelesen für Thread {thread_id_int}: {reaction_medals}")
+                        # Sync: Medaillen in DB speichern (mit user_id=0 als Platzhalter für unbekannt)
+                        for tier in reaction_medals:
+                            existing = await self.db.get_medal(thread_id_int, tier)
+                            if not existing:
+                                await self.db.save_medal(thread_id_int, tier, 0)
+                                logger.debug(f"Medaille {tier} für Thread {thread_id_int} in DB nachgetragen")
+                        medals = reaction_medals
+
+            logger.debug(f"Finale Medaillen für Thread {thread_id_int}: {medals}")
             hits_remaining = 3 - len(medals)
 
             if hits_remaining <= 0:
@@ -909,19 +958,19 @@ class GTCHABot(commands.Bot):
 
                 probability_text = f"🎯 **Hit-Chance:** {probability:.2f}% bei {k} Pulls ({hits_remaining} Hits / {current_packs} Packs)\n*(gilt bei max. Anzahl der möglichen Züge pro Tag)*"
 
-            # Medal-Status anzeigen
-            t1_status = "🥇" if "T1" not in medals else "~~🥇~~"
-            t2_status = "🥈" if "T2" not in medals else "~~🥈~~"
-            t3_status = "🥉" if "T3" not in medals else "~~🥉~~"
+            # Medal-Status anzeigen (strikethrough wenn bereits gezogen)
+            t1_status = "~~🥇~~" if "T1" in medals else "🥇"
+            t2_status = "~~🥈~~" if "T2" in medals else "🥈"
+            t3_status = "~~🥉~~" if "T3" in medals else "🥉"
             medal_line = f"Verbleibend: {t1_status} {t2_status} {t3_status}"
 
             full_message = f"{probability_text}\n{medal_line}"
 
-            # Thread holen
-            thread = self.get_channel(int(thread_id))
+            # Thread holen (falls nicht schon im Fallback geholt)
+            thread = self.get_channel(thread_id_int)
             if not thread:
                 try:
-                    thread = await self.fetch_channel(int(thread_id))
+                    thread = await self.fetch_channel(thread_id_int)
                 except (discord.NotFound, Exception):
                     return
 
@@ -1282,14 +1331,15 @@ class GTCHABot(commands.Bot):
             medal_count = banner.get('medal_count', 0) or 0
             hits_remaining = 3 - medal_count
 
-            # Thread-Titel
-            pulls_text = f"{pulls} Pulls" if pulls else "unbegrenzt"
-            title = f"#{rank} | {probability:.1f}% | ID: {pack_id} | {pulls_text}"
+            # Thread-Titel (wie normal aber mit Rang und Wahrscheinlichkeit)
+            pulls_text = f"{pulls}" if pulls else "unbegrenzt"
+            title = f"#{rank} | {probability:.1f}% | ID: {pack_id} | {pulls_text} Pulls"
             if len(title) > 100:
                 title = title[:97] + "..."
 
-            # Embed erstellen
+            # Embed erstellen (wie normaler Banner aber mit Hit-Chance)
             category_colors = {
+                "Bonus": 0xFFD700,
                 "MIX": 0x9B59B6,
                 "Yu-Gi-Oh!": 0x8B4513,
                 "Pokémon": 0xFFCC00,
@@ -1297,50 +1347,59 @@ class GTCHABot(commands.Bot):
                 "One piece": 0xE74C3C,
                 "Hobby": 0x27AE60,
             }
-            embed_color = category_colors.get(banner.get('category'), 0xFF6B6B)
+            embed_color = category_colors.get(banner.get('category'), 0xFFD700)
 
+            # Titel: Rang + Banner-Titel
+            banner_title = banner.get('title') or f"Pack {pack_id}"
             embed = discord.Embed(
-                title=f"🔥 #{rank} Hot Banner",
+                title=f"🔥 #{rank} | {banner_title}",
                 url=banner.get('detail_page_url'),
                 color=embed_color,
                 timestamp=datetime.now()
             )
 
+            # Hit-Chance prominent anzeigen
             embed.add_field(
-                name="Hit-Chance",
-                value=f"**{probability:.2f}%**",
-                inline=True
-            )
-            embed.add_field(
-                name="Packs",
-                value=f"{banner.get('current_packs')} / {banner.get('total_packs')}",
-                inline=True
-            )
-            embed.add_field(
-                name="Pulls/Tag",
-                value=pulls_text,
-                inline=True
-            )
-            embed.add_field(
-                name="Hits verbleibend",
-                value=f"{hits_remaining} / 3",
-                inline=True
-            )
-            embed.add_field(
-                name="Kategorie",
-                value=banner.get('category', 'Unbekannt'),
-                inline=True
-            )
-            embed.add_field(
-                name="Preis",
-                value=f"{banner.get('price_coins', 0):,} Coins",
-                inline=True
+                name="🎯 Hit-Chance",
+                value=f"**{probability:.2f}%** ({hits_remaining}/3 Hits)",
+                inline=False
             )
 
+            # Preis
+            if banner.get('price_coins'):
+                embed.add_field(name="Preis", value=f"{banner.get('price_coins'):,} Coins", inline=True)
+
+            # Packs
+            if banner.get('current_packs') is not None and banner.get('total_packs'):
+                embed.add_field(
+                    name="Packs",
+                    value=f"{banner.get('current_packs')} / {banner.get('total_packs')}",
+                    inline=True
+                )
+
+            # Pro Tag
+            if pulls:
+                embed.add_field(name="Pro Tag", value=f"{pulls}x", inline=True)
+            else:
+                embed.add_field(name="Pro Tag", value="unbegrenzt", inline=True)
+
+            # Best Hit
+            if banner.get('best_hit'):
+                embed.add_field(name="Best Hit", value=banner.get('best_hit'), inline=False)
+
+            # Ende (Countdown)
+            if banner.get('sale_end_date'):
+                countdown = format_end_date_countdown(banner.get('sale_end_date'))
+                embed.add_field(name="Ende", value=countdown, inline=True)
+
+            # Kategorie
+            embed.add_field(name="Kategorie", value=banner.get('category', 'Unbekannt'), inline=True)
+
+            embed.set_footer(text=f"Pack ID: {pack_id}")
+
+            # Bild
             if banner.get('image_url'):
                 embed.set_image(url=banner.get('image_url'))
-
-            embed.set_footer(text=f"Pack ID: {pack_id} | Aktualisiert")
 
             # Thread erstellen
             await discord_rate_limiter.acquire("thread_create")
