@@ -903,13 +903,13 @@ class GTCHABot(commands.Bot):
             thread_data = await self.db.get_thread_by_banner_id(banner_id)
             starter_message_id = thread_data.get('starter_message_id') if thread_data else None
 
-            # Medaillen-Status holen (thread_id als int sicherstellen)
+            # Medaillen-Status holen (aus den neuen Spalten in discord_threads)
             thread_id_int = int(thread_id)
-            medals = await self.db.get_medals_for_thread(thread_id_int)
-            logger.debug(f"Probability Update - Thread: {thread_id_int}, Banner: {banner_id}, DB Medals: {medals}")
+            medal_status = await self.db.get_medal_status(thread_id_int)
+            logger.debug(f"Probability Update - Thread: {thread_id_int}, Banner: {banner_id}, Medal Status: {medal_status}")
 
-            # Fallback: Wenn keine Medaillen in DB, von Discord-Reaktionen lesen
-            if not medals and starter_message_id:
+            # Fallback: Wenn alle Medaillen als nicht-vergeben markiert sind, prüfe Discord-Reaktionen
+            if not any(medal_status.values()) and starter_message_id:
                 # Thread holen für Reaktions-Check
                 thread = self.get_channel(thread_id_int)
                 if not thread:
@@ -922,16 +922,19 @@ class GTCHABot(commands.Bot):
                     reaction_medals = await self._get_medals_from_reactions(thread, starter_message_id)
                     if reaction_medals:
                         logger.info(f"Medaillen aus Reaktionen gelesen für Thread {thread_id_int}: {reaction_medals}")
-                        # Sync: Medaillen in DB speichern (mit user_id=0 als Platzhalter für unbekannt)
+                        # Sync: Medaillen in DB speichern (setzt auch die claimed-Spalten)
                         for tier in reaction_medals:
                             existing = await self.db.get_medal(thread_id_int, tier)
                             if not existing:
                                 await self.db.save_medal(thread_id_int, tier, 0)
                                 logger.debug(f"Medaille {tier} für Thread {thread_id_int} in DB nachgetragen")
-                        medals = reaction_medals
+                        # Status neu laden
+                        medal_status = await self.db.get_medal_status(thread_id_int)
 
-            logger.debug(f"Finale Medaillen für Thread {thread_id_int}: {medals}")
-            hits_remaining = 3 - len(medals)
+            # Anzahl vergebener Medaillen zählen
+            claimed_count = sum(1 for claimed in medal_status.values() if claimed)
+            hits_remaining = 3 - claimed_count
+            logger.debug(f"Finale Medal Status für Thread {thread_id_int}: {medal_status}, Hits remaining: {hits_remaining}")
 
             if hits_remaining <= 0:
                 # Alle Hits gezogen - keine Wahrscheinlichkeit mehr
@@ -958,13 +961,21 @@ class GTCHABot(commands.Bot):
 
                 probability_text = f"🎯 **Hit-Chance:** {probability:.2f}% bei {k} Pulls ({hits_remaining} Hits / {current_packs} Packs)\n*(gilt bei max. Anzahl der möglichen Züge pro Tag)*"
 
-            # Medal-Status anzeigen (strikethrough wenn bereits gezogen)
-            t1_status = "~~🥇~~" if "T1" in medals else "🥇"
-            t2_status = "~~🥈~~" if "T2" in medals else "🥈"
-            t3_status = "~~🥉~~" if "T3" in medals else "🥉"
-            medal_line = f"Verbleibend: {t1_status} {t2_status} {t3_status}"
+            # Medal-Status anzeigen (nur verfügbare Medaillen zeigen)
+            available_medals = []
+            if not medal_status['T1']:
+                available_medals.append("🥇")
+            if not medal_status['T2']:
+                available_medals.append("🥈")
+            if not medal_status['T3']:
+                available_medals.append("🥉")
 
-            full_message = f"{probability_text}\n{medal_line}"
+            if available_medals:
+                medal_line = f"Verbleibend: {' '.join(available_medals)}"
+                full_message = f"{probability_text}\n{medal_line}"
+            else:
+                # Alle Medaillen vergeben
+                full_message = probability_text
 
             # Thread holen (falls nicht schon im Fallback geholt)
             thread = self.get_channel(thread_id_int)

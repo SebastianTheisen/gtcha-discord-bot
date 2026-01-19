@@ -84,6 +84,40 @@ class Database:
             except:
                 pass  # Spalte existiert bereits
 
+            # Migration: Füge Medaillen-Spalten hinzu (t1=Gold, t2=Silber, t3=Bronze)
+            for col in ['t1_claimed', 't2_claimed', 't3_claimed']:
+                try:
+                    await db.execute(f"ALTER TABLE discord_threads ADD COLUMN {col} INTEGER DEFAULT 0")
+                    await db.commit()
+                    logger.info(f"Migration: {col} Spalte hinzugefügt")
+                except:
+                    pass  # Spalte existiert bereits
+
+            # Migration: Bestehende Medaillen aus medals-Tabelle in claimed-Spalten übertragen
+            try:
+                # T1 (Gold)
+                await db.execute("""
+                    UPDATE discord_threads SET t1_claimed = 1
+                    WHERE thread_id IN (SELECT thread_id FROM medals WHERE tier = 'T1')
+                    AND (t1_claimed IS NULL OR t1_claimed = 0)
+                """)
+                # T2 (Silber)
+                await db.execute("""
+                    UPDATE discord_threads SET t2_claimed = 1
+                    WHERE thread_id IN (SELECT thread_id FROM medals WHERE tier = 'T2')
+                    AND (t2_claimed IS NULL OR t2_claimed = 0)
+                """)
+                # T3 (Bronze)
+                await db.execute("""
+                    UPDATE discord_threads SET t3_claimed = 1
+                    WHERE thread_id IN (SELECT thread_id FROM medals WHERE tier = 'T3')
+                    AND (t3_claimed IS NULL OR t3_claimed = 0)
+                """)
+                await db.commit()
+                logger.info("Migration: Bestehende Medaillen in claimed-Spalten übertragen")
+            except Exception as e:
+                logger.debug(f"Migration Medaillen-Sync: {e}")
+
             await db.commit()
 
     async def get_banner(self, pack_id: int) -> Optional[Dict]:
@@ -183,6 +217,14 @@ class Database:
                 INSERT INTO medals (thread_id, tier, user_id, created_at)
                 VALUES (?, ?, ?, ?)
             """, (thread_id, tier, user_id, now))
+
+            # Auch die claimed-Spalte in discord_threads setzen
+            col_map = {'T1': 't1_claimed', 'T2': 't2_claimed', 'T3': 't3_claimed'}
+            if tier in col_map:
+                await db.execute(
+                    f"UPDATE discord_threads SET {col_map[tier]} = 1 WHERE thread_id = ?",
+                    (thread_id,)
+                )
             await db.commit()
 
     async def get_thread_by_banner_id(self, banner_id: int) -> Optional[Dict]:
@@ -193,6 +235,28 @@ class Database:
             )
             row = await cursor.fetchone()
             return dict(row) if row else None
+
+    async def get_medal_status(self, thread_id: int) -> Dict[str, bool]:
+        """Gibt den Status der Medaillen für einen Thread zurück.
+
+        Returns:
+            Dict mit 'T1', 'T2', 'T3' als Keys und True/False als Werte
+            (True = vergeben, False = verfügbar)
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT t1_claimed, t2_claimed, t3_claimed FROM discord_threads WHERE thread_id = ?",
+                (thread_id,)
+            )
+            row = await cursor.fetchone()
+            if row:
+                return {
+                    'T1': bool(row['t1_claimed']),
+                    'T2': bool(row['t2_claimed']),
+                    'T3': bool(row['t3_claimed'])
+                }
+            return {'T1': False, 'T2': False, 'T3': False}
 
     async def delete_thread(self, banner_id: int) -> None:
         async with aiosqlite.connect(self.db_path) as db:
