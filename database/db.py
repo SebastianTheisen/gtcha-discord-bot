@@ -33,6 +33,7 @@ class Database:
                     image_url TEXT,
                     detail_page_url TEXT,
                     is_active INTEGER DEFAULT 1,
+                    not_found_count INTEGER DEFAULT 0,
                     created_at TEXT,
                     updated_at TEXT
                 );
@@ -66,6 +67,15 @@ class Database:
                     FOREIGN KEY (banner_id) REFERENCES banners(pack_id)
                 );
             """)
+
+            # Migration: Füge not_found_count Spalte hinzu falls nicht vorhanden
+            try:
+                await db.execute("ALTER TABLE banners ADD COLUMN not_found_count INTEGER DEFAULT 0")
+                await db.commit()
+                logger.info("Migration: not_found_count Spalte hinzugefügt")
+            except:
+                pass  # Spalte existiert bereits
+
             await db.commit()
 
     async def get_banner(self, pack_id: int) -> Optional[Dict]:
@@ -209,3 +219,47 @@ class Database:
             stats['total_medals'] = (await cursor.fetchone())[0]
 
             return stats
+
+    async def get_all_active_banner_ids(self) -> List[int]:
+        """Gibt alle aktiven Banner-IDs zurück."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT pack_id FROM banners WHERE is_active = 1"
+            )
+            rows = await cursor.fetchall()
+            return [row[0] for row in rows]
+
+    async def increment_not_found_count(self, pack_id: int) -> int:
+        """Erhöht not_found_count um 1 und gibt den neuen Wert zurück."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE banners SET not_found_count = not_found_count + 1 WHERE pack_id = ?",
+                (pack_id,)
+            )
+            await db.commit()
+
+            cursor = await db.execute(
+                "SELECT not_found_count FROM banners WHERE pack_id = ?", (pack_id,)
+            )
+            row = await cursor.fetchone()
+            return row[0] if row else 0
+
+    async def reset_not_found_count(self, pack_id: int) -> None:
+        """Setzt not_found_count auf 0 zurück."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE banners SET not_found_count = 0 WHERE pack_id = ?",
+                (pack_id,)
+            )
+            await db.commit()
+
+    async def get_expired_banners(self, threshold: int = 2) -> List[Dict]:
+        """Gibt Banner zurück die >= threshold mal nicht gefunden wurden."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM banners WHERE not_found_count >= ? AND is_active = 1",
+                (threshold,)
+            )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
