@@ -421,8 +421,8 @@ class GTCHABot(commands.Bot):
             self._scraper = None
 
     async def _scrape_with_timeout(self):
-        """Wrapper für scrape_and_post mit 10-Minuten-Timeout."""
-        timeout_seconds = 600  # 10 Minuten
+        """Wrapper für scrape_and_post mit 3-Minuten-Timeout."""
+        timeout_seconds = 180  # 3 Minuten
         try:
             await asyncio.wait_for(self.scrape_and_post(), timeout=timeout_seconds)
         except asyncio.TimeoutError:
