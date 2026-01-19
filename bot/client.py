@@ -1400,7 +1400,7 @@ class GTCHABot(commands.Bot):
             logger.error(f"Fehler bei Hot-Banner Update: {e}")
 
     async def _post_hot_banner(self, channel: discord.ForumChannel, banner: dict, rank: int):
-        """Postet einen einzelnen Hot-Banner als Thread."""
+        """Postet einen einzelnen Hot-Banner als Thread (gleiches Format wie normale Banner)."""
         try:
             pack_id = banner.get('pack_id')
             probability = banner.get('probability', 0)
@@ -1414,7 +1414,7 @@ class GTCHABot(commands.Bot):
             if len(title) > 100:
                 title = title[:97] + "..."
 
-            # Embed erstellen (wie normaler Banner aber mit Hit-Chance)
+            # Kategorie-Farben (gleich wie normale Banner)
             category_colors = {
                 "Bonus": 0xFFD700,
                 "MIX": 0x9B59B6,
@@ -1426,7 +1426,7 @@ class GTCHABot(commands.Bot):
             }
             embed_color = category_colors.get(banner.get('category'), 0xFFD700)
 
-            # Titel: Rang + Banner-Titel
+            # Embed erstellen (gleiches Format wie normale Banner, mit Hot-Banner Extras)
             banner_title = banner.get('title') or f"Pack {pack_id}"
             embed = discord.Embed(
                 title=f"🔥 #{rank} | {banner_title}",
@@ -1435,7 +1435,15 @@ class GTCHABot(commands.Bot):
                 timestamp=datetime.now()
             )
 
-            # Hit-Chance prominent anzeigen
+            # Bild setzen (wie normale Banner)
+            image_url = banner.get('image_url')
+            if image_url:
+                embed.set_image(url=image_url)
+                logger.debug(f"Hot-Banner {pack_id}: Bild gesetzt - {image_url[:50]}...")
+            else:
+                logger.warning(f"Hot-Banner {pack_id}: Kein Bild-URL vorhanden!")
+
+            # Hit-Chance als erstes Feld
             embed.add_field(
                 name="🎯 Hit-Chance",
                 value=f"**{probability:.2f}%** ({hits_remaining}/3 Hits)",
@@ -1473,10 +1481,6 @@ class GTCHABot(commands.Bot):
             embed.add_field(name="Kategorie", value=banner.get('category', 'Unbekannt'), inline=True)
 
             embed.set_footer(text=f"Pack ID: {pack_id}")
-
-            # Bild
-            if banner.get('image_url'):
-                embed.set_image(url=banner.get('image_url'))
 
             # Thread erstellen
             await discord_rate_limiter.acquire("thread_create")
