@@ -5,7 +5,8 @@ Discord Bot Client - Forum-Channel Version
 import asyncio
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
+import re as regex_module
 from typing import Optional
 
 import discord
@@ -28,6 +29,41 @@ from utils.notifications import (
 from utils.rate_limiter import discord_rate_limiter
 from utils.memory_monitor import memory_monitor
 from utils.cache import banner_cache
+
+
+def format_end_date_countdown(sale_end_date: str) -> str:
+    """Konvertiert Enddatum zu Countdown-Format (z.B. 'Endet in 3 Tagen')."""
+    if not sale_end_date:
+        return None
+
+    try:
+        # Versuche Datum aus String zu extrahieren (Format: "2026/01/23 まで販売" oder "2026/01/23")
+        date_match = regex_module.search(r'(\d{4})/(\d{2})/(\d{2})', sale_end_date)
+        if not date_match:
+            return sale_end_date  # Fallback zum Original
+
+        year, month, day = int(date_match.group(1)), int(date_match.group(2)), int(date_match.group(3))
+        end_date = datetime(year, month, day, 23, 59, 59)  # Ende des Tages
+
+        now = datetime.now()
+        delta = end_date - now
+        days = delta.days
+
+        if days < 0:
+            return "Abgelaufen"
+        elif days == 0:
+            return "Endet heute!"
+        elif days == 1:
+            return "Endet morgen"
+        elif days <= 7:
+            return f"Endet in {days} Tagen"
+        else:
+            # Deutsches Datumsformat für längere Zeiträume
+            months_de = ["", "Januar", "Februar", "März", "April", "Mai", "Juni",
+                        "Juli", "August", "September", "Oktober", "November", "Dezember"]
+            return f"{day}. {months_de[month]} {year}"
+    except Exception:
+        return sale_end_date  # Fallback zum Original
 
 
 @dataclass
@@ -399,6 +435,9 @@ class GTCHABot(commands.Bot):
                                 else:
                                     logger.debug(f"Initiales Pack-Update für {banner.pack_id}: {banner.current_packs} (kein Post)")
 
+                            # Embed IMMER aktualisieren (für Countdown-Refresh und Pack-Anzeige)
+                            await self._update_thread_embed(banner)
+
                         # Banner im Cache aktualisieren
                         await banner_cache.set(banner.pack_id, {
                             'current_packs': banner.current_packs,
@@ -525,6 +564,56 @@ class GTCHABot(commands.Bot):
                     logger.error("Alle Retries fehlgeschlagen!")
                     await notify_all_retries_failed()
 
+    def _build_banner_embed(self, banner) -> discord.Embed:
+        """Erstellt ein Embed für einen Banner (wird für neue und Updates verwendet)."""
+        # Kategorie-Farben
+        category_colors = {
+            "Bonus": 0xFFD700,      # Gold
+            "MIX": 0x9B59B6,        # Lila
+            "Yu-Gi-Oh!": 0x8B4513,  # Braun
+            "Pokémon": 0xFFCC00,    # Pokémon-Gelb
+            "Weiss Schwarz": 0x2C3E50,  # Dunkelblau
+            "One piece": 0xE74C3C,  # Rot
+            "Hobby": 0x27AE60,      # Grün
+        }
+        embed_color = category_colors.get(banner.category, 0xFFD700)
+
+        embed = discord.Embed(
+            title=banner.title or f"Pack {banner.pack_id}",
+            url=banner.detail_page_url,
+            color=embed_color,
+            timestamp=datetime.now()
+        )
+
+        # Felder hinzufügen
+        if banner.price_coins:
+            embed.add_field(name="Preis", value=f"{banner.price_coins:,} Coins", inline=True)
+
+        if banner.current_packs is not None and banner.total_packs:
+            embed.add_field(
+                name="Packs",
+                value=f"{banner.current_packs} / {banner.total_packs}",
+                inline=True
+            )
+
+        if banner.entries_per_day:
+            embed.add_field(name="Pro Tag", value=f"{banner.entries_per_day}x", inline=True)
+
+        if banner.best_hit:
+            embed.add_field(name="Best Hit", value=banner.best_hit, inline=False)
+
+        if banner.sale_end_date:
+            countdown = format_end_date_countdown(banner.sale_end_date)
+            embed.add_field(name="Ende", value=countdown, inline=True)
+
+        embed.set_footer(text=f"Pack ID: {banner.pack_id}")
+
+        # Bild hinzufügen falls vorhanden
+        if banner.image_url:
+            embed.set_image(url=banner.image_url)
+
+        return embed
+
     async def _post_banner_to_discord(self, banner):
         """Postet einen Banner als Thread in Discord."""
 
@@ -552,51 +641,8 @@ class GTCHABot(commands.Bot):
         if len(title) > 100:
             title = title[:97] + "..."
 
-        # Kategorie-Farben
-        category_colors = {
-            "Bonus": 0xFFD700,      # Gold
-            "MIX": 0x9B59B6,        # Lila
-            "Yu-Gi-Oh!": 0x8B4513,  # Braun
-            "Pokémon": 0xFFCC00,    # Pokémon-Gelb
-            "Weiss Schwarz": 0x2C3E50,  # Dunkelblau
-            "One piece": 0xE74C3C,  # Rot
-            "Hobby": 0x27AE60,      # Grün
-        }
-        embed_color = category_colors.get(banner.category, 0xFFD700)
-
-        # Embed erstellen
-        embed = discord.Embed(
-            title=banner.title or f"Pack {banner.pack_id}",
-            url=banner.detail_page_url,
-            color=embed_color,
-            timestamp=datetime.now()
-        )
-
-        # Felder hinzufuegen
-        if banner.price_coins:
-            embed.add_field(name="Preis", value=f"{banner.price_coins:,} Coins", inline=True)
-
-        if banner.current_packs is not None and banner.total_packs:
-            embed.add_field(
-                name="Packs",
-                value=f"{banner.current_packs} / {banner.total_packs}",
-                inline=True
-            )
-
-        if banner.entries_per_day:
-            embed.add_field(name="Pro Tag", value=f"{banner.entries_per_day}x", inline=True)
-
-        if banner.best_hit:
-            embed.add_field(name="Best Hit", value=banner.best_hit, inline=False)
-
-        if banner.sale_end_date:
-            embed.add_field(name="Ende", value=banner.sale_end_date, inline=True)
-
-        embed.set_footer(text=f"Pack ID: {banner.pack_id}")
-
-        # Bild hinzufuegen falls vorhanden
-        if banner.image_url:
-            embed.set_image(url=banner.image_url)
+        # Embed erstellen mit Helper-Funktion
+        embed = self._build_banner_embed(banner)
 
         try:
             # Rate-Limiting für Discord API
@@ -729,6 +775,50 @@ class GTCHABot(commands.Bot):
             logger.debug(f"Discord-Fehler bei Titel-Update: {e}")
         except Exception as e:
             logger.debug(f"Fehler bei Titel-Update für {banner.pack_id}: {e}")
+
+    async def _update_thread_embed(self, banner):
+        """Aktualisiert das Embed im Thread mit aktuellen Daten (z.B. Countdown)."""
+        try:
+            thread_data = await self.db.get_thread_by_banner_id(banner.pack_id)
+            if not thread_data:
+                return
+
+            thread_id = thread_data.get('thread_id')
+            starter_message_id = thread_data.get('starter_message_id')
+
+            if not thread_id or not starter_message_id:
+                return
+
+            # Thread holen
+            thread = self.get_channel(int(thread_id))
+            if not thread:
+                try:
+                    thread = await self.fetch_channel(int(thread_id))
+                except (discord.NotFound, Exception):
+                    return
+
+            if not isinstance(thread, discord.Thread):
+                return
+
+            # Starter-Message holen
+            try:
+                message = await thread.fetch_message(int(starter_message_id))
+            except (discord.NotFound, Exception):
+                logger.debug(f"Starter-Message für {banner.pack_id} nicht gefunden")
+                return
+
+            # Neues Embed erstellen
+            new_embed = self._build_banner_embed(banner)
+
+            # Message updaten
+            await discord_rate_limiter.acquire("message_edit")
+            await message.edit(embed=new_embed)
+            logger.debug(f"Embed aktualisiert für Banner {banner.pack_id}")
+
+        except discord.HTTPException as e:
+            logger.debug(f"Discord-Fehler bei Embed-Update: {e}")
+        except Exception as e:
+            logger.debug(f"Fehler bei Embed-Update für {banner.pack_id}: {e}")
 
     async def _delete_banner_thread(self, pack_id: int) -> bool:
         """Archiviert den Discord-Thread für einen abgelaufenen Banner (statt löschen)."""
