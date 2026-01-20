@@ -179,6 +179,9 @@ class GTCHABot(commands.Bot):
         # Medaillen von Discord-Reaktionen synchronisieren
         await self._sync_medals_from_discord()
 
+        # Doppelte Wahrscheinlichkeits-Nachrichten aufräumen
+        await self._cleanup_duplicate_probability_messages()
+
         # Erster Scrape nach 10 Sekunden - über Scheduler triggern statt direkt aufrufen
         # Das vermeidet Konflikte mit dem regulären Scheduler-Job
         await asyncio.sleep(10)
@@ -434,6 +437,88 @@ class GTCHABot(commands.Bot):
             logger.info(f"Medal-Synchronisation abgeschlossen: {synced_count} Medaillen synchronisiert")
         else:
             logger.info("Keine Medaillen zur Synchronisation gefunden")
+
+    async def _cleanup_duplicate_probability_messages(self):
+        """Löscht doppelte Wahrscheinlichkeits-Nachrichten in allen Threads (behält nur die neueste)."""
+        logger.info("Räume doppelte Wahrscheinlichkeits-Nachrichten auf...")
+        total_deleted = 0
+        threads_cleaned = 0
+
+        try:
+            # Alle aktiven Threads aus der DB holen
+            async with aiosqlite.connect(self.db.db_path) as db:
+                db.row_factory = aiosqlite.Row
+                cursor = await db.execute(
+                    "SELECT thread_id FROM discord_threads WHERE is_expired = 0"
+                )
+                threads = await cursor.fetchall()
+
+            for thread_row in threads:
+                thread_id = thread_row['thread_id']
+
+                try:
+                    # Thread holen
+                    thread = self.get_channel(thread_id)
+                    if not thread:
+                        thread = await self.fetch_channel(thread_id)
+
+                    if not thread or not isinstance(thread, discord.Thread):
+                        continue
+
+                    # Alle Probability-Nachrichten im Thread finden
+                    probability_messages = []
+                    async for message in thread.history(limit=100):
+                        # Nur Bot-Nachrichten prüfen
+                        if message.author.id != self.user.id:
+                            continue
+                        # Prüfen ob es eine Probability-Nachricht ist
+                        if message.content and message.content.startswith("🎯 **Hit-Chance:**"):
+                            probability_messages.append(message)
+
+                    # Wenn mehr als eine Probability-Nachricht gefunden wurde
+                    if len(probability_messages) > 1:
+                        # Nach Erstellungsdatum sortieren (neueste zuerst)
+                        probability_messages.sort(key=lambda m: m.created_at, reverse=True)
+
+                        # Die neueste behalten, alle anderen löschen
+                        newest_message = probability_messages[0]
+                        messages_to_delete = probability_messages[1:]
+
+                        for msg in messages_to_delete:
+                            try:
+                                await discord_rate_limiter.acquire("message_delete")
+                                await msg.delete()
+                                total_deleted += 1
+                                logger.debug(f"Doppelte Probability-Nachricht {msg.id} in Thread {thread_id} gelöscht")
+                            except discord.NotFound:
+                                pass  # Nachricht bereits gelöscht
+                            except Exception as e:
+                                logger.debug(f"Fehler beim Löschen der Nachricht {msg.id}: {e}")
+
+                        # Message-ID der neuesten in DB speichern
+                        await self.db.update_probability_message_id(thread_id, newest_message.id)
+                        threads_cleaned += 1
+                        logger.info(f"Thread {thread_id}: {len(messages_to_delete)} doppelte Nachricht(en) gelöscht")
+
+                    elif len(probability_messages) == 1:
+                        # Nur eine Nachricht - ID in DB speichern falls nicht vorhanden
+                        existing_id = await self.db.get_probability_message_id(thread_id)
+                        if not existing_id:
+                            await self.db.update_probability_message_id(thread_id, probability_messages[0].id)
+                            logger.debug(f"Thread {thread_id}: Probability-Message-ID in DB gespeichert")
+
+                except discord.NotFound:
+                    logger.debug(f"Thread {thread_id} nicht mehr gefunden")
+                except Exception as e:
+                    logger.debug(f"Fehler bei Cleanup für Thread {thread_id}: {e}")
+
+        except Exception as e:
+            logger.error(f"Fehler bei Probability-Message-Cleanup: {e}")
+
+        if total_deleted > 0:
+            logger.info(f"Cleanup abgeschlossen: {total_deleted} doppelte Nachricht(en) in {threads_cleaned} Thread(s) gelöscht")
+        else:
+            logger.info("Cleanup abgeschlossen: Keine doppelten Probability-Nachrichten gefunden")
 
     async def scrape_and_post(self):
         """Hauptfunktion: Scrapen und neue Banner posten."""
@@ -983,6 +1068,25 @@ class GTCHABot(commands.Bot):
             logger.debug(f"Fehler beim Lesen der Reaktionen: {e}")
         return medals
 
+    async def _find_existing_probability_message(self, thread: discord.Thread) -> Optional[discord.Message]:
+        """
+        Sucht im Thread nach einer existierenden Wahrscheinlichkeits-Nachricht.
+        Gibt die Nachricht zurück, falls gefunden, sonst None.
+        """
+        try:
+            # Die letzten 50 Nachrichten durchsuchen (sollte ausreichen)
+            async for message in thread.history(limit=50):
+                # Nur Bot-Nachrichten prüfen
+                if message.author.id != self.user.id:
+                    continue
+                # Prüfen ob es eine Probability-Nachricht ist (beginnt mit dem Hit-Chance Emoji)
+                if message.content and message.content.startswith("🎯 **Hit-Chance:**"):
+                    logger.debug(f"Existierende Probability-Nachricht gefunden in Thread {thread.id}: {message.id}")
+                    return message
+        except Exception as e:
+            logger.debug(f"Fehler beim Suchen der Probability-Nachricht: {e}")
+        return None
+
     async def _update_probability_message(self, thread_id: int, banner_id: int):
         """Erstellt oder aktualisiert die Wahrscheinlichkeits-Nachricht im Thread."""
         try:
@@ -1087,7 +1191,7 @@ class GTCHABot(commands.Bot):
             if not isinstance(thread, discord.Thread):
                 return
 
-            # Prüfe ob bereits eine Probability-Message existiert
+            # Prüfe ob bereits eine Probability-Message existiert (in der Datenbank)
             existing_msg_id = await self.db.get_probability_message_id(thread_id)
 
             if existing_msg_id:
@@ -1099,12 +1203,26 @@ class GTCHABot(commands.Bot):
                     logger.debug(f"Probability-Message aktualisiert in Thread {thread_id}")
                     return
                 except discord.NotFound:
-                    # Message wurde gelöscht, neue erstellen
-                    pass
+                    # Message wurde gelöscht, im Thread suchen
+                    logger.debug(f"Probability-Message {existing_msg_id} nicht mehr vorhanden, suche im Thread...")
                 except Exception as e:
                     logger.debug(f"Fehler beim Editieren der Probability-Message: {e}")
 
-            # Neue Nachricht erstellen
+            # Fallback: Im Thread nach existierender Probability-Nachricht suchen
+            # (z.B. nach Bot-Neustart wenn Message-ID nicht in DB war)
+            existing_msg = await self._find_existing_probability_message(thread)
+            if existing_msg:
+                try:
+                    await discord_rate_limiter.acquire("message_edit")
+                    await existing_msg.edit(content=full_message)
+                    # Message-ID in DB speichern für zukünftige Updates
+                    await self.db.update_probability_message_id(thread_id, existing_msg.id)
+                    logger.info(f"Existierende Probability-Message gefunden und aktualisiert in Thread {thread_id}")
+                    return
+                except Exception as e:
+                    logger.debug(f"Fehler beim Aktualisieren der gefundenen Probability-Message: {e}")
+
+            # Keine existierende Nachricht gefunden - neue erstellen
             await discord_rate_limiter.acquire("message_send")
             new_msg = await thread.send(full_message)
             await self.db.update_probability_message_id(thread_id, new_msg.id)
