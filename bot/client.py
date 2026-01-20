@@ -983,6 +983,25 @@ class GTCHABot(commands.Bot):
             logger.debug(f"Fehler beim Lesen der Reaktionen: {e}")
         return medals
 
+    async def _find_existing_probability_message(self, thread: discord.Thread) -> Optional[discord.Message]:
+        """
+        Sucht im Thread nach einer existierenden Wahrscheinlichkeits-Nachricht.
+        Gibt die Nachricht zurück, falls gefunden, sonst None.
+        """
+        try:
+            # Die letzten 50 Nachrichten durchsuchen (sollte ausreichen)
+            async for message in thread.history(limit=50):
+                # Nur Bot-Nachrichten prüfen
+                if message.author.id != self.user.id:
+                    continue
+                # Prüfen ob es eine Probability-Nachricht ist (beginnt mit dem Hit-Chance Emoji)
+                if message.content and message.content.startswith("🎯 **Hit-Chance:**"):
+                    logger.debug(f"Existierende Probability-Nachricht gefunden in Thread {thread.id}: {message.id}")
+                    return message
+        except Exception as e:
+            logger.debug(f"Fehler beim Suchen der Probability-Nachricht: {e}")
+        return None
+
     async def _update_probability_message(self, thread_id: int, banner_id: int):
         """Erstellt oder aktualisiert die Wahrscheinlichkeits-Nachricht im Thread."""
         try:
@@ -1087,7 +1106,7 @@ class GTCHABot(commands.Bot):
             if not isinstance(thread, discord.Thread):
                 return
 
-            # Prüfe ob bereits eine Probability-Message existiert
+            # Prüfe ob bereits eine Probability-Message existiert (in der Datenbank)
             existing_msg_id = await self.db.get_probability_message_id(thread_id)
 
             if existing_msg_id:
@@ -1099,12 +1118,26 @@ class GTCHABot(commands.Bot):
                     logger.debug(f"Probability-Message aktualisiert in Thread {thread_id}")
                     return
                 except discord.NotFound:
-                    # Message wurde gelöscht, neue erstellen
-                    pass
+                    # Message wurde gelöscht, im Thread suchen
+                    logger.debug(f"Probability-Message {existing_msg_id} nicht mehr vorhanden, suche im Thread...")
                 except Exception as e:
                     logger.debug(f"Fehler beim Editieren der Probability-Message: {e}")
 
-            # Neue Nachricht erstellen
+            # Fallback: Im Thread nach existierender Probability-Nachricht suchen
+            # (z.B. nach Bot-Neustart wenn Message-ID nicht in DB war)
+            existing_msg = await self._find_existing_probability_message(thread)
+            if existing_msg:
+                try:
+                    await discord_rate_limiter.acquire("message_edit")
+                    await existing_msg.edit(content=full_message)
+                    # Message-ID in DB speichern für zukünftige Updates
+                    await self.db.update_probability_message_id(thread_id, existing_msg.id)
+                    logger.info(f"Existierende Probability-Message gefunden und aktualisiert in Thread {thread_id}")
+                    return
+                except Exception as e:
+                    logger.debug(f"Fehler beim Aktualisieren der gefundenen Probability-Message: {e}")
+
+            # Keine existierende Nachricht gefunden - neue erstellen
             await discord_rate_limiter.acquire("message_send")
             new_msg = await thread.send(full_message)
             await self.db.update_probability_message_id(thread_id, new_msg.id)
