@@ -108,7 +108,7 @@ MENTION_ON_PACK_UPDATE = os.getenv("MENTION_ON_PACK_UPDATE", "true").lower() == 
 # Unbegrenzte Pulls werden mit einfacher Wahrscheinlichkeit (hits/packs) berechnet
 HOT_BANNER_CHANNEL_ID = int(os.getenv("HOT_BANNER_CHANNEL_ID", "0"))
 # Hot-Banner Feature aktivieren/deaktivieren (true/false)
-HOT_BANNER_ENABLED = os.getenv("HOT_BANNER_ENABLED", "true").lower() == "true"
+HOT_BANNER_ENABLED = os.getenv("HOT_BANNER_ENABLED", "false").lower() == "true"
 
 # Discord-Benachrichtigungen: nur Fehler melden (true = nur Fehler, false = alles)
 DISCORD_NOTIFY_ERRORS_ONLY = os.getenv("DISCORD_NOTIFY_ERRORS_ONLY", "false").lower() == "true"
