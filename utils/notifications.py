@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Optional, List, Dict
 from loguru import logger
 
-from config import ADMIN_CHANNEL_ID
+from config import ADMIN_CHANNEL_ID, DISCORD_NOTIFY_ERRORS_ONLY
 
 # Globale Referenz zum Bot-Client (wird von client.py gesetzt)
 _bot_client = None
@@ -146,6 +146,7 @@ async def notify_all_retries_failed():
 
 
 # === ERFOLGS-BENACHRICHTIGUNGEN ===
+# Bei DISCORD_NOTIFY_ERRORS_ONLY=true werden diese übersprungen
 
 async def notify_scrape_success(
     new_banners: int,
@@ -155,6 +156,8 @@ async def notify_scrape_success(
     total_banners: int = 0
 ):
     """Benachrichtigt über erfolgreichen Scrape-Durchlauf."""
+    if DISCORD_NOTIFY_ERRORS_ONLY:
+        return False
     changes = []
     if new_banners > 0:
         changes.append(f"+{new_banners} neu")
@@ -181,6 +184,8 @@ async def notify_scrape_success(
 
 async def notify_bot_started():
     """Benachrichtigt dass der Bot gestartet wurde."""
+    if DISCORD_NOTIFY_ERRORS_ONLY:
+        return False
     await send_notification(
         title="Bot gestartet",
         description="GTCHA Discord Bot ist online und bereit.",
@@ -190,6 +195,8 @@ async def notify_bot_started():
 
 async def notify_bot_stopped():
     """Benachrichtigt dass der Bot gestoppt wird."""
+    if DISCORD_NOTIFY_ERRORS_ONLY:
+        return False
     await send_notification(
         title="Bot wird gestoppt",
         description="GTCHA Discord Bot wird heruntergefahren.",
