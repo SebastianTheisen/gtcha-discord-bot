@@ -342,6 +342,18 @@ class Database:
             )
             await db.commit()
 
+    async def get_archived_thread_ids(self, max_age_hours: int = 1) -> List[int]:
+        """Gibt Thread-IDs von alten inaktiven Bannern zurück (für Discord-Löschung)."""
+        cutoff = (datetime.now() - timedelta(hours=max_age_hours)).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("""
+                SELECT dt.thread_id FROM discord_threads dt
+                JOIN banners b ON dt.banner_id = b.pack_id
+                WHERE b.is_active = 0 AND b.updated_at <= ?
+                  AND dt.thread_id IS NOT NULL
+            """, (cutoff,))
+            return [row[0] for row in await cursor.fetchall()]
+
     async def purge_archived_data(self, max_age_hours: int = 1) -> int:
         """Löscht archivierte Banner/Threads/Medals/History die älter als max_age_hours sind."""
         cutoff = (datetime.now() - timedelta(hours=max_age_hours)).isoformat()
