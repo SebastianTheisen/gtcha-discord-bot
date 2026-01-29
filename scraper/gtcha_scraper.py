@@ -347,7 +347,7 @@ class GTCHAScraper:
 
         for attempt in range(3):
             try:
-                tabs = await page.query_selector_all('.tab-item, .category-tab, [role="tab"], .nav-item, .menu-item')
+                tabs = await page.query_selector_all('.pack_menu, .tab-item, .category-tab, [role="tab"], .nav-item, .menu-item')
 
                 for tab in tabs:
                     try:
@@ -436,7 +436,7 @@ class GTCHAScraper:
                 await asyncio.sleep(0.5)
 
                 # Finde alle menu-items
-                menu_items = await self._page.query_selector_all('.menu-item')
+                menu_items = await self._page.query_selector_all('.pack_menu, .menu-item')
 
                 if attempt == 0:
                     # Log alle gefundenen Tabs beim ersten Versuch
