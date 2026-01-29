@@ -5,7 +5,7 @@ Datenbank-Operationen
 import aiosqlite
 from pathlib import Path
 from typing import Optional, Dict, Any, List
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from loguru import logger
 from config import DATABASE_PATH
@@ -341,6 +341,50 @@ class Database:
                 (pack_id,)
             )
             await db.commit()
+
+    async def purge_archived_data(self, max_age_hours: int = 1) -> int:
+        """Löscht archivierte Banner/Threads/Medals/History die älter als max_age_hours sind."""
+        cutoff = (datetime.now() - timedelta(hours=max_age_hours)).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            # Finde alte inaktive Banner
+            cursor = await db.execute(
+                "SELECT pack_id FROM banners WHERE is_active = 0 AND updated_at <= ?",
+                (cutoff,)
+            )
+            old_ids = [row[0] for row in await cursor.fetchall()]
+
+            if not old_ids:
+                return 0
+
+            placeholders = ','.join('?' * len(old_ids))
+
+            # Medals löschen
+            await db.execute(f"""
+                DELETE FROM medals WHERE thread_id IN (
+                    SELECT thread_id FROM discord_threads WHERE banner_id IN ({placeholders})
+                )
+            """, old_ids)
+
+            # Pack-History löschen
+            await db.execute(
+                f"DELETE FROM pack_history WHERE banner_id IN ({placeholders})",
+                old_ids
+            )
+
+            # Threads löschen
+            await db.execute(
+                f"DELETE FROM discord_threads WHERE banner_id IN ({placeholders})",
+                old_ids
+            )
+
+            # Banner löschen
+            await db.execute(
+                f"DELETE FROM banners WHERE pack_id IN ({placeholders})",
+                old_ids
+            )
+
+            await db.commit()
+            return len(old_ids)
 
     async def get_expired_banners(self, threshold: int = 2) -> List[Dict]:
         """Gibt Banner zurück die >= threshold mal nicht gefunden wurden."""
