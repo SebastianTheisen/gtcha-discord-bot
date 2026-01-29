@@ -327,7 +327,8 @@ class GTCHABot(commands.Bot):
             except Exception as e:
                 logger.warning(f"Fehler beim Abrufen aktiver Threads: {e}")
 
-        # Auch archivierte Threads prüfen
+        # Archivierte Threads löschen (nicht wiederherstellen!)
+        # Archivierte Threads sind abgelaufen und sollten entfernt werden
         for category, channel_id in CHANNEL_IDS.items():
             if not channel_id:
                 continue
@@ -344,58 +345,19 @@ class GTCHABot(commands.Bot):
                     continue
 
                 try:
+                    archived_threads = []
                     async for thread in channel.archived_threads(limit=100):
+                        archived_threads.append(thread)
+
+                    for thread in archived_threads:
                         try:
-                            match = re.match(r'ID:\s*(\d+)', thread.name)
-                            if not match:
-                                continue
-
-                            pack_id = int(match.group(1))
-
-                            existing_thread = await self.db.get_thread_by_banner_id(pack_id)
-                            if existing_thread:
-                                continue
-
-                            starter_message_id = None
-                            try:
-                                if thread.starter_message:
-                                    starter_message_id = thread.starter_message.id
-                                else:
-                                    async for msg in thread.history(limit=1, oldest_first=True):
-                                        starter_message_id = msg.id
-                                        break
-                            except Exception:
-                                pass
-
-                            await self.db.save_thread(
-                                banner_id=pack_id,
-                                thread_id=thread.id,
-                                channel_id=channel.id,
-                                starter_message_id=starter_message_id or 0
-                            )
-
-                            # Prüfen ob Banner schon in DB existiert - wenn ja, NICHT überschreiben!
-                            existing_banner = await self.db.get_banner(pack_id)
-                            if not existing_banner:
-                                price_match = re.search(r'Kosten:\s*(\d+)', thread.name)
-                                entries_match = re.search(r'Anzahl:\s*(\d+)', thread.name)
-                                total_match = re.search(r'Gesamt:\s*(\d+)', thread.name)
-
-                                banner = RecoveredBanner(
-                                    pack_id=pack_id,
-                                    category=category,
-                                    price_coins=int(price_match.group(1)) if price_match else None,
-                                    entries_per_day=int(entries_match.group(1)) if entries_match else None,
-                                    total_packs=int(total_match.group(1)) if total_match else None,
-                                    current_packs=None,  # Unbekannt bei Wiederherstellung
-                                )
-
-                                await self.db.save_banner(banner)
-                            recovered_count += 1
-                            logger.info(f"Archivierter Thread wiederhergestellt: {pack_id}")
-
+                            await discord_rate_limiter.acquire("thread_delete")
+                            await thread.delete()
+                            logger.info(f"Archivierten Thread gelöscht: {thread.name} ({thread.id})")
+                        except discord.NotFound:
+                            pass
                         except Exception as e:
-                            logger.debug(f"Fehler bei archiviertem Thread: {e}")
+                            logger.debug(f"Fehler beim Löschen von archiviertem Thread {thread.id}: {e}")
                 except Exception as e:
                     logger.debug(f"Fehler bei archivierten Threads: {e}")
 
