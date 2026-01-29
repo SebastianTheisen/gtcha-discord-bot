@@ -1263,7 +1263,7 @@ class GTCHABot(commands.Bot):
             logger.debug(f"Fehler bei Probability-Update: {e}")
 
     async def _delete_banner_thread(self, pack_id: int) -> bool:
-        """Archiviert den Discord-Thread für einen abgelaufenen Banner (statt löschen)."""
+        """Löscht den Discord-Thread für einen abgelaufenen Banner."""
         try:
             logger.info(f"   Archiviere Thread für Banner {pack_id}...")
 
@@ -1298,23 +1298,16 @@ class GTCHABot(commands.Bot):
                     thread = None
 
             if thread and isinstance(thread, discord.Thread):
-                # Thread archivieren und sperren (statt löschen)
-                logger.info(f"   Archiviere Discord-Thread {thread_id}...")
+                # Thread komplett aus Discord löschen
+                logger.info(f"   Lösche Discord-Thread {thread_id}...")
                 try:
-                    # Abschluss-Nachricht posten
-                    await discord_rate_limiter.acquire("message_send")
-                    await thread.send("🔒 **Banner abgelaufen** - Dieser Thread wurde archiviert.")
-                except:
-                    pass
-
-                # Thread archivieren und sperren
-                await discord_rate_limiter.acquire("thread_edit")
-                await thread.edit(
-                    archived=True,
-                    locked=True,
-                    reason=f"Banner {pack_id} abgelaufen/ausverkauft"
-                )
-                logger.info(f"   Discord-Thread {thread_id} archiviert!")
+                    await discord_rate_limiter.acquire("thread_delete")
+                    await thread.delete()
+                    logger.info(f"   Discord-Thread {thread_id} gelöscht!")
+                except discord.NotFound:
+                    logger.info(f"   Thread {thread_id} existiert bereits nicht mehr")
+                except Exception as e:
+                    logger.warning(f"   Fehler beim Löschen von Thread {thread_id}: {e}")
             else:
                 logger.info(f"   Kein gültiger Thread zum Archivieren gefunden")
 
@@ -1340,11 +1333,35 @@ class GTCHABot(commands.Bot):
             return False
 
     async def _purge_archived_data(self):
-        """Löscht archivierte Banner-Daten die älter als 1 Stunde sind."""
+        """Löscht archivierte Banner-Daten und deren Discord-Threads."""
         try:
+            # Zuerst archivierte Discord-Threads löschen
+            thread_ids = await self.db.get_archived_thread_ids(max_age_hours=1)
+            deleted_threads = 0
+            for tid in thread_ids:
+                try:
+                    thread = self.get_channel(int(tid))
+                    if not thread:
+                        try:
+                            thread = await self.fetch_channel(int(tid))
+                        except discord.NotFound:
+                            thread = None
+                        except Exception:
+                            thread = None
+                    if thread and isinstance(thread, discord.Thread):
+                        await discord_rate_limiter.acquire("thread_delete")
+                        await thread.delete()
+                        deleted_threads += 1
+                except Exception as e:
+                    logger.debug(f"Konnte archivierten Thread {tid} nicht löschen: {e}")
+
+            if deleted_threads > 0:
+                logger.info(f"Archiv-Bereinigung: {deleted_threads} Discord-Threads gelöscht")
+
+            # Dann DB-Einträge löschen
             purged = await self.db.purge_archived_data(max_age_hours=1)
             if purged > 0:
-                logger.info(f"Archiv-Bereinigung: {purged} alte Banner komplett gelöscht")
+                logger.info(f"Archiv-Bereinigung: {purged} alte Banner aus DB gelöscht")
         except Exception as e:
             logger.error(f"Fehler bei Archiv-Bereinigung: {e}")
 
