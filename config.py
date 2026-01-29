@@ -107,3 +107,11 @@ MENTION_ON_PACK_UPDATE = os.getenv("MENTION_ON_PACK_UPDATE", "true").lower() == 
 # Wird alle 30 Minuten aktualisiert, exkludiert nur Bonus-Kategorie
 # Unbegrenzte Pulls werden mit einfacher Wahrscheinlichkeit (hits/packs) berechnet
 HOT_BANNER_CHANNEL_ID = int(os.getenv("HOT_BANNER_CHANNEL_ID", "0"))
+# Hot-Banner Feature aktivieren/deaktivieren (true/false)
+HOT_BANNER_ENABLED = os.getenv("HOT_BANNER_ENABLED", "true").lower() == "true"
+
+# Discord-Benachrichtigungen: nur Fehler melden (true = nur Fehler, false = alles)
+DISCORD_NOTIFY_ERRORS_ONLY = os.getenv("DISCORD_NOTIFY_ERRORS_ONLY", "false").lower() == "true"
+
+# Täglicher Auto-Restart (Railway) - Uhrzeit im Format "HH:MM" (UTC), leer = deaktiviert
+DAILY_RESTART_TIME = os.getenv("DAILY_RESTART_TIME", "")

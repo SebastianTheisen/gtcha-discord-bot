@@ -17,11 +17,14 @@ from discord.ext import commands
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from loguru import logger
 
+import os
+import sys
 from config import (
     GUILD_ID, SCRAPE_INTERVAL_MINUTES, BASE_URL,
     CHANNEL_IDS, CATEGORIES, SCRAPE_TIMEOUT_SECONDS,
     MENTION_ON_NEW_THREAD, MENTION_ON_PACK_UPDATE,
-    HOT_BANNER_CHANNEL_ID
+    HOT_BANNER_CHANNEL_ID, HOT_BANNER_ENABLED,
+    DAILY_RESTART_TIME
 )
 from scraper.gtcha_scraper import GTCHAScraper
 from database.db import Database
@@ -141,7 +144,7 @@ class GTCHABot(commands.Bot):
         logger.info("Scheduler: Alle 5 Min um xx:xx:20")
 
         # Hot-Banner Job (alle 30 Min um xx:00:20 und xx:30:20)
-        if HOT_BANNER_CHANNEL_ID:
+        if HOT_BANNER_CHANNEL_ID and HOT_BANNER_ENABLED:
             self.scheduler.add_job(
                 self._update_hot_banners,
                 'cron',
@@ -153,6 +156,22 @@ class GTCHABot(commands.Bot):
                 max_instances=1,
             )
             logger.info("Hot-Banner Scheduler: Alle 30 Min um xx:00:20 und xx:30:20")
+
+        # Täglicher Auto-Restart (Railway)
+        if DAILY_RESTART_TIME:
+            try:
+                hour, minute = DAILY_RESTART_TIME.split(":")
+                self.scheduler.add_job(
+                    self._daily_restart,
+                    'cron',
+                    hour=int(hour),
+                    minute=int(minute),
+                    id='daily_restart_job',
+                    replace_existing=True,
+                )
+                logger.info(f"Daily Restart Scheduler: Täglich um {DAILY_RESTART_TIME} UTC")
+            except ValueError:
+                logger.error(f"Ungültiges DAILY_RESTART_TIME Format: '{DAILY_RESTART_TIME}' (erwartet HH:MM)")
 
         # Commands synchronisieren
         if GUILD_ID:
@@ -1490,7 +1509,7 @@ class GTCHABot(commands.Bot):
     async def _update_hot_banners(self):
         """Postet die Top 10 Banner mit höchster Hit-Chance in den Hot-Banner Channel."""
         try:
-            if not HOT_BANNER_CHANNEL_ID:
+            if not HOT_BANNER_CHANNEL_ID or not HOT_BANNER_ENABLED:
                 return
 
             logger.info("Hot-Banner Update gestartet...")
@@ -1629,10 +1648,22 @@ class GTCHABot(commands.Bot):
 
     async def hotbanner_command(self, interaction: discord.Interaction):
         """Hot-Banner manuell aktualisieren."""
-        if not HOT_BANNER_CHANNEL_ID:
-            await interaction.response.send_message("❌ HOT_BANNER_CHANNEL_ID nicht konfiguriert!")
+        if not HOT_BANNER_CHANNEL_ID or not HOT_BANNER_ENABLED:
+            await interaction.response.send_message("❌ Hot-Banner nicht aktiviert oder kein Channel konfiguriert!")
             return
 
         await interaction.response.defer()
         await self._update_hot_banners()
         await interaction.followup.send("🔥 Hot-Banner aktualisiert!")
+
+    async def _daily_restart(self):
+        """Beendet den Bot-Prozess für einen automatischen Neustart (Railway)."""
+        logger.warning("Täglicher Auto-Restart wird ausgeführt...")
+        try:
+            from utils.notifications import notify_critical_error
+            await notify_critical_error("Geplanter täglicher Neustart wird durchgeführt.")
+        except Exception:
+            pass
+        await asyncio.sleep(2)
+        logger.warning("Prozess wird beendet - Railway startet automatisch neu.")
+        os._exit(0)
