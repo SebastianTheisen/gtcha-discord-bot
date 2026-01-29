@@ -157,6 +157,18 @@ class GTCHABot(commands.Bot):
             )
             logger.info("Hot-Banner Scheduler: Alle 30 Min um xx:00:20 und xx:30:20")
 
+        # Archiv-Bereinigung: Alle 30 Min alte archivierte Daten löschen
+        self.scheduler.add_job(
+            self._purge_archived_data,
+            'interval',
+            minutes=30,
+            id='purge_archived_job',
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+        )
+        logger.info("Archiv-Bereinigung Scheduler: Alle 30 Min (löscht Daten älter als 1 Stunde)")
+
         # Täglicher Auto-Restart (Railway)
         if DAILY_RESTART_TIME:
             try:
@@ -1326,6 +1338,15 @@ class GTCHABot(commands.Bot):
         except Exception as e:
             logger.error(f"Fehler beim Thread löschen für {pack_id}: {e}")
             return False
+
+    async def _purge_archived_data(self):
+        """Löscht archivierte Banner-Daten die älter als 1 Stunde sind."""
+        try:
+            purged = await self.db.purge_archived_data(max_age_hours=1)
+            if purged > 0:
+                logger.info(f"Archiv-Bereinigung: {purged} alte Banner komplett gelöscht")
+        except Exception as e:
+            logger.error(f"Fehler bei Archiv-Bereinigung: {e}")
 
     async def on_message(self, message: discord.Message):
         """Listener fuer T1/T2/T3 Reaktionen."""
