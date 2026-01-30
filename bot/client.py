@@ -1665,5 +1665,5 @@ class GTCHABot(commands.Bot):
         except Exception:
             pass
         await asyncio.sleep(2)
-        logger.warning("Prozess wird beendet - Railway startet automatisch neu.")
-        os._exit(0)
+        logger.warning("Prozess wird mit Exit-Code 1 beendet - Railway startet automatisch neu.")
+        os._exit(1)
