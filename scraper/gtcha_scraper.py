@@ -17,7 +17,7 @@ from playwright.async_api import async_playwright, Page, Browser, BrowserContext
 from loguru import logger
 
 from .models import ScrapedBanner
-from config import CATEGORIES, PARALLEL_SCRAPING, BROWSER_MODE, CDP_ENDPOINT
+from config import CATEGORIES, PARALLEL_SCRAPING
 
 JST = timezone(timedelta(hours=9))
 
@@ -54,69 +54,48 @@ class GTCHAScraper:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.close()
 
+    async def _setup_route_interception(self):
+        """Blockiert unnötige Requests die das Rendering verzögern."""
+        async def handle_user_api(route):
+            logger.debug(f"   Route abgefangen: {route.request.url}")
+            await route.fulfill(status=200, content_type="application/json", body="{}")
+
+        try:
+            await self._page.route("**/api/user/**", handle_user_api)
+            await self._page.route("**/accounts.google.com/**", lambda route: route.abort())
+            logger.info("Route-Interception aktiviert")
+        except Exception as e:
+            logger.debug(f"Route-Interception fehlgeschlagen: {e}")
+
     async def start(self):
-        logger.info(f"Starte Browser (Modus: {BROWSER_MODE})...")
+        logger.info("Starte Browser (WebKit)...")
         self._playwright = await async_playwright().start()
 
-        self._active_browser_mode = BROWSER_MODE
-
-        if BROWSER_MODE == "lightpanda":
-            # Verbinde per CDP zu externem Browser (Lightpanda)
-            logger.info(f"Verbinde zu CDP-Endpoint: {CDP_ENDPOINT}")
-            try:
-                self._browser = await self._playwright.chromium.connect_over_cdp(CDP_ENDPOINT, timeout=10000)
-                self._context = self._browser.contexts[0] if self._browser.contexts else await self._browser.new_context()
-                self._page = await self._context.new_page()
-                logger.info("Verbunden mit Lightpanda via CDP")
-            except Exception as e:
-                logger.warning(f"Lightpanda nicht erreichbar ({e}), Fallback auf Chromium...")
-                self._active_browser_mode = "chromium"
-                # Fallback: Chromium starten (gleicher Code wie unten)
-                self._browser = await self._playwright.chromium.launch(
-                    headless=self.headless,
-                    args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
-                )
-                user_agent = random.choice(USER_AGENTS)
-                self._context = await self._browser.new_context(
-                    viewport={"width": 1920, "height": 1080},
-                    user_agent=user_agent,
-                    locale="ja-JP",
-                )
-                self._page = await self._context.new_page()
-                logger.info("Browser gestartet (Fallback Chromium)")
-
-        if self._active_browser_mode == "chromium" and self._browser is None:
-            # Standard: Playwright Chromium starten
-            self._browser = await self._playwright.chromium.launch(
-                headless=self.headless,
-                args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
-            )
-
-            # Zufälligen User-Agent auswählen
-            user_agent = random.choice(USER_AGENTS)
-            logger.debug(f"User-Agent: {user_agent[:50]}...")
-
-            self._context = await self._browser.new_context(
-                viewport={"width": 1920, "height": 1080},
-                user_agent=user_agent,
-                locale="ja-JP",
-            )
-
-            self._page = await self._context.new_page()
-            logger.info("Browser gestartet (v6 - Pure DOM, Chromium)")
+        self._browser = await self._playwright.webkit.launch(
+            headless=self.headless,
+        )
+        user_agent = random.choice(USER_AGENTS)
+        logger.debug(f"User-Agent: {user_agent[:50]}...")
+        self._context = await self._browser.new_context(
+            viewport={"width": 1920, "height": 1080},
+            user_agent=user_agent,
+            locale="ja-JP",
+        )
+        self._page = await self._context.new_page()
+        await self._setup_route_interception()
+        logger.info("Browser gestartet (WebKit)")
 
     async def close(self):
-        if self._active_browser_mode == "lightpanda":
-            # Bei CDP-Verbindung: nur disconnect, nicht den Browser killen
-            if self._browser:
-                await self._browser.close()
-        else:
-            if self._context:
-                await self._context.close()
-            if self._browser:
-                await self._browser.close()
+        if self._context:
+            await self._context.close()
+        if self._browser:
+            await self._browser.close()
         if self._playwright:
             await self._playwright.stop()
+        self._browser = None
+        self._context = None
+        self._page = None
+        self._playwright = None
         logger.info("Browser geschlossen")
 
     async def _random_delay(self, min_sec: float = 1.0, max_sec: float = 3.0):
@@ -158,8 +137,14 @@ class GTCHAScraper:
             try:
                 self._current_status = "Seite laden"
                 await self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=60000)
-                logger.info("Seite geladen, warte 5s auf JS...")
-                await asyncio.sleep(5)
+                logger.info("Seite geladen, warte auf JS...")
+                # Warte auf networkidle um sicherzustellen dass XHR-Requests abgeschlossen sind
+                try:
+                    await self._page.wait_for_load_state("networkidle", timeout=15000)
+                    logger.info("Networkidle erreicht")
+                except Exception:
+                    logger.info("Networkidle Timeout - fahre fort")
+                await asyncio.sleep(3)
 
             except asyncio.CancelledError:
                 # Extern abgebrochen (z.B. durch Timeout) - weiterleiten
@@ -463,14 +448,29 @@ class GTCHAScraper:
 
         keywords = category_keywords.get(category, [category.lower()])
 
+        # CSS selectors to try - broad set for resilience against site changes
+        tab_selectors = [
+            '.pack_menu, .tab-item, .category-tab, [role="tab"], .nav-item, .menu-item',
+            '.pack-menu, .packMenu, .pack_tab, .pack-tab',
+            'a[href*="category"], a[href*="pack"], button[class*="tab"], button[class*="menu"]',
+            'li[class*="tab"], li[class*="menu"], div[class*="tab"], div[class*="menu"]',
+        ]
+
         # Retry-Mechanismus
         for attempt in range(3):
             try:
                 # Warte kurz damit die Seite stabil ist
                 await asyncio.sleep(0.5)
 
-                # Finde alle menu-items
-                menu_items = await self._page.query_selector_all('.pack_menu, .menu-item')
+                # Finde alle menu-items mit mehreren Selector-Gruppen
+                menu_items = []
+                for selector in tab_selectors:
+                    try:
+                        items = await self._page.query_selector_all(selector)
+                        if items:
+                            menu_items.extend(items)
+                    except Exception:
+                        continue
 
                 if attempt == 0:
                     # Log alle gefundenen Tabs beim ersten Versuch
@@ -481,7 +481,15 @@ class GTCHAScraper:
                             all_tabs.append(t.strip())
                         except:
                             pass
-                    logger.debug(f"   Gefundene Tabs: {all_tabs}")
+                    logger.info(f"   Gefundene Tabs ({len(menu_items)}): {all_tabs}")
+
+                    # Wenn keine Tabs gefunden, logge einen Ausschnitt des DOM
+                    if not menu_items:
+                        try:
+                            body_html = await self._page.evaluate("() => document.body ? document.body.innerHTML.substring(0, 2000) : 'no body'")
+                            logger.warning(f"   Keine Tabs gefunden! DOM-Ausschnitt: {body_html[:500]}")
+                        except Exception:
+                            pass
 
                 for item in menu_items:
                     try:
@@ -499,6 +507,28 @@ class GTCHAScraper:
                     except Exception as inner_e:
                         logger.debug(f"   Item-Fehler: {inner_e}")
                         continue
+
+                # Fallback: JS-basierte Textsuche über alle klickbaren Elemente
+                if not menu_items or attempt > 0:
+                    for keyword in keywords:
+                        try:
+                            clicked = await self._page.evaluate("""(keyword) => {
+                                const elements = document.querySelectorAll('a, button, li, div, span');
+                                for (const el of elements) {
+                                    const text = (el.textContent || '').trim().toLowerCase();
+                                    if (text === keyword || (text.length < 30 && text.includes(keyword))) {
+                                        el.click();
+                                        return true;
+                                    }
+                                }
+                                return false;
+                            }""", keyword)
+                            if clicked:
+                                logger.debug(f"   JS-Fallback Klick (keyword: {keyword})")
+                                await asyncio.sleep(1)
+                                return True
+                        except Exception:
+                            continue
 
             except Exception as e:
                 logger.debug(f"   Versuch {attempt+1} fehlgeschlagen: {e}")
