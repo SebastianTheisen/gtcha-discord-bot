@@ -115,4 +115,3 @@ DISCORD_NOTIFY_ERRORS_ONLY = os.getenv("DISCORD_NOTIFY_ERRORS_ONLY", "false").lo
 
 # Täglicher Auto-Restart (Railway) - Uhrzeit im Format "HH:MM" (UTC), leer = deaktiviert
 DAILY_RESTART_TIME = os.getenv("DAILY_RESTART_TIME", "")
-
