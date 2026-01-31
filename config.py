@@ -115,10 +115,3 @@ DISCORD_NOTIFY_ERRORS_ONLY = os.getenv("DISCORD_NOTIFY_ERRORS_ONLY", "false").lo
 
 # Täglicher Auto-Restart (Railway) - Uhrzeit im Format "HH:MM" (UTC), leer = deaktiviert
 DAILY_RESTART_TIME = os.getenv("DAILY_RESTART_TIME", "")
-
-# Browser-Modus: "chromium" (Standard Playwright) oder "lightpanda" (leichtgewichtiger Browser)
-# Bei "lightpanda" wird per CDP zu einem externen Browser verbunden statt Chromium zu starten
-BROWSER_MODE = os.getenv("BROWSER_MODE", "chromium").lower()
-# CDP-Endpoint für Lightpanda (oder anderen externen Browser)
-# Format: ws://host:port (z.B. ws://lightpanda:9222 oder ws://127.0.0.1:9222)
-CDP_ENDPOINT = os.getenv("CDP_ENDPOINT", "ws://127.0.0.1:9222")
