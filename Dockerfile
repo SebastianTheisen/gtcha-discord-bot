@@ -1,5 +1,5 @@
 # GTCHA Discord Bot - Dockerfile
-# Optimiert für Railway.app mit Playwright Chromium
+# Optimiert für Railway.app mit Playwright Chromium + optionalem Lightpanda
 
 FROM python:3.11-slim-bookworm
 
@@ -11,8 +11,9 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 # Installiere ALLE Chromium Dependencies (Debian Bookworm kompatibel!)
-# WICHTIG: libgdk-pixbuf-2.0-0 statt libgdk-pixbuf2.0-0 (Bookworm Änderung)
+# + curl für Lightpanda-Download und Health-Check
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
     # Core Chromium dependencies
     libnss3 \
     libnspr4 \
@@ -48,6 +49,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
+# Lightpanda Binary herunterladen (leichtgewichtiger Headless-Browser)
+RUN curl -L -o /usr/local/bin/lightpanda \
+    https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux \
+    && chmod +x /usr/local/bin/lightpanda
+
 # Playwright Browser-Verzeichnis erstellen
 RUN mkdir -p /ms-playwright && chmod 755 /ms-playwright
 
@@ -64,5 +70,8 @@ COPY . .
 # Verzeichnisse erstellen
 RUN mkdir -p /app/data /app/logs /app/screenshots/debug
 
-# Start
-CMD ["python", "main.py"]
+# Entrypoint: startet Lightpanda im Hintergrund wenn BROWSER_MODE=lightpanda
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+CMD ["/app/entrypoint.sh"]
