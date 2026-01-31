@@ -32,20 +32,20 @@ class Config:
             raise ValueError("GUILD_ID ist nicht gesetzt!")
 
         channel_ids = {
-            "Bonus": int(os.getenv("CHANNEL_BONUS", "0")),
-            "MIX": int(os.getenv("CHANNEL_MIX", "0")),
-            "Yu-Gi-Oh!": int(os.getenv("CHANNEL_YUGIOH", "0")),
-            "Pokémon": int(os.getenv("CHANNEL_POKEMON", "0")),
-            "Weiss Schwarz": int(os.getenv("CHANNEL_WEISS_SCHWARZ", "0")),
-            "One piece": int(os.getenv("CHANNEL_ONE_PIECE", "0")),
-            "Hobby": int(os.getenv("CHANNEL_HOBBY", "0")),
+            "Bonus": int(os.getenv("CHANNEL_BONUS") or "0"),
+            "MIX": int(os.getenv("CHANNEL_MIX") or "0"),
+            "Yu-Gi-Oh!": int(os.getenv("CHANNEL_YUGIOH") or "0"),
+            "Pokémon": int(os.getenv("CHANNEL_POKEMON") or "0"),
+            "Weiss Schwarz": int(os.getenv("CHANNEL_WEISS_SCHWARZ") or "0"),
+            "One piece": int(os.getenv("CHANNEL_ONE_PIECE") or "0"),
+            "Hobby": int(os.getenv("CHANNEL_HOBBY") or "0"),
         }
 
         return cls(
             discord_token=discord_token,
             guild_id=int(guild_id),
             channel_ids=channel_ids,
-            scrape_interval_minutes=int(os.getenv("SCRAPE_INTERVAL_MINUTES", "5")),
+            scrape_interval_minutes=int(os.getenv("SCRAPE_INTERVAL_MINUTES") or "5"),
             base_url=os.getenv("BASE_URL", "https://gtchaxonline.com"),
             database_path=Path(os.getenv("DATABASE_PATH", "data/gtcha_bot.db")),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
@@ -69,33 +69,33 @@ MEDAL_EMOJIS = {"T1": "🥇", "T2": "🥈", "T3": "🥉"}
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = os.getenv("GUILD_ID")
 BASE_URL = os.getenv("BASE_URL", "https://gtchaxonline.com")
-SCRAPE_INTERVAL_MINUTES = int(os.getenv("SCRAPE_INTERVAL_MINUTES", "5"))
+SCRAPE_INTERVAL_MINUTES = int(os.getenv("SCRAPE_INTERVAL_MINUTES") or "5")
 DATABASE_PATH = os.getenv("DATABASE_PATH", "data/gtcha_bot.db")
 
 CHANNEL_IDS = {
-    "Bonus": int(os.getenv("CHANNEL_BONUS", "0")),
-    "MIX": int(os.getenv("CHANNEL_MIX", "0")),
-    "Yu-Gi-Oh!": int(os.getenv("CHANNEL_YUGIOH", "0")),
-    "Pokémon": int(os.getenv("CHANNEL_POKEMON", "0")),
-    "Weiss Schwarz": int(os.getenv("CHANNEL_WEISS_SCHWARZ", "0")),
-    "One piece": int(os.getenv("CHANNEL_ONE_PIECE", "0")),
-    "Hobby": int(os.getenv("CHANNEL_HOBBY", "0")),
+    "Bonus": int(os.getenv("CHANNEL_BONUS") or "0"),
+    "MIX": int(os.getenv("CHANNEL_MIX") or "0"),
+    "Yu-Gi-Oh!": int(os.getenv("CHANNEL_YUGIOH") or "0"),
+    "Pokémon": int(os.getenv("CHANNEL_POKEMON") or "0"),
+    "Weiss Schwarz": int(os.getenv("CHANNEL_WEISS_SCHWARZ") or "0"),
+    "One piece": int(os.getenv("CHANNEL_ONE_PIECE") or "0"),
+    "Hobby": int(os.getenv("CHANNEL_HOBBY") or "0"),
 }
 
 # Admin-Channel für Bot-Benachrichtigungen (optional)
 # Der Bot postet hier Status-Updates, Fehler und Erfolge
-ADMIN_CHANNEL_ID = int(os.getenv("ADMIN_CHANNEL_ID", "0"))
+ADMIN_CHANNEL_ID = int(os.getenv("ADMIN_CHANNEL_ID") or "0")
 
 # Memory-Monitor Schwellwerte (in MB)
 # Für kleine Server können diese Werte reduziert werden
-MEMORY_WARNING_MB = int(os.getenv("MEMORY_WARNING_MB", "300"))
-MEMORY_CRITICAL_MB = int(os.getenv("MEMORY_CRITICAL_MB", "500"))
+MEMORY_WARNING_MB = int(os.getenv("MEMORY_WARNING_MB") or "300")
+MEMORY_CRITICAL_MB = int(os.getenv("MEMORY_CRITICAL_MB") or "500")
 
 # Paralleles Scrapen aktivieren (kann mehr RAM verbrauchen)
 PARALLEL_SCRAPING = os.getenv("PARALLEL_SCRAPING", "false").lower() == "true"
 
 # Scraper-Timeout in Sekunden (default: 180 = 3 Minuten)
-SCRAPE_TIMEOUT_SECONDS = int(os.getenv("SCRAPE_TIMEOUT_SECONDS", "180"))
+SCRAPE_TIMEOUT_SECONDS = int(os.getenv("SCRAPE_TIMEOUT_SECONDS") or "180")
 
 # @everyone Mentions bei neuen Threads und Updates
 # MENTION_ON_NEW_THREAD: @everyone wenn neuer Banner-Thread erstellt wird
@@ -106,7 +106,7 @@ MENTION_ON_PACK_UPDATE = os.getenv("MENTION_ON_PACK_UPDATE", "true").lower() == 
 # Hot-Banner Channel (Forum) - Top 10 Banner mit höchster Hit-Chance
 # Wird alle 30 Minuten aktualisiert, exkludiert nur Bonus-Kategorie
 # Unbegrenzte Pulls werden mit einfacher Wahrscheinlichkeit (hits/packs) berechnet
-HOT_BANNER_CHANNEL_ID = int(os.getenv("HOT_BANNER_CHANNEL_ID", "0"))
+HOT_BANNER_CHANNEL_ID = int(os.getenv("HOT_BANNER_CHANNEL_ID") or "0")
 # Hot-Banner Feature aktivieren/deaktivieren (true/false)
 HOT_BANNER_ENABLED = os.getenv("HOT_BANNER_ENABLED", "false").lower() == "true"
 
