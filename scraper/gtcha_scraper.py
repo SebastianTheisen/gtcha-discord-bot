@@ -153,11 +153,6 @@ class GTCHAScraper:
                 logger.error(f"Ladefehler: {e}")
                 return []
 
-            # Zuerst zur SHOP-Seite navigieren
-            if not await self._navigate_to_shop(self._page):
-                logger.error("Konnte nicht zur SHOP-Seite navigieren")
-                return []
-
             # Durch alle Kategorien klicken und Banner aus DOM lesen
             # Graceful Degradation: Fehler in einer Kategorie stoppen nicht die anderen
             failed_categories = []
@@ -337,11 +332,6 @@ class GTCHAScraper:
             await page.goto(self.base_url, wait_until="domcontentloaded", timeout=60000)
             await asyncio.sleep(3)
 
-            # Zur SHOP-Seite navigieren
-            if not await self._navigate_to_shop(page):
-                logger.warning(f"SHOP-Navigation fehlgeschlagen für {category}")
-                return (0, {})
-
             # Tab klicken
             clicked = await self._click_category_tab_on_page(page, category)
             if not clicked:
@@ -440,41 +430,6 @@ class GTCHAScraper:
             logger.warning(f"   DOM-Extraktion Fehler: {e}")
 
         return count
-
-    async def _navigate_to_shop(self, page: Page) -> bool:
-        """Navigiert zur SHOP-Seite, indem der SHOP-Link geklickt wird."""
-        try:
-            # Versuche den SHOP-Link zu finden und zu klicken
-            shop_clicked = await page.evaluate("""() => {
-                const links = document.querySelectorAll('a, button, div, span');
-                for (const el of links) {
-                    const text = (el.textContent || '').trim();
-                    if (text === 'SHOP') {
-                        el.click();
-                        return true;
-                    }
-                }
-                return false;
-            }""")
-
-            if shop_clicked:
-                logger.info("SHOP-Link geklickt, warte auf Seiteninhalt...")
-                await asyncio.sleep(3)
-                try:
-                    await page.wait_for_load_state("networkidle", timeout=10000)
-                except Exception:
-                    await asyncio.sleep(2)
-                return True
-
-            # Fallback: Direkt zur SHOP-URL navigieren
-            logger.warning("SHOP-Link nicht gefunden, versuche direkte Navigation")
-            await page.goto(f"{self.base_url}/shop", wait_until="domcontentloaded", timeout=30000)
-            await asyncio.sleep(3)
-            return True
-
-        except Exception as e:
-            logger.error(f"SHOP-Navigation Fehler: {e}")
-            return False
 
     async def _click_category_tab(self, category: str) -> bool:
         """Klickt auf einen Kategorie-Tab im Menü."""
