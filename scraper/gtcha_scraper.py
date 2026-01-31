@@ -17,7 +17,7 @@ from playwright.async_api import async_playwright, Page, Browser, BrowserContext
 from loguru import logger
 
 from .models import ScrapedBanner
-from config import CATEGORIES, PARALLEL_SCRAPING
+from config import CATEGORIES, PARALLEL_SCRAPING, BROWSER_MODE, CDP_ENDPOINT
 
 JST = timezone(timedelta(hours=9))
 
@@ -54,48 +54,69 @@ class GTCHAScraper:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.close()
 
-    async def _setup_route_interception(self):
-        """Blockiert unnötige Requests die das Rendering verzögern."""
-        async def handle_user_api(route):
-            logger.debug(f"   Route abgefangen: {route.request.url}")
-            await route.fulfill(status=200, content_type="application/json", body="{}")
-
-        try:
-            await self._page.route("**/api/user/**", handle_user_api)
-            await self._page.route("**/accounts.google.com/**", lambda route: route.abort())
-            logger.info("Route-Interception aktiviert")
-        except Exception as e:
-            logger.debug(f"Route-Interception fehlgeschlagen: {e}")
-
     async def start(self):
-        logger.info("Starte Browser (WebKit)...")
+        logger.info(f"Starte Browser (Modus: {BROWSER_MODE})...")
         self._playwright = await async_playwright().start()
 
-        self._browser = await self._playwright.webkit.launch(
-            headless=self.headless,
-        )
-        user_agent = random.choice(USER_AGENTS)
-        logger.debug(f"User-Agent: {user_agent[:50]}...")
-        self._context = await self._browser.new_context(
-            viewport={"width": 1920, "height": 1080},
-            user_agent=user_agent,
-            locale="ja-JP",
-        )
-        self._page = await self._context.new_page()
-        await self._setup_route_interception()
-        logger.info("Browser gestartet (WebKit)")
+        self._active_browser_mode = BROWSER_MODE
+
+        if BROWSER_MODE == "lightpanda":
+            # Verbinde per CDP zu externem Browser (Lightpanda)
+            logger.info(f"Verbinde zu CDP-Endpoint: {CDP_ENDPOINT}")
+            try:
+                self._browser = await self._playwright.chromium.connect_over_cdp(CDP_ENDPOINT, timeout=10000)
+                self._context = self._browser.contexts[0] if self._browser.contexts else await self._browser.new_context()
+                self._page = await self._context.new_page()
+                logger.info("Verbunden mit Lightpanda via CDP")
+            except Exception as e:
+                logger.warning(f"Lightpanda nicht erreichbar ({e}), Fallback auf Chromium...")
+                self._active_browser_mode = "chromium"
+                # Fallback: Chromium starten (gleicher Code wie unten)
+                self._browser = await self._playwright.chromium.launch(
+                    headless=self.headless,
+                    args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+                )
+                user_agent = random.choice(USER_AGENTS)
+                self._context = await self._browser.new_context(
+                    viewport={"width": 1920, "height": 1080},
+                    user_agent=user_agent,
+                    locale="ja-JP",
+                )
+                self._page = await self._context.new_page()
+                logger.info("Browser gestartet (Fallback Chromium)")
+
+        if self._active_browser_mode == "chromium" and self._browser is None:
+            # Standard: Playwright Chromium starten
+            self._browser = await self._playwright.chromium.launch(
+                headless=self.headless,
+                args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+            )
+
+            # Zufälligen User-Agent auswählen
+            user_agent = random.choice(USER_AGENTS)
+            logger.debug(f"User-Agent: {user_agent[:50]}...")
+
+            self._context = await self._browser.new_context(
+                viewport={"width": 1920, "height": 1080},
+                user_agent=user_agent,
+                locale="ja-JP",
+            )
+
+            self._page = await self._context.new_page()
+            logger.info("Browser gestartet (v6 - Pure DOM, Chromium)")
 
     async def close(self):
-        if self._context:
-            await self._context.close()
-        if self._browser:
-            await self._browser.close()
+        if self._active_browser_mode == "lightpanda":
+            # Bei CDP-Verbindung: nur disconnect, nicht den Browser killen
+            if self._browser:
+                await self._browser.close()
+        else:
+            if self._context:
+                await self._context.close()
+            if self._browser:
+                await self._browser.close()
         if self._playwright:
             await self._playwright.stop()
-        self._browser = None
-        self._context = None
-        self._page = None
-        self._playwright = None
         logger.info("Browser geschlossen")
 
     async def _random_delay(self, min_sec: float = 1.0, max_sec: float = 3.0):
