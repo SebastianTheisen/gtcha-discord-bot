@@ -66,7 +66,7 @@ class GTCHAScraper:
             try:
                 self._browser = await self._playwright.chromium.connect_over_cdp(CDP_ENDPOINT, timeout=10000)
                 self._context = self._browser.contexts[0] if self._browser.contexts else await self._browser.new_context()
-                self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
+                self._page = await self._context.new_page()
                 logger.info("Verbunden mit Lightpanda via CDP")
             except Exception as e:
                 logger.warning(f"Lightpanda nicht erreichbar ({e}), Fallback auf Chromium...")
