@@ -1,0 +1,44 @@
+# Docker Compose - GTCHA Bot mit Lightpanda
+# Starten mit: docker compose -f docker-compose.lightpanda.yml up -d
+#
+# Lightpanda: ~11x schneller, ~9x weniger RAM als Chromium
+# ACHTUNG: Lightpanda ist noch Beta - bei Problemen zurück auf Chromium wechseln
+
+services:
+  lightpanda:
+    image: lightpanda/browser:nightly
+    ports:
+      - "9222:9222"
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    healthcheck:
+      test: ["CMD-SHELL", "echo > /dev/tcp/127.0.0.1/9222 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.lightpanda
+    environment:
+      - BROWSER_MODE=lightpanda
+      - CDP_ENDPOINT=ws://lightpanda:9222
+    env_file:
+      - .env
+    depends_on:
+      lightpanda:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - bot-data:/app/data
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+volumes:
+  bot-data:

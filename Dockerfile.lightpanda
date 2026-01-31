@@ -1,0 +1,31 @@
+# GTCHA Discord Bot - Dockerfile (Lightpanda-Variante)
+# OHNE Chromium - nutzt externen Lightpanda-Browser via CDP
+# Deutlich kleineres Image (~200MB weniger)
+
+FROM python:3.11-slim-bookworm
+
+# Umgebungsvariablen
+ENV PYTHONUNBUFFERED=1 \
+    MALLOC_ARENA_MAX=2 \
+    BROWSER_MODE=lightpanda \
+    CDP_ENDPOINT=ws://lightpanda:9222
+
+WORKDIR /app
+
+# Nur minimale System-Dependencies (kein Chromium!)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Python Dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Bot-Code kopieren
+COPY . .
+
+# Verzeichnisse erstellen
+RUN mkdir -p /app/data /app/logs /app/screenshots/debug
+
+# Start
+CMD ["python", "main.py"]
