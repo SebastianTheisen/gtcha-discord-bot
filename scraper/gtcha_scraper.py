@@ -158,14 +158,8 @@ class GTCHAScraper:
             try:
                 self._current_status = "Seite laden"
                 await self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=60000)
-                logger.info("Seite geladen, warte auf JS...")
-                # Warte auf networkidle um sicherzustellen dass XHR-Requests abgeschlossen sind
-                try:
-                    await self._page.wait_for_load_state("networkidle", timeout=15000)
-                    logger.info("Networkidle erreicht")
-                except Exception:
-                    logger.info("Networkidle Timeout - fahre fort")
-                await asyncio.sleep(3)
+                logger.info("Seite geladen, warte 5s auf JS...")
+                await asyncio.sleep(5)
 
             except asyncio.CancelledError:
                 # Extern abgebrochen (z.B. durch Timeout) - weiterleiten
@@ -469,29 +463,14 @@ class GTCHAScraper:
 
         keywords = category_keywords.get(category, [category.lower()])
 
-        # CSS selectors to try - broad set for resilience against site changes
-        tab_selectors = [
-            '.pack_menu, .tab-item, .category-tab, [role="tab"], .nav-item, .menu-item',
-            '.pack-menu, .packMenu, .pack_tab, .pack-tab',
-            'a[href*="category"], a[href*="pack"], button[class*="tab"], button[class*="menu"]',
-            'li[class*="tab"], li[class*="menu"], div[class*="tab"], div[class*="menu"]',
-        ]
-
         # Retry-Mechanismus
         for attempt in range(3):
             try:
                 # Warte kurz damit die Seite stabil ist
                 await asyncio.sleep(0.5)
 
-                # Finde alle menu-items mit mehreren Selector-Gruppen
-                menu_items = []
-                for selector in tab_selectors:
-                    try:
-                        items = await self._page.query_selector_all(selector)
-                        if items:
-                            menu_items.extend(items)
-                    except Exception:
-                        continue
+                # Finde alle menu-items
+                menu_items = await self._page.query_selector_all('.pack_menu, .menu-item')
 
                 if attempt == 0:
                     # Log alle gefundenen Tabs beim ersten Versuch
@@ -502,15 +481,7 @@ class GTCHAScraper:
                             all_tabs.append(t.strip())
                         except:
                             pass
-                    logger.info(f"   Gefundene Tabs ({len(menu_items)}): {all_tabs}")
-
-                    # Wenn keine Tabs gefunden, logge einen Ausschnitt des DOM
-                    if not menu_items:
-                        try:
-                            body_html = await self._page.evaluate("() => document.body ? document.body.innerHTML.substring(0, 2000) : 'no body'")
-                            logger.warning(f"   Keine Tabs gefunden! DOM-Ausschnitt: {body_html[:500]}")
-                        except Exception:
-                            pass
+                    logger.debug(f"   Gefundene Tabs: {all_tabs}")
 
                 for item in menu_items:
                     try:
@@ -528,28 +499,6 @@ class GTCHAScraper:
                     except Exception as inner_e:
                         logger.debug(f"   Item-Fehler: {inner_e}")
                         continue
-
-                # Fallback: JS-basierte Textsuche über alle klickbaren Elemente
-                if not menu_items or attempt > 0:
-                    for keyword in keywords:
-                        try:
-                            clicked = await self._page.evaluate("""(keyword) => {
-                                const elements = document.querySelectorAll('a, button, li, div, span');
-                                for (const el of elements) {
-                                    const text = (el.textContent || '').trim().toLowerCase();
-                                    if (text === keyword || (text.length < 30 && text.includes(keyword))) {
-                                        el.click();
-                                        return true;
-                                    }
-                                }
-                                return false;
-                            }""", keyword)
-                            if clicked:
-                                logger.debug(f"   JS-Fallback Klick (keyword: {keyword})")
-                                await asyncio.sleep(1)
-                                return True
-                        except Exception:
-                            continue
 
             except Exception as e:
                 logger.debug(f"   Versuch {attempt+1} fehlgeschlagen: {e}")
