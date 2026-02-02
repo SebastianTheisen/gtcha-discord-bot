@@ -779,7 +779,7 @@ class GTCHABot(commands.Bot):
             "Pokémon": 0xFFCC00,    # Pokémon-Gelb
             "Weiss Schwarz": 0x2C3E50,  # Dunkelblau
             "One piece": 0xE74C3C,  # Rot
-            "Hobby": 0x27AE60,      # Grün
+            "Dragon Ball": 0xF57C00,  # Orange
         }
         embed_color = category_colors.get(get('category'), 0xFFD700)
 

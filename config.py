@@ -38,7 +38,7 @@ class Config:
             "Pokémon": int(os.getenv("CHANNEL_POKEMON") or "0"),
             "Weiss Schwarz": int(os.getenv("CHANNEL_WEISS_SCHWARZ") or "0"),
             "One piece": int(os.getenv("CHANNEL_ONE_PIECE") or "0"),
-            "Hobby": int(os.getenv("CHANNEL_HOBBY") or "0"),
+            "Dragon Ball": int(os.getenv("CHANNEL_DRAGON_BALL") or "0"),
         }
 
         return cls(
@@ -62,7 +62,7 @@ except ValueError as e:
     config = None
 
 # Direkte Exporte fuer einfachen Import
-CATEGORIES = ["Bonus", "MIX", "Yu-Gi-Oh!", "Pokémon", "Weiss Schwarz", "One piece", "Hobby"]
+CATEGORIES = ["Bonus", "MIX", "Yu-Gi-Oh!", "Pokémon", "Weiss Schwarz", "One piece", "Dragon Ball"]
 MEDAL_EMOJIS = {"T1": "🥇", "T2": "🥈", "T3": "🥉"}
 
 # Kompatibilitaets-Exporte
@@ -79,7 +79,7 @@ CHANNEL_IDS = {
     "Pokémon": int(os.getenv("CHANNEL_POKEMON") or "0"),
     "Weiss Schwarz": int(os.getenv("CHANNEL_WEISS_SCHWARZ") or "0"),
     "One piece": int(os.getenv("CHANNEL_ONE_PIECE") or "0"),
-    "Hobby": int(os.getenv("CHANNEL_HOBBY") or "0"),
+    "Dragon Ball": int(os.getenv("CHANNEL_DRAGON_BALL") or "0"),
 }
 
 # Admin-Channel für Bot-Benachrichtigungen (optional)
