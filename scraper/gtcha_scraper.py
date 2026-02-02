@@ -340,7 +340,7 @@ class GTCHAScraper:
             "Pokémon": ["pokemon", "poke", "ポケモン"],
             "Weiss Schwarz": ["weiss", "schwarz", "ヴァイスシュヴァルツ", "ヴァイスシュバルツ"],
             "One piece": ["one piece", "onepiece", "ワンピース"],
-            "Hobby": ["hobby", "ホビー"],
+            "Dragon Ball": ["dragon ball", "dragonball", "ドラゴンボール"],
         }
 
         keywords = category_keywords.get(category, [category.lower()])
@@ -424,7 +424,7 @@ class GTCHAScraper:
             "Pokémon": ["pokemon", "poke", "ポケモン"],
             "Weiss Schwarz": ["weiss", "schwarz", "ヴァイスシュヴァルツ", "ヴァイスシュバルツ"],
             "One piece": ["one piece", "onepiece", "ワンピース"],
-            "Hobby": ["hobby", "ホビー"],
+            "Dragon Ball": ["dragon ball", "dragonball", "ドラゴンボール"],
         }
 
         keywords = category_keywords.get(category, [category.lower()])
