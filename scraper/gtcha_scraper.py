@@ -347,7 +347,22 @@ class GTCHAScraper:
 
         for attempt in range(2):
             try:
-                tabs = await page.query_selector_all('.pack_menu, .tab-item, .category-tab, [role="tab"], .nav-item, .menu-item')
+                # Warte kurz damit die Seite stabil ist (wie in sequenzieller Version)
+                await asyncio.sleep(0.3)
+
+                # Gleiche Selektoren wie sequenzielle Version
+                tabs = await page.query_selector_all('.pack_menu, .menu-item')
+
+                if attempt == 0:
+                    # Log alle gefundenen Tabs beim ersten Versuch
+                    all_tabs = []
+                    for tab in tabs:
+                        try:
+                            t = await tab.inner_text()
+                            all_tabs.append(t.strip())
+                        except:
+                            pass
+                    logger.debug(f"   [{category}] Gefundene Tabs: {all_tabs}")
 
                 for tab in tabs:
                     try:
@@ -357,6 +372,9 @@ class GTCHAScraper:
                         for keyword in keywords:
                             if keyword in text_lower:
                                 await tab.click()
+                                logger.debug(f"   [{category}] Klick: '{text.strip()}' (keyword: {keyword})")
+                                # Warte nach Klick (wie in sequenzieller Version)
+                                await asyncio.sleep(1)
                                 return True
                     except:
                         continue
@@ -364,6 +382,7 @@ class GTCHAScraper:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
+                logger.debug(f"   [{category}] Versuch {attempt+1} fehlgeschlagen: {e}")
                 if "crashed" in str(e).lower():
                     try:
                         await page.reload(wait_until="domcontentloaded", timeout=30000)
@@ -374,6 +393,7 @@ class GTCHAScraper:
             if attempt < 1:
                 await asyncio.sleep(1)
 
+        logger.warning(f"   Tab nicht gefunden: {category}")
         return False
 
     async def _extract_banners_from_page(self, page: Page, category: str, banners_data: Dict[int, Dict]) -> int:
