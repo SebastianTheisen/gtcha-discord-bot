@@ -118,6 +118,13 @@ class Database:
             except Exception as e:
                 logger.debug(f"Migration Medaillen-Sync: {e}")
 
+            # Performance-Indexes hinzufügen (IF NOT EXISTS für idempotente Migration)
+            await db.executescript("""
+                CREATE INDEX IF NOT EXISTS idx_banners_is_active ON banners(is_active);
+                CREATE INDEX IF NOT EXISTS idx_discord_threads_banner_id ON discord_threads(banner_id);
+                CREATE INDEX IF NOT EXISTS idx_discord_threads_is_expired ON discord_threads(is_expired);
+            """)
+
             await db.commit()
 
     async def get_banner(self, pack_id: int) -> Optional[Dict]:
@@ -341,6 +348,37 @@ class Database:
                 (pack_id,)
             )
             await db.commit()
+
+    async def batch_reset_not_found_count(self, pack_ids: List[int]) -> None:
+        """Setzt not_found_count für alle angegebenen Banner auf 0 (Batch-Update)."""
+        if not pack_ids:
+            return
+        async with aiosqlite.connect(self.db_path) as db:
+            placeholders = ','.join('?' * len(pack_ids))
+            await db.execute(
+                f"UPDATE banners SET not_found_count = 0 WHERE pack_id IN ({placeholders})",
+                pack_ids
+            )
+            await db.commit()
+
+    async def batch_increment_not_found_count(self, pack_ids: List[int]) -> List[int]:
+        """Erhöht not_found_count für alle Banner um 1 und gibt IDs mit count >= 20 zurück."""
+        if not pack_ids:
+            return []
+        async with aiosqlite.connect(self.db_path) as db:
+            placeholders = ','.join('?' * len(pack_ids))
+            await db.execute(
+                f"UPDATE banners SET not_found_count = not_found_count + 1 WHERE pack_id IN ({placeholders})",
+                pack_ids
+            )
+            await db.commit()
+            # Finde Banner die jetzt >= 20 haben
+            cursor = await db.execute(
+                f"SELECT pack_id FROM banners WHERE pack_id IN ({placeholders}) AND not_found_count >= 20",
+                pack_ids
+            )
+            rows = await cursor.fetchall()
+            return [row[0] for row in rows]
 
     async def get_archived_thread_ids(self, max_age_hours: int = 1) -> List[int]:
         """Gibt Thread-IDs von alten inaktiven Bannern zurück (für Discord-Löschung)."""
