@@ -94,6 +94,10 @@ MEMORY_CRITICAL_MB = int(os.getenv("MEMORY_CRITICAL_MB") or "500")
 # Paralleles Scrapen aktivieren (kann mehr RAM verbrauchen)
 PARALLEL_SCRAPING = os.getenv("PARALLEL_SCRAPING", "false").lower() == "true"
 
+# Anzahl paralleler Browser-Tabs (mehr = schneller, aber mehr RAM)
+# Empfohlen: 3-4 für kleine Server, 5-7 für größere Server
+PARALLEL_TABS = int(os.getenv("PARALLEL_TABS") or "4")
+
 # Scraper-Timeout in Sekunden (default: 180 = 3 Minuten)
 SCRAPE_TIMEOUT_SECONDS = int(os.getenv("SCRAPE_TIMEOUT_SECONDS") or "180")
 
