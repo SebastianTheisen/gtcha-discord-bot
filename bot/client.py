@@ -532,6 +532,13 @@ class GTCHABot(commands.Bot):
                 skipped_empty = 0
                 deleted_count = 0
                 skipped_inactive = 0
+
+                # Semaphore für parallele Updates (max 5 gleichzeitig)
+                update_semaphore = asyncio.Semaphore(5)
+
+                # Sammle Updates für parallele Verarbeitung
+                update_tasks = []
+
                 for banner in banners:
                     try:
                         # Pruefe ob Banner neu ist
@@ -554,96 +561,38 @@ class GTCHABot(commands.Bot):
                             continue
 
                         if not existing:
-                            # Neuer Banner - Best Hit erstmal NICHT laden (zu langsam)
-                            # TODO: Best Hit optional oder async laden
-                            # if not banner.best_hit:
-                            #     try:
-                            #         best_hit, _ = await scraper.scrape_banner_details(banner.pack_id)
-                            #         if best_hit:
-                            #             banner.best_hit = best_hit
-                            #             logger.debug(f"Best Hit fuer {banner.pack_id}: {best_hit}")
-                            #     except Exception as e:
-                            #         logger.debug(f"Best Hit Fehler: {e}")
-
-                            # In DB speichern
+                            # Neuer Banner - sequentiell verarbeiten (Thread erstellen)
                             await self.db.save_banner(banner)
-
-                            # In Discord posten
                             await self._post_banner_to_discord(banner)
                             new_count += 1
-
                             logger.info(f"Neu: {banner.pack_id} ({banner.category})")
+
+                            # Cache aktualisieren
+                            await banner_cache.set(banner.pack_id, {
+                                'current_packs': banner.current_packs,
+                                'price_coins': banner.price_coins,
+                                'entries_per_day': banner.entries_per_day,
+                                'total_packs': banner.total_packs
+                            })
                         else:
-                            # Existierender Banner - auf Updates pruefen
-                            old_packs = existing.get('current_packs')
-                            old_entries = existing.get('entries_per_day')
-                            title_updated = False
-
-                            # URLs aktualisieren falls fehlend (Reparatur nach RecoveredBanner-Überschreibung)
-                            if banner.image_url or banner.detail_page_url:
-                                old_image = existing.get('image_url')
-                                old_detail = existing.get('detail_page_url')
-                                if (not old_image and banner.image_url) or (not old_detail and banner.detail_page_url):
-                                    await self.db.update_banner_urls(
-                                        banner.pack_id,
-                                        banner.image_url,
-                                        banner.detail_page_url
-                                    )
-                                    logger.debug(f"URLs repariert für Banner {banner.pack_id}")
-
-                            # Prüfe ob entries_per_day sich geändert hat (Titel-Update nötig)
-                            # Auch updaten wenn neuer Wert None (unbegrenzt) ist!
-                            if banner.entries_per_day != old_entries:
-                                await self.db.update_banner_entries(
-                                    banner.pack_id,
-                                    banner.entries_per_day
-                                )
-                                # Thread-Titel aktualisieren
-                                await self._update_thread_title(banner)
-                                title_updated = True
-                                new_entries_str = banner.entries_per_day if banner.entries_per_day else "unbegrenzt"
-                                old_entries_str = old_entries if old_entries else "unbegrenzt"
-                                logger.info(f"Update: {banner.pack_id} Entries: {old_entries_str} -> {new_entries_str}")
-
-                            if banner.current_packs != old_packs:
-                                await self.db.update_banner_packs(
-                                    banner.pack_id,
-                                    banner.current_packs
-                                )
-                                # Kommentar im Thread posten - NUR wenn alter Wert bekannt war
-                                # (Bei Wiederherstellung ist old_packs=None, dann kein Update posten)
-                                if old_packs is not None:
-                                    await self._post_pack_update_to_thread(
-                                        banner.pack_id,
-                                        old_packs,
-                                        banner.current_packs,
-                                        banner.total_packs
-                                    )
-                                    logger.info(f"Update: {banner.pack_id} Packs: {old_packs} -> {banner.current_packs}")
-                                else:
-                                    logger.debug(f"Initiales Pack-Update für {banner.pack_id}: {banner.current_packs} (kein Post)")
-
-                            # Embed IMMER aktualisieren (für Countdown-Refresh und Pack-Anzeige)
-                            await self._update_thread_embed(banner)
-
-                            # Wahrscheinlichkeit aktualisieren
-                            thread_data = await self.db.get_thread_by_banner_id(banner.pack_id)
-                            if thread_data and thread_data.get('thread_id'):
-                                await self._update_probability_message(
-                                    thread_data['thread_id'],
-                                    banner.pack_id
-                                )
-
-                        # Banner im Cache aktualisieren
-                        await banner_cache.set(banner.pack_id, {
-                            'current_packs': banner.current_packs,
-                            'price_coins': banner.price_coins,
-                            'entries_per_day': banner.entries_per_day,
-                            'total_packs': banner.total_packs
-                        })
+                            # Existierender Banner - für parallele Verarbeitung sammeln
+                            update_tasks.append(
+                                self._process_banner_update(banner, existing, update_semaphore)
+                            )
 
                     except Exception as e:
                         logger.error(f"Fehler bei Banner {banner.pack_id}: {e}")
+
+                # Parallele Verarbeitung der Updates
+                if update_tasks:
+                    logger.info(f"Verarbeite {len(update_tasks)} Banner-Updates parallel...")
+                    results = await asyncio.gather(*update_tasks, return_exceptions=True)
+                    updated_count = sum(1 for r in results if isinstance(r, dict) and r.get('updated'))
+                    error_count = sum(1 for r in results if isinstance(r, Exception) or (isinstance(r, dict) and r.get('error')))
+                    if updated_count > 0:
+                        logger.info(f"   {updated_count} Banner erfolgreich aktualisiert")
+                    if error_count > 0:
+                        logger.warning(f"   {error_count} Banner mit Fehlern")
 
                 # === NICHT-GEFUNDEN-TRACKING ===
                 # Sammle alle gefundenen Banner-IDs (inkl. der mit 0 Packs)
@@ -952,6 +901,88 @@ class GTCHABot(commands.Bot):
             logger.debug(f"Discord-Fehler bei Pack-Update: {e}")
         except Exception as e:
             logger.debug(f"Fehler bei Pack-Update für {pack_id}: {e}")
+
+    async def _process_banner_update(self, banner, existing: dict, semaphore: asyncio.Semaphore) -> dict:
+        """
+        Verarbeitet ein Banner-Update parallel.
+        Gibt ein dict mit Statistiken zurück.
+        """
+        async with semaphore:
+            result = {'updated': False, 'error': None}
+            try:
+                old_packs = existing.get('current_packs')
+                old_entries = existing.get('entries_per_day')
+                title_updated = False
+
+                # URLs aktualisieren falls fehlend
+                if banner.image_url or banner.detail_page_url:
+                    old_image = existing.get('image_url')
+                    old_detail = existing.get('detail_page_url')
+                    if (not old_image and banner.image_url) or (not old_detail and banner.detail_page_url):
+                        await self.db.update_banner_urls(
+                            banner.pack_id,
+                            banner.image_url,
+                            banner.detail_page_url
+                        )
+                        logger.debug(f"URLs repariert für Banner {banner.pack_id}")
+
+                # Prüfe ob entries_per_day sich geändert hat
+                if banner.entries_per_day != old_entries:
+                    await self.db.update_banner_entries(
+                        banner.pack_id,
+                        banner.entries_per_day
+                    )
+                    await self._update_thread_title(banner)
+                    title_updated = True
+                    new_entries_str = banner.entries_per_day if banner.entries_per_day else "unbegrenzt"
+                    old_entries_str = old_entries if old_entries else "unbegrenzt"
+                    logger.info(f"Update: {banner.pack_id} Entries: {old_entries_str} -> {new_entries_str}")
+
+                # Track ob sich Packs geändert haben
+                packs_changed = banner.current_packs != old_packs
+
+                if packs_changed:
+                    await self.db.update_banner_packs(
+                        banner.pack_id,
+                        banner.current_packs
+                    )
+                    if old_packs is not None:
+                        await self._post_pack_update_to_thread(
+                            banner.pack_id,
+                            old_packs,
+                            banner.current_packs,
+                            banner.total_packs
+                        )
+                        logger.info(f"Update: {banner.pack_id} Packs: {old_packs} -> {banner.current_packs}")
+                    else:
+                        logger.debug(f"Initiales Pack-Update für {banner.pack_id}: {banner.current_packs} (kein Post)")
+
+                # Embed NUR aktualisieren wenn sich etwas geändert hat
+                if packs_changed or title_updated:
+                    await self._update_thread_embed(banner)
+                    result['updated'] = True
+
+                    if packs_changed:
+                        thread_data = await self.db.get_thread_by_banner_id(banner.pack_id)
+                        if thread_data and thread_data.get('thread_id'):
+                            await self._update_probability_message(
+                                thread_data['thread_id'],
+                                banner.pack_id
+                            )
+
+                # Banner im Cache aktualisieren
+                await banner_cache.set(banner.pack_id, {
+                    'current_packs': banner.current_packs,
+                    'price_coins': banner.price_coins,
+                    'entries_per_day': banner.entries_per_day,
+                    'total_packs': banner.total_packs
+                })
+
+            except Exception as e:
+                result['error'] = str(e)
+                logger.error(f"Fehler bei Banner {banner.pack_id}: {e}")
+
+            return result
 
     async def _update_thread_title(self, banner):
         """Aktualisiert den Thread-Titel wenn sich Banner-Daten geändert haben."""
