@@ -127,21 +127,21 @@ class GTCHABot(commands.Bot):
         ))
 
         # Scheduler starten (mit Timeout-Wrapper)
-        # Läuft alle 5 Minuten um xx:00:20, xx:05:20, xx:10:20, etc.
+        # Läuft alle X Minuten um xx:00:20, xx:05:20, xx:10:20, etc.
         # (20 Sekunden nach der vollen Minute, da neue Banner um :00 und :30 kommen)
         self.scheduler.add_job(
             self._scrape_with_timeout,
             'cron',
-            minute='*/5',  # Alle 5 Minuten
+            minute=f'*/{SCRAPE_INTERVAL_MINUTES}',  # Intervall aus Config
             second=20,     # 20 Sekunden nach der Minute
             id='scrape_job',
             replace_existing=True,
             coalesce=True,  # Verpasste Jobs zusammenfassen
             max_instances=1,  # Maximal eine Instanz gleichzeitig
-            misfire_grace_time=300,  # Job kann bis zu 5 Min verspätet starten
+            misfire_grace_time=SCRAPE_INTERVAL_MINUTES * 60,  # Grace Time = Intervall
         )
         self.scheduler.start()
-        logger.info("Scheduler: Alle 5 Min um xx:xx:20")
+        logger.info(f"Scheduler: Alle {SCRAPE_INTERVAL_MINUTES} Min um xx:xx:20")
 
         # Hot-Banner Job (alle 30 Min um xx:00:20 und xx:30:20)
         if HOT_BANNER_CHANNEL_ID and HOT_BANNER_ENABLED:
