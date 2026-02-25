@@ -311,12 +311,29 @@ class GTCHAScraper:
         try:
             # Seite laden
             await page.goto(self.base_url, wait_until="domcontentloaded", timeout=60000)
-            await asyncio.sleep(2)
 
-            # Tab klicken
+            # Warte auf Tab-Menü (JavaScript lädt die Tabs)
+            try:
+                await page.wait_for_selector('.pack_menu, .menu-item', timeout=10000)
+                await asyncio.sleep(1)  # Extra Stabilisierung
+            except Exception:
+                # Fallback: feste Wartezeit
+                await asyncio.sleep(3)
+
+            # Tab klicken (mit Retry)
             clicked = await self._click_category_tab_on_page(page, category)
             if not clicked:
-                return (0, {})
+                # Retry: Seite neu laden und nochmal versuchen
+                logger.debug(f"   [{category}] Retry nach Tab-Fehler...")
+                await page.reload(wait_until="domcontentloaded", timeout=30000)
+                try:
+                    await page.wait_for_selector('.pack_menu, .menu-item', timeout=10000)
+                    await asyncio.sleep(1)
+                except Exception:
+                    await asyncio.sleep(3)
+                clicked = await self._click_category_tab_on_page(page, category)
+                if not clicked:
+                    return (0, {})
 
             # Warten auf DOM-Update
             await self._random_delay(1.0, 1.5)
