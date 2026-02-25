@@ -68,7 +68,7 @@ class GTCHAScraper:
         logger.debug(f"User-Agent: {user_agent[:50]}...")
 
         self._context = await self._browser.new_context(
-            viewport={"width": 1920, "height": 1080},
+            viewport={"width": 800, "height": 600},
             user_agent=user_agent,
             locale="ja-JP",
         )
@@ -177,8 +177,8 @@ class GTCHAScraper:
                         failed_categories.append((category, "Tab nicht gefunden"))
                         continue
 
-                    # Warte auf DOM-Update und Stabilisierung
-                    await self._random_delay(1.0, 2.0)
+                    # Warte auf DOM-Update und Stabilisierung (reduziert von 1-2s)
+                    await self._random_delay(0.3, 0.5)
                     try:
                         await self._page.wait_for_load_state("domcontentloaded", timeout=5000)
                     except asyncio.CancelledError:
@@ -363,8 +363,8 @@ class GTCHAScraper:
                 if not clicked:
                     return (0, {})
 
-            # Warten auf DOM-Update
-            await self._random_delay(1.0, 1.5)
+            # Warten auf DOM-Update (reduziert von 1-1.5s)
+            await self._random_delay(0.3, 0.5)
 
             # Banner extrahieren
             count = await self._extract_banners_from_page(page, category, banners_data)
@@ -418,8 +418,8 @@ class GTCHAScraper:
                             if keyword in text_lower:
                                 await tab.click()
                                 logger.debug(f"   [{category}] Klick: '{text.strip()}' (keyword: {keyword})")
-                                # Warte nach Klick (wie in sequenzieller Version)
-                                await asyncio.sleep(1)
+                                # Warte nach Klick (reduziert von 1s)
+                                await asyncio.sleep(0.3)
                                 return True
                     except:
                         continue
@@ -525,7 +525,7 @@ class GTCHAScraper:
                             if keyword in text_lower:
                                 await item.click()
                                 logger.debug(f"   Klick: '{text_clean}' (keyword: {keyword})")
-                                await asyncio.sleep(1)
+                                await asyncio.sleep(0.3)  # reduziert von 1s
                                 return True
                     except Exception as inner_e:
                         logger.debug(f"   Item-Fehler: {inner_e}")

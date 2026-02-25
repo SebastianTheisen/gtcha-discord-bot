@@ -204,14 +204,12 @@ class GTCHABot(commands.Bot):
         # Startup-Benachrichtigung senden
         await notify_bot_started()
 
-        # Threads aus Discord wiederherstellen (falls DB leer nach Neustart)
-        await self._recover_threads_from_discord()
-
-        # Medaillen von Discord-Reaktionen synchronisieren
-        await self._sync_medals_from_discord()
-
-        # Doppelte Wahrscheinlichkeits-Nachrichten aufräumen
-        await self._cleanup_duplicate_probability_messages()
+        # Parallelisiere Startup-Tasks für schnelleren Start (~20-40s gespart)
+        await asyncio.gather(
+            self._recover_threads_from_discord(),      # Threads aus Discord wiederherstellen
+            self._sync_medals_from_discord(),          # Medaillen synchronisieren
+            self._cleanup_duplicate_probability_messages(),  # Aufräumen
+        )
 
         # Erster Scrape nach 10 Sekunden - über Scheduler triggern statt direkt aufrufen
         # Das vermeidet Konflikte mit dem regulären Scheduler-Job
@@ -613,19 +611,20 @@ class GTCHABot(commands.Bot):
                     # Webhook-Benachrichtigung
                     await notify_low_banner_count(len(found_banner_ids), MIN_BANNERS_FOR_TRACKING)
                 else:
-                    # Für gefundene Banner: Zähler zurücksetzen
-                    for pack_id in found_banner_ids:
-                        if pack_id in db_banner_ids:
-                            await self.db.reset_not_found_count(pack_id)
+                    # Für gefundene Banner: Zähler zurücksetzen (Batch-Update statt N Einzelqueries)
+                    found_in_db = list(found_banner_ids & db_banner_ids)
+                    if found_in_db:
+                        await self.db.batch_reset_not_found_count(found_in_db)
 
-                    # Für NICHT gefundene Banner: Zähler erhöhen
-                    not_found_ids = db_banner_ids - found_banner_ids
-                    for pack_id in not_found_ids:
-                        count = await self.db.increment_not_found_count(pack_id)
-                        logger.debug(f"Banner {pack_id} nicht gefunden (Zähler: {count})")
+                    # Für NICHT gefundene Banner: Zähler erhöhen (Batch-Update)
+                    not_found_ids = list(db_banner_ids - found_banner_ids)
+                    if not_found_ids:
+                        logger.debug(f"{len(not_found_ids)} Banner nicht gefunden - erhöhe Zähler")
+                        # Batch-Increment gibt IDs mit count >= 20 zurück
+                        expired_ids = await self.db.batch_increment_not_found_count(not_found_ids)
 
-                        # Bei 20x nicht gefunden: Banner löschen
-                        if count >= 20:
+                        # Banner mit 20x nicht gefunden löschen
+                        for pack_id in expired_ids:
                             logger.info(f"Banner {pack_id} 20x nicht gefunden - lösche Thread")
                             deleted = await self._delete_banner_thread(pack_id)
                             if deleted:
@@ -1591,9 +1590,9 @@ class GTCHABot(commands.Bot):
                 return
 
             # Für jeden Hot-Banner einen Thread erstellen/aktualisieren
+            # Rate-Limiting wird bereits durch Discord.py bzw. rate_limiter gehandhabt
             for rank, banner in enumerate(sorted_banners, 1):
                 await self._post_hot_banner(channel, banner, rank)
-                await asyncio.sleep(1)  # Rate-Limiting
 
             logger.info(f"Hot-Banner Update abgeschlossen: {len(sorted_banners)} Banner")
 
