@@ -17,7 +17,7 @@ from playwright.async_api import async_playwright, Page, Browser, BrowserContext
 from loguru import logger
 
 from .models import ScrapedBanner
-from config import CATEGORIES, PARALLEL_SCRAPING
+from config import CATEGORIES, PARALLEL_SCRAPING, PARALLEL_TABS
 
 JST = timezone(timedelta(hours=9))
 
@@ -124,8 +124,8 @@ class GTCHAScraper:
             try:
                 self._current_status = "Seite laden"
                 await self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=60000)
-                logger.info("Seite geladen, warte 5s auf JS...")
-                await asyncio.sleep(5)
+                logger.info("Seite geladen, warte auf JS...")
+                await asyncio.sleep(2)
 
             except asyncio.CancelledError:
                 # Extern abgebrochen (z.B. durch Timeout) - weiterleiten
@@ -151,8 +151,8 @@ class GTCHAScraper:
                         failed_categories.append((category, "Tab nicht gefunden"))
                         continue
 
-                    # Warte auf DOM-Update und Stabilisierung (zufällige Verzögerung)
-                    await self._random_delay(2.0, 4.0)
+                    # Warte auf DOM-Update und Stabilisierung
+                    await self._random_delay(1.0, 2.0)
                     try:
                         await self._page.wait_for_load_state("domcontentloaded", timeout=5000)
                     except asyncio.CancelledError:
@@ -224,8 +224,8 @@ class GTCHAScraper:
         heartbeat_task = asyncio.create_task(self._heartbeat(start_time))
 
         try:
-            # Kategorien in Gruppen aufteilen (max 3 parallel für kleinen Server)
-            MAX_PARALLEL = 3
+            # Kategorien in Gruppen aufteilen (konfigurierbar via PARALLEL_TABS)
+            MAX_PARALLEL = PARALLEL_TABS
             category_groups = [CATEGORIES[i:i+MAX_PARALLEL] for i in range(0, len(CATEGORIES), MAX_PARALLEL)]
 
             failed_categories = []
@@ -271,7 +271,7 @@ class GTCHAScraper:
 
                 # Kurze Pause zwischen Gruppen
                 if group_idx < len(category_groups) - 1:
-                    await self._random_delay(1.0, 2.0)
+                    await self._random_delay(0.5, 1.0)
 
             # Zusammenfassung
             if failed_categories:
@@ -311,7 +311,7 @@ class GTCHAScraper:
         try:
             # Seite laden
             await page.goto(self.base_url, wait_until="domcontentloaded", timeout=60000)
-            await asyncio.sleep(3)
+            await asyncio.sleep(2)
 
             # Tab klicken
             clicked = await self._click_category_tab_on_page(page, category)
@@ -319,7 +319,7 @@ class GTCHAScraper:
                 return (0, {})
 
             # Warten auf DOM-Update
-            await self._random_delay(2.0, 3.0)
+            await self._random_delay(1.0, 1.5)
 
             # Banner extrahieren
             count = await self._extract_banners_from_page(page, category, banners_data)
@@ -345,7 +345,7 @@ class GTCHAScraper:
 
         keywords = category_keywords.get(category, [category.lower()])
 
-        for attempt in range(3):
+        for attempt in range(2):
             try:
                 tabs = await page.query_selector_all('.pack_menu, .tab-item, .category-tab, [role="tab"], .nav-item, .menu-item')
 
@@ -371,8 +371,8 @@ class GTCHAScraper:
                     except:
                         pass
 
-            if attempt < 2:
-                await asyncio.sleep(2)
+            if attempt < 1:
+                await asyncio.sleep(1)
 
         return False
 
@@ -429,11 +429,11 @@ class GTCHAScraper:
 
         keywords = category_keywords.get(category, [category.lower()])
 
-        # Retry-Mechanismus
-        for attempt in range(3):
+        # Retry-Mechanismus (2 Versuche reichen normalerweise)
+        for attempt in range(2):
             try:
                 # Warte kurz damit die Seite stabil ist
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.3)
 
                 # Finde alle menu-items
                 menu_items = await self._page.query_selector_all('.pack_menu, .menu-item')
@@ -478,8 +478,8 @@ class GTCHAScraper:
                         pass
 
             # Warten vor nächstem Versuch
-            if attempt < 2:
-                await asyncio.sleep(2)
+            if attempt < 1:
+                await asyncio.sleep(1)
 
         logger.warning(f"   Tab nicht gefunden: {category}")
         return False
