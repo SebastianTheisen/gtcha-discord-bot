@@ -414,7 +414,15 @@ class GTCHAScraper:
                             all_tabs.append(t.strip())
                         except:
                             pass
-                    logger.debug(f"   [{category}] Gefundene Tabs: {all_tabs}")
+                    logger.info(f"   [{category}] Gefundene Tabs: {all_tabs}")
+
+                    # Screenshot wenn keine Tabs gefunden
+                    if not all_tabs:
+                        try:
+                            await page.screenshot(path=f"screenshots/debug/no_tabs_{category}.png")
+                            logger.warning(f"   [{category}] Screenshot gespeichert: no_tabs_{category}.png")
+                        except:
+                            pass
 
                 for tab in tabs:
                     try:
