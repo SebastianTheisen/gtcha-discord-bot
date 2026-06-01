@@ -386,6 +386,7 @@ class GTCHAScraper:
             "Weiss Schwarz": ["weiss", "schwarz", "ヴァイスシュヴァルツ", "ヴァイスシュバルツ"],
             "One piece": ["one piece", "onepiece", "ワンピース"],
             "Dragon Ball": ["dragon ball", "dragonball", "ドラゴンボール"],
+            "Ultraman": ["ultraman", "ウルトラマン"],
         }
 
         keywords = category_keywords.get(category, [category.lower()])
@@ -490,6 +491,7 @@ class GTCHAScraper:
             "Weiss Schwarz": ["weiss", "schwarz", "ヴァイスシュヴァルツ", "ヴァイスシュバルツ"],
             "One piece": ["one piece", "onepiece", "ワンピース"],
             "Dragon Ball": ["dragon ball", "dragonball", "ドラゴンボール"],
+            "Ultraman": ["ultraman", "ウルトラマン"],
         }
 
         keywords = category_keywords.get(category, [category.lower()])
