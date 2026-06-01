@@ -149,15 +149,15 @@ class GTCHAScraper:
             # === HAUPTLOGIK ===
             try:
                 self._current_status = "Seite laden"
-                await self._page.goto(self.base_url, wait_until="networkidle", timeout=60000)
+                await self._page.goto(self.base_url, wait_until="load", timeout=30000)
                 logger.info("Seite geladen, warte auf Tabs...")
                 # Warte auf Tab-Menü
                 try:
                     await self._page.wait_for_selector('.pack_menu_list .pack_menu', timeout=15000)
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(1)
                 except Exception as e:
                     logger.warning(f"Tab-Menü nicht gefunden: {e}")
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(3)
 
             except asyncio.CancelledError:
                 # Extern abgebrochen (z.B. durch Timeout) - weiterleiten
@@ -343,29 +343,28 @@ class GTCHAScraper:
         banners_data = {}
 
         try:
-            # Seite laden - networkidle wartet bis keine Netzwerk-Requests mehr
-            await page.goto(self.base_url, wait_until="networkidle", timeout=60000)
+            # Seite laden - 'load' wartet auf DOMContentLoaded + Bilder/Styles
+            await page.goto(self.base_url, wait_until="load", timeout=30000)
 
             # Warte auf Tab-Menü (JavaScript lädt die Tabs)
             try:
                 await page.wait_for_selector('.pack_menu_list .pack_menu', timeout=15000)
-                await asyncio.sleep(2)  # Extra Stabilisierung für JS
+                await asyncio.sleep(1)
             except Exception as e:
                 logger.debug(f"   [{category}] wait_for_selector fehlgeschlagen: {e}")
-                # Fallback: feste Wartezeit
-                await asyncio.sleep(5)
+                await asyncio.sleep(3)
 
             # Tab klicken (mit Retry)
             clicked = await self._click_category_tab_on_page(page, category)
             if not clicked:
                 # Retry: Seite neu laden und nochmal versuchen
                 logger.debug(f"   [{category}] Retry nach Tab-Fehler...")
-                await page.reload(wait_until="networkidle", timeout=30000)
+                await page.reload(wait_until="load", timeout=30000)
                 try:
                     await page.wait_for_selector('.pack_menu_list .pack_menu', timeout=15000)
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(1)
                 except Exception:
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(3)
                 clicked = await self._click_category_tab_on_page(page, category)
                 if not clicked:
                     return (0, {})
