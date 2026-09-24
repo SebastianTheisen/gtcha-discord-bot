@@ -926,16 +926,16 @@ class GTCHABot(commands.Bot):
                         logger.debug(f"URLs repariert für Banner {banner.pack_id}")
 
                 # Prüfe ob entries_per_day sich geändert hat
-                if banner.entries_per_day != old_entries:
+                # Nur updaten wenn neuer Wert nicht None ist (leeres buy_limit ignorieren)
+                if banner.entries_per_day is not None and banner.entries_per_day != old_entries:
                     await self.db.update_banner_entries(
                         banner.pack_id,
                         banner.entries_per_day
                     )
                     await self._update_thread_title(banner)
                     title_updated = True
-                    new_entries_str = banner.entries_per_day if banner.entries_per_day else "unbegrenzt"
                     old_entries_str = old_entries if old_entries else "unbegrenzt"
-                    logger.info(f"Update: {banner.pack_id} Entries: {old_entries_str} -> {new_entries_str}")
+                    logger.info(f"Update: {banner.pack_id} Entries: {old_entries_str} -> {banner.entries_per_day}")
 
                 # Track ob sich Packs geändert haben
                 packs_changed = banner.current_packs != old_packs
