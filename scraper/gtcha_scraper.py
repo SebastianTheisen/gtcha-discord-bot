@@ -9,6 +9,7 @@ GTCHA Webseiten-Scraper - VERSION v6 (Pure DOM)
 import asyncio
 import re
 import random
+import time
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Set
 from datetime import datetime, timezone, timedelta
@@ -71,6 +72,11 @@ class GTCHAScraper:
             viewport={"width": 1920, "height": 1080},
             user_agent=user_agent,
             locale="ja-JP",
+            extra_http_headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8",
+            }
         )
 
         self._page = await self._context.new_page()
@@ -149,7 +155,9 @@ class GTCHAScraper:
             # === HAUPTLOGIK ===
             try:
                 self._current_status = "Seite laden"
-                await self._page.goto(self.base_url, wait_until="load", timeout=30000)
+                # Cache-Busting: Timestamp-Parameter verhindert CDN-Cache-Treffer
+                cache_bust_url = f"{self.base_url}?_={int(time.time())}"
+                await self._page.goto(cache_bust_url, wait_until="load", timeout=30000)
                 logger.info("Seite geladen, warte auf Tabs...")
                 # Warte auf Tab-Menü
                 try:
@@ -354,8 +362,9 @@ class GTCHAScraper:
         banners_data = {}
 
         try:
-            # Seite laden - 'load' wartet auf DOMContentLoaded + Bilder/Styles
-            await page.goto(self.base_url, wait_until="load", timeout=30000)
+            # Seite laden - Cache-Busting via Timestamp-Parameter
+            cache_bust_url = f"{self.base_url}?_={int(time.time())}"
+            await page.goto(cache_bust_url, wait_until="load", timeout=30000)
 
             # Warte auf Tab-Menü (JavaScript lädt die Tabs)
             try:
@@ -370,7 +379,8 @@ class GTCHAScraper:
             if not clicked:
                 # Retry: Seite neu laden und nochmal versuchen
                 logger.debug(f"   [{category}] Retry nach Tab-Fehler...")
-                await page.reload(wait_until="load", timeout=30000)
+                retry_url = f"{self.base_url}?_={int(time.time())}"
+                await page.goto(retry_url, wait_until="load", timeout=30000)
                 try:
                     await page.wait_for_selector('.pack_menu_list .pack_menu', timeout=15000)
                     await asyncio.sleep(1)
