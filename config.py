@@ -93,6 +93,11 @@ ADMIN_CHANNEL_ID = int(os.getenv("ADMIN_CHANNEL_ID") or "0")
 MEMORY_WARNING_MB = int(os.getenv("MEMORY_WARNING_MB") or "300")
 MEMORY_CRITICAL_MB = int(os.getenv("MEMORY_CRITICAL_MB") or "500")
 
+# HTTP/SOCKS5-Proxy für den Scraper (optional, aber nötig wenn VPS-IP als Japan erkannt wird)
+# Beispiel: "http://user:pass@proxy-host:3128" oder "socks5://user:pass@proxy-host:1080"
+# Ohne Proxy liefert die Website je nach VPS-IP-Geolocation andere Pack-Zahlen (JP vs. international)
+SCRAPER_PROXY = os.getenv("SCRAPER_PROXY", "")
+
 # Paralleles Scrapen aktivieren (kann mehr RAM verbrauchen)
 PARALLEL_SCRAPING = os.getenv("PARALLEL_SCRAPING", "false").lower() == "true"
 

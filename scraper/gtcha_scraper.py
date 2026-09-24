@@ -18,7 +18,7 @@ from playwright.async_api import async_playwright, Page, Browser, BrowserContext
 from loguru import logger
 
 from .models import ScrapedBanner
-from config import CATEGORIES, PARALLEL_SCRAPING, PARALLEL_TABS
+from config import CATEGORIES, PARALLEL_SCRAPING, PARALLEL_TABS, SCRAPER_PROXY
 
 JST = timezone(timedelta(hours=9))
 
@@ -59,10 +59,19 @@ class GTCHAScraper:
         logger.info("Starte Browser...")
         self._playwright = await async_playwright().start()
 
-        self._browser = await self._playwright.chromium.launch(
-            headless=self.headless,
-            args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
-        )
+        # Proxy konfigurieren wenn SCRAPER_PROXY gesetzt ist.
+        # Nötig wenn VPS-IP vom Website-Server als Japan erkannt wird (falscher Pack-Pool).
+        launch_kwargs = {
+            "headless": self.headless,
+            "args": ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+        }
+        if SCRAPER_PROXY:
+            launch_kwargs["proxy"] = {"server": SCRAPER_PROXY}
+            logger.info(f"Proxy aktiv: {SCRAPER_PROXY.split('@')[-1]}")  # Passwort verstecken
+        else:
+            logger.info("Kein Proxy konfiguriert (SCRAPER_PROXY nicht gesetzt)")
+
+        self._browser = await self._playwright.chromium.launch(**launch_kwargs)
 
         # Zufälligen User-Agent auswählen
         user_agent = random.choice(USER_AGENTS)
