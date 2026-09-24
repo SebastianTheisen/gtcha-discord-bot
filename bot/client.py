@@ -859,6 +859,16 @@ class GTCHABot(commands.Bot):
             if not isinstance(thread, discord.Thread):
                 return False
 
+            # Archivierte Threads entsperren (Discord archiviert inaktive Threads automatisch → keine Posts möglich)
+            if thread.archived:
+                try:
+                    await discord_rate_limiter.acquire("thread_edit")
+                    await thread.edit(archived=False)
+                    logger.info(f"Thread {thread_id} entsperrt (war archiviert)")
+                except Exception as e:
+                    logger.warning(f"Konnte Thread {thread_id} nicht entsperren: {e}")
+                    return False
+
             # Kommentar erstellen
             old_packs = old_packs or 0
             new_packs = new_packs or 0
@@ -1050,6 +1060,13 @@ class GTCHABot(commands.Bot):
 
             if not isinstance(thread, discord.Thread):
                 return
+
+            if thread.archived:
+                try:
+                    await discord_rate_limiter.acquire("thread_edit")
+                    await thread.edit(archived=False)
+                except Exception:
+                    return
 
             # Starter-Message holen
             try:
