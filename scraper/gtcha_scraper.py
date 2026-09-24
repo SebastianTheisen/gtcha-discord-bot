@@ -785,7 +785,7 @@ class GTCHAScraper:
                             banner['entries_per_day'] = int(all_numbers[-1])
                             logger.debug(f"   Entries für {pack_id}: {banner['entries_per_day']} (Fallback)")
                         else:
-                            logger.warning(f"   Entries-Pattern nicht gefunden für {pack_id}: '{limit_text}'")
+                            logger.debug(f"   Entries-Pattern nicht gefunden für {pack_id}: '{limit_text}'")
             else:
                 logger.debug(f"   Kein .limit_detail/.buy_limit für {pack_id}")
 
