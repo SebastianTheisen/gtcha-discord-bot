@@ -301,7 +301,7 @@ class GTCHAScraper:
             logger.debug("Heartbeat gestoppt")
 
     async def _probe_detail_page_api(self, pack_id: int):
-        """Lädt die Detail-Seite eines Banners und loggt alle API-Calls (Diagnose)."""
+        """Lädt die Detail-Seite eines Banners, loggt alle API-Calls und liest DOM aus."""
         try:
             logger.info(f"[DETAIL-PROBE] Lade Detail-Seite für Banner {pack_id}...")
             detail_page = await self._context.new_page()
@@ -324,7 +324,49 @@ class GTCHAScraper:
                 await detail_page.wait_for_load_state("networkidle", timeout=5000)
             except Exception:
                 pass
-            await asyncio.sleep(2)
+            await asyncio.sleep(3)
+
+            # DOM direkt auslesen: Was sieht der Bot auf der Detail-Seite?
+            try:
+                count02 = await detail_page.evaluate(
+                    "() => { const el = document.querySelector('.count02'); return el ? el.innerText : 'NICHT GEFUNDEN'; }"
+                )
+                logger.info(f"[DETAIL-PROBE-DOM] .count02 Text: '{count02}'")
+
+                # Auch alle Elemente mit Zahlen X/Y suchen
+                all_counts = await detail_page.evaluate("""
+                    () => {
+                        const results = [];
+                        document.querySelectorAll('*').forEach(el => {
+                            if (el.children.length === 0 && el.innerText && /\\d+\\s*\\/\\s*\\d+/.test(el.innerText)) {
+                                results.push({class: el.className, text: el.innerText.trim()});
+                            }
+                        });
+                        return results.slice(0, 10);
+                    }
+                """)
+                logger.info(f"[DETAIL-PROBE-DOM] Alle X/Y Elemente: {all_counts}")
+            except Exception as e:
+                logger.warning(f"[DETAIL-PROBE-DOM] Fehler: {e}")
+
+            # Direkte API-Guesses mit bekannten Session-Cookies ausprobieren
+            for endpoint in [
+                f'/api/user/pack/detail?id={pack_id}',
+                f'/api/user/pack/detail?pack_id={pack_id}',
+                f'/api/pack/{pack_id}',
+                f'/api/user/pack/{pack_id}',
+            ]:
+                try:
+                    r = await detail_page.request.get(
+                        f"{self.base_url}{endpoint}&_={int(time.time())}",
+                        headers={"Accept": "application/json"}
+                    )
+                    if r.ok:
+                        body = await r.text()
+                        logger.info(f"[DETAIL-PROBE-DIRECT] {endpoint}: {body[:400]}")
+                except Exception:
+                    pass
+
             await detail_page.close()
             logger.info(f"[DETAIL-PROBE] Fertig für Banner {pack_id}")
         except Exception as e:
