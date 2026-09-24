@@ -805,7 +805,7 @@ class GTCHAScraper:
                     logger.debug(f"   [PACK-API] {pack_id}: unbekannte Felder {list(api_item.keys())}")
 
                 # total_packs aus API
-                total_fields = ['total_pack', 'total_count', 'pack_total', 'total', 'pack_limit']
+                total_fields = ['total_pack_count', 'total_pack', 'total_count', 'pack_total', 'total', 'pack_limit']
                 for field in total_fields:
                     val = api_item.get(field)
                     if val is not None:
