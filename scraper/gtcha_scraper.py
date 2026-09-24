@@ -398,12 +398,12 @@ class GTCHAScraper:
         category_keywords = {
             "Bonus": ["bonus", "ボーナス"],
             "MIX": ["mix"],
-            "Yu-Gi-Oh!": ["yu-gi-oh", "yugioh", "遊戯王"],
+            "Yu-Gi-Oh!": ["yu-gi-oh", "yugioh", "遊戯王", "遊☆戯☆王", "遊戯", "gi-oh"],
             "Pokémon": ["pokemon", "poke", "ポケモン"],
-            "Weiss Schwarz": ["weiss", "schwarz", "ヴァイスシュヴァルツ", "ヴァイスシュバルツ"],
+            "Weiss Schwarz": ["weiss", "schwarz", "ヴァイスシュヴァルツ", "ヴァイスシュバルツ", "ヴァイス", "weis"],
             "One piece": ["one piece", "onepiece", "ワンピース"],
             "Dragon Ball": ["dragon ball", "dragonball", "ドラゴンボール"],
-            "Ultraman": ["ultraman", "ウルトラマン"],
+            "Ultraman": ["ultraman", "ウルトラマン", "ウルトラ"],
         }
 
         keywords = category_keywords.get(category, [category.lower()])
@@ -505,18 +505,15 @@ class GTCHAScraper:
 
     async def _click_category_tab(self, category: str) -> bool:
         """Klickt auf einen Kategorie-Tab im Menü."""
-        # Mapping: Config-Name -> mögliche DOM-Texte (lowercase für Vergleich)
-        # Japanische Tab-Namen von der Webseite:
-        # ボーナス, MIX, 遊戯王, ポケモン, ヴァイスシュヴァルツ, ワンピース, ホビー
         category_keywords = {
             "Bonus": ["bonus", "ボーナス"],
             "MIX": ["mix"],
-            "Yu-Gi-Oh!": ["yu-gi-oh", "yugioh", "遊戯王"],
+            "Yu-Gi-Oh!": ["yu-gi-oh", "yugioh", "遊戯王", "遊☆戯☆王", "遊戯", "gi-oh"],
             "Pokémon": ["pokemon", "poke", "ポケモン"],
-            "Weiss Schwarz": ["weiss", "schwarz", "ヴァイスシュヴァルツ", "ヴァイスシュバルツ"],
+            "Weiss Schwarz": ["weiss", "schwarz", "ヴァイスシュヴァルツ", "ヴァイスシュバルツ", "ヴァイス", "weis"],
             "One piece": ["one piece", "onepiece", "ワンピース"],
             "Dragon Ball": ["dragon ball", "dragonball", "ドラゴンボール"],
-            "Ultraman": ["ultraman", "ウルトラマン"],
+            "Ultraman": ["ultraman", "ウルトラマン", "ウルトラ"],
         }
 
         keywords = category_keywords.get(category, [category.lower()])
@@ -531,7 +528,7 @@ class GTCHAScraper:
                 menu_items = await self._page.query_selector_all('.pack_menu_list .pack_menu')
 
                 if attempt == 0:
-                    # Log alle gefundenen Tabs beim ersten Versuch
+                    # Log alle gefundenen Tabs beim ersten Versuch (INFO damit es immer sichtbar ist)
                     all_tabs = []
                     for item in menu_items:
                         try:
@@ -539,7 +536,7 @@ class GTCHAScraper:
                             all_tabs.append(t.strip())
                         except:
                             pass
-                    logger.debug(f"   Gefundene Tabs: {all_tabs}")
+                    logger.info(f"[TABS] {category}: Gefundene Tabs: {all_tabs}")
 
                 for item in menu_items:
                     try:
