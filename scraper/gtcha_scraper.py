@@ -98,7 +98,10 @@ class GTCHAScraper:
 
         # API-Response abfangen: /api/user/pack/list enthält echte Pack-Zahlen
         # (DOM zeigt CDN-gecachte Werte, API immer aktuell)
+        # Sobald Proxy-Daten geladen sind (_proxy_data_loaded=True), werden Browser-Daten ignoriert,
+        # damit die korrekten regionalen Pack-Zahlen (DE via WARP) nicht überschrieben werden.
         self._api_pack_data: Dict[int, dict] = {}
+        self._proxy_data_loaded: bool = False
 
         async def _capture_pack_api(response):
             try:
@@ -110,6 +113,9 @@ class GTCHAScraper:
                 url = response.url
 
                 if 'pack/list' in url:
+                    if self._proxy_data_loaded:
+                        # Proxy-Daten haben Priorität – Browser-Daten ignorieren
+                        return
                     data = await response.json()
                     items = data.get('list', [])
                     for item in items:
@@ -117,7 +123,7 @@ class GTCHAScraper:
                         if pid:
                             self._api_pack_data[int(pid)] = item
                     if items:
-                        logger.debug(f"[PACK-API] {len(items)} Packs geladen")
+                        logger.debug(f"[PACK-API] {len(items)} Browser-Packs geladen (noch kein Proxy)")
 
             except Exception as e:
                 logger.debug(f"[PACK-API] Fehler: {e}")
@@ -181,6 +187,8 @@ class GTCHAScraper:
 
         self._captured_banners = {}
         self._category_banners = {cat: set() for cat in CATEGORIES}
+        self._api_pack_data = {}
+        self._proxy_data_loaded = False
         self._current_status = "Initialisierung"
 
         now_jst = datetime.now(JST)
@@ -340,7 +348,8 @@ class GTCHAScraper:
                     if pid:
                         self._api_pack_data[int(pid)] = item
                         updated += 1
-                logger.info(f"[PROXY-API] {updated} Pack-Zahlen via Proxy geladen (regionaler Pool: DE)")
+                self._proxy_data_loaded = True
+                logger.info(f"[PROXY-API] {updated} Pack-Zahlen via Proxy geladen (regionaler Pool: DE) - Browser-Interceptor gesperrt")
             else:
                 err = stderr.decode()[:200] if stderr else f"returncode={proc.returncode}"
                 logger.warning(f"[PROXY-API] curl Fehler: {err} - Fallback auf direkte Pack-Zahlen")
@@ -352,6 +361,8 @@ class GTCHAScraper:
 
         self._captured_banners = {}
         self._category_banners = {cat: set() for cat in CATEGORIES}
+        self._api_pack_data = {}
+        self._proxy_data_loaded = False
         self._current_status = "Parallel-Scraping"
 
         now_jst = datetime.now(JST)
@@ -363,6 +374,13 @@ class GTCHAScraper:
         heartbeat_task = asyncio.create_task(self._heartbeat(start_time))
 
         try:
+            # Pack-Zahlen via Proxy vorab laden (vor parallelen Page-Loads)
+            # Parallel-Pages würden sonst alle mit JP-IP API-Calls machen
+            try:
+                await asyncio.wait_for(self._fetch_pack_counts_via_proxy(), timeout=45.0)
+            except asyncio.TimeoutError:
+                logger.warning("[PROXY-API] Timeout nach 45s - fahre mit direkten Pack-Zahlen fort")
+
             # Kategorien in Gruppen aufteilen (konfigurierbar via PARALLEL_TABS)
             MAX_PARALLEL = PARALLEL_TABS
             category_groups = [CATEGORIES[i:i+MAX_PARALLEL] for i in range(0, len(CATEGORIES), MAX_PARALLEL)]
