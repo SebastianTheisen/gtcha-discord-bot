@@ -10,6 +10,7 @@ import asyncio
 import re
 import random
 import time
+import unicodedata
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Set
 from datetime import datetime, timezone, timedelta
@@ -21,6 +22,13 @@ from .models import ScrapedBanner
 from config import CATEGORIES, PARALLEL_SCRAPING, PARALLEL_TABS, SCRAPER_PROXY
 
 JST = timezone(timedelta(hours=9))
+
+
+def _normalize(text: str) -> str:
+    """Akzente entfernen und in Kleinbuchstaben – damit 'pokemon' auf 'Pokémon' matcht."""
+    nfkd = unicodedata.normalize('NFKD', text)
+    return ''.join(c for c in nfkd if not unicodedata.combining(c)).lower()
+
 
 # User-Agent Pool für Rotation
 USER_AGENTS = [
@@ -520,34 +528,39 @@ class GTCHAScraper:
         category_keywords = {
             "Bonus": ["bonus", "ボーナス"],
             "MIX": ["mix"],
-            "Yu-Gi-Oh!": ["yu-gi-oh", "yugioh", "遊戯王", "遊☆戯☆王", "遊戯", "gi-oh"],
-            "Pokémon": ["pokemon", "poke", "ポケモン"],
+            "Yu-Gi-Oh!": ["yu-gi-oh", "yugioh", "遊戯王", "遊☆戯☆王", "遊戯", "gi-oh", "yugi"],
+            "Pokémon": ["pokemon", "pokémon", "poke", "ポケモン"],
             "Weiss Schwarz": ["weiss", "schwarz", "ヴァイスシュヴァルツ", "ヴァイスシュバルツ", "ヴァイス", "weis"],
             "One piece": ["one piece", "onepiece", "ワンピース"],
             "Dragon Ball": ["dragon ball", "dragonball", "ドラゴンボール"],
             "Ultraman": ["ultraman", "ウルトラマン", "ウルトラ"],
         }
 
-        keywords = category_keywords.get(category, [category.lower()])
+        keywords = [_normalize(k) for k in category_keywords.get(category, [category.lower()])]
 
         for attempt in range(2):
             try:
-                # Warte kurz damit die Seite stabil ist (wie in sequenzieller Version)
                 await asyncio.sleep(0.3)
-
-                # Selektoren für Tab-Menü
                 tabs = await page.query_selector_all('.pack_menu_list .pack_menu')
 
                 for tab in tabs:
                     try:
                         text = await tab.inner_text()
-                        text_lower = text.lower().strip()
+                        if not text.strip():
+                            text = await tab.text_content() or ''
+                        if not text.strip():
+                            text = (await tab.get_attribute('aria-label') or
+                                    await tab.get_attribute('title') or
+                                    await tab.get_attribute('data-category') or '')
+
+                        text_norm = _normalize(text.strip())
+                        if not text_norm:
+                            continue
 
                         for keyword in keywords:
-                            if keyword in text_lower:
+                            if keyword in text_norm:
                                 await tab.click()
                                 logger.debug(f"   [{category}] Klick: '{text.strip()}' (keyword: {keyword})")
-                                # Warte nach Klick (reduziert von 1s)
                                 await asyncio.sleep(0.3)
                                 return True
                     except:
@@ -567,15 +580,14 @@ class GTCHAScraper:
             if attempt < 1:
                 await asyncio.sleep(1)
 
-        # Zeige verfügbare Tabs damit wir sehen welche Namen die Website aktuell nutzt
+        # Zeige verfügbare Tabs für Diagnose
         try:
             all_tabs = await page.query_selector_all('.pack_menu_list .pack_menu')
             tab_texts = []
             for t in all_tabs:
                 try:
-                    text = await t.inner_text()
-                    if text.strip():
-                        tab_texts.append(repr(text.strip()))
+                    txt = (await t.inner_text()).strip() or (await t.text_content() or '').strip()
+                    tab_texts.append(repr(txt))
                 except:
                     pass
             logger.warning(f"   Tab nicht gefunden: {category} | Verfügbare Tabs: {tab_texts}")
@@ -624,37 +636,43 @@ class GTCHAScraper:
         category_keywords = {
             "Bonus": ["bonus", "ボーナス"],
             "MIX": ["mix"],
-            "Yu-Gi-Oh!": ["yu-gi-oh", "yugioh", "遊戯王", "遊☆戯☆王", "遊戯", "gi-oh"],
-            "Pokémon": ["pokemon", "poke", "ポケモン"],
+            "Yu-Gi-Oh!": ["yu-gi-oh", "yugioh", "遊戯王", "遊☆戯☆王", "遊戯", "gi-oh", "yugi"],
+            "Pokémon": ["pokemon", "pokémon", "poke", "ポケモン"],
             "Weiss Schwarz": ["weiss", "schwarz", "ヴァイスシュヴァルツ", "ヴァイスシュバルツ", "ヴァイス", "weis"],
             "One piece": ["one piece", "onepiece", "ワンピース"],
             "Dragon Ball": ["dragon ball", "dragonball", "ドラゴンボール"],
             "Ultraman": ["ultraman", "ウルトラマン", "ウルトラ"],
         }
 
-        keywords = category_keywords.get(category, [category.lower()])
+        keywords = [_normalize(k) for k in category_keywords.get(category, [category.lower()])]
 
         # Retry-Mechanismus (2 Versuche reichen normalerweise)
         for attempt in range(2):
             try:
-                # Warte kurz damit die Seite stabil ist
                 await asyncio.sleep(0.3)
-
-                # Finde alle menu-items
                 menu_items = await self._page.query_selector_all('.pack_menu_list .pack_menu')
 
                 for item in menu_items:
                     try:
+                        # inner_text() für sichtbaren Text, text_content() als Fallback
                         text = await item.inner_text()
-                        text_clean = text.strip()
-                        text_lower = text_clean.lower()
+                        if not text.strip():
+                            text = await item.text_content() or ''
+                        if not text.strip():
+                            # Letzter Versuch: aria-label oder title Attribut
+                            text = (await item.get_attribute('aria-label') or
+                                    await item.get_attribute('title') or
+                                    await item.get_attribute('data-category') or '')
 
-                        # Prüfe ob einer der Keywords im Tab-Text vorkommt
+                        text_norm = _normalize(text.strip())
+                        if not text_norm:
+                            continue
+
                         for keyword in keywords:
-                            if keyword in text_lower:
+                            if keyword in text_norm:
                                 await item.click()
-                                logger.debug(f"   Klick: '{text_clean}' (keyword: {keyword})")
-                                await asyncio.sleep(0.3)  # reduziert von 1s
+                                logger.debug(f"   Klick: '{text.strip()}' (keyword: {keyword})")
+                                await asyncio.sleep(0.3)
                                 return True
                     except Exception as inner_e:
                         logger.debug(f"   Item-Fehler: {inner_e}")
@@ -662,7 +680,6 @@ class GTCHAScraper:
 
             except Exception as e:
                 logger.debug(f"   Versuch {attempt+1} fehlgeschlagen: {e}")
-                # Bei Crash: Seite neu laden
                 if "crashed" in str(e).lower():
                     try:
                         logger.warning(f"   Seite crasht - lade neu...")
@@ -671,19 +688,17 @@ class GTCHAScraper:
                     except:
                         pass
 
-            # Warten vor nächstem Versuch
             if attempt < 1:
                 await asyncio.sleep(1)
 
-        # Zeige verfügbare Tabs damit wir sehen welche Namen die Website aktuell nutzt
+        # Zeige verfügbare Tabs für Diagnose
         try:
             all_tabs = await self._page.query_selector_all('.pack_menu_list .pack_menu')
             tab_texts = []
             for t in all_tabs:
                 try:
-                    text = await t.inner_text()
-                    if text.strip():
-                        tab_texts.append(repr(text.strip()))
+                    txt = (await t.inner_text()).strip() or (await t.text_content() or '').strip()
+                    tab_texts.append(repr(txt))
                 except:
                     pass
             logger.warning(f"   Tab nicht gefunden: {category} | Verfügbare Tabs: {tab_texts}")
