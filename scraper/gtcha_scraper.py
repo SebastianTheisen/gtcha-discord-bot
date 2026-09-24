@@ -159,6 +159,17 @@ class GTCHAScraper:
                     logger.warning(f"Tab-Menü nicht gefunden: {e}")
                     await asyncio.sleep(3)
 
+                # DEBUG: Was ist wirklich im DOM?
+                try:
+                    tab_count = await self._page.evaluate("document.querySelectorAll('.pack_menu').length")
+                    menu_list_count = await self._page.evaluate("document.querySelectorAll('.pack_menu_list').length")
+                    body_text = await self._page.evaluate("document.body ? document.body.innerHTML.substring(0, 500) : 'KEIN BODY'")
+                    logger.info(f"DOM-DEBUG: .pack_menu={tab_count}, .pack_menu_list={menu_list_count}")
+                    logger.info(f"DOM-DEBUG Body: {body_text[:300]}")
+                    await self._page.screenshot(path="screenshots/debug/page_load.png")
+                except Exception as de:
+                    logger.warning(f"DOM-Debug Fehler: {de}")
+
             except asyncio.CancelledError:
                 # Extern abgebrochen (z.B. durch Timeout) - weiterleiten
                 raise
