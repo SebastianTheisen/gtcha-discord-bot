@@ -836,17 +836,17 @@ class GTCHABot(commands.Bot):
         except Exception as e:
             logger.error(f"Fehler beim Thread erstellen: {e}")
 
-    async def _post_pack_update_to_thread(self, pack_id: int, old_packs: int, new_packs: int, total_packs: int):
-        """Postet einen Kommentar im Thread wenn sich die Pack-Anzahl ändert."""
+    async def _post_pack_update_to_thread(self, pack_id: int, old_packs: int, new_packs: int, total_packs: int) -> bool:
+        """Postet einen Kommentar im Thread wenn sich die Pack-Anzahl ändert. Gibt True bei Erfolg zurück."""
         try:
             thread_data = await self.db.get_thread_by_banner_id(pack_id)
             if not thread_data:
                 logger.debug(f"Kein Thread für Pack-Update {pack_id}")
-                return
+                return False
 
             thread_id = thread_data.get('thread_id')
             if not thread_id:
-                return
+                return False
 
             # Thread holen
             thread = self.get_channel(int(thread_id))
@@ -855,12 +855,12 @@ class GTCHABot(commands.Bot):
                     thread = await self.fetch_channel(int(thread_id))
                 except discord.NotFound:
                     logger.debug(f"Thread {thread_id} nicht gefunden")
-                    return
+                    return False
                 except Exception:
-                    return
+                    return False
 
             if not isinstance(thread, discord.Thread):
-                return
+                return False
 
             # Kommentar erstellen
             old_packs = old_packs or 0
@@ -895,11 +895,14 @@ class GTCHABot(commands.Bot):
             await discord_rate_limiter.acquire("message_send")
             await thread.send(message)
             logger.info(f"Pack-Update gepostet: {pack_id} ({old_packs} → {new_packs})")
+            return True
 
         except discord.HTTPException as e:
             logger.warning(f"Discord-Fehler bei Pack-Update {pack_id}: {e}")
+            return False
         except Exception as e:
             logger.warning(f"Fehler bei Pack-Update {pack_id}: {e}")
+            return False
 
     async def _process_banner_update(self, banner, existing: dict, semaphore: asyncio.Semaphore) -> dict:
         """
@@ -942,19 +945,24 @@ class GTCHABot(commands.Bot):
 
                 if packs_changed:
                     logger.info(f"Pack-Änderung erkannt: {banner.pack_id} {old_packs} -> {banner.current_packs}")
-                    await self.db.update_banner_packs(
-                        banner.pack_id,
-                        banner.current_packs
-                    )
                     if old_packs is not None:
-                        await self._post_pack_update_to_thread(
+                        # Post FIRST - nur bei Erfolg DB updaten
+                        # (Fehler: DB updated, Discord-Post schlägt fehl → nächster Scrape erkennt keine Änderung mehr)
+                        posted = await self._post_pack_update_to_thread(
                             banner.pack_id,
                             old_packs,
                             banner.current_packs,
                             banner.total_packs
                         )
+                        if posted:
+                            await self.db.update_banner_packs(banner.pack_id, banner.current_packs)
+                        else:
+                            logger.warning(f"Pack-Update-Post für {banner.pack_id} fehlgeschlagen - DB bleibt bei {old_packs}, nächster Scrape versucht es erneut")
+                            packs_changed = False  # Kein Embed/Probability-Update wenn Post fehlschlug
                     else:
-                        logger.debug(f"Initiales Pack-Update für {banner.pack_id}: {banner.current_packs} (kein Post)")
+                        # Initiales Pack-Update (kein Discord-Post nötig)
+                        await self.db.update_banner_packs(banner.pack_id, banner.current_packs)
+                        logger.debug(f"Initiales Pack-Update für {banner.pack_id}: {banner.current_packs}")
 
                 # Embed NUR aktualisieren wenn sich etwas geändert hat
                 if packs_changed or title_updated:
