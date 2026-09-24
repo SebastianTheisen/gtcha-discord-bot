@@ -282,6 +282,9 @@ class GTCHAScraper:
                 if count > 0:
                     logger.info(f"   {cat}: {count} Banner")
 
+            # Einmalige Diagnose: Detail-Seite für Banner 24027 laden und alle API-Calls loggen
+            await self._probe_detail_page_api(24027)
+
             # Konvertieren
             banners = self._convert_to_scraped_banners()
 
@@ -296,6 +299,36 @@ class GTCHAScraper:
             except asyncio.CancelledError:
                 pass
             logger.debug("Heartbeat gestoppt")
+
+    async def _probe_detail_page_api(self, pack_id: int):
+        """Lädt die Detail-Seite eines Banners und loggt alle API-Calls (Diagnose)."""
+        try:
+            logger.info(f"[DETAIL-PROBE] Lade Detail-Seite für Banner {pack_id}...")
+            detail_page = await self._context.new_page()
+
+            async def capture(response):
+                try:
+                    if response.status == 200:
+                        ct = response.headers.get('content-type', '')
+                        if 'json' in ct:
+                            url = response.url
+                            body = await response.text()
+                            logger.info(f"[DETAIL-PROBE-API] {url}: {body[:800]}")
+                except Exception:
+                    pass
+
+            detail_page.on('response', capture)
+            url = f"{self.base_url}/pack-detail?packId={pack_id}&_={int(time.time())}"
+            await detail_page.goto(url, wait_until="load", timeout=30000)
+            try:
+                await detail_page.wait_for_load_state("networkidle", timeout=5000)
+            except Exception:
+                pass
+            await asyncio.sleep(2)
+            await detail_page.close()
+            logger.info(f"[DETAIL-PROBE] Fertig für Banner {pack_id}")
+        except Exception as e:
+            logger.warning(f"[DETAIL-PROBE] Fehler: {e}")
 
     async def scrape_all_banners_parallel(self) -> List[ScrapedBanner]:
         """Scrapet alle Kategorien parallel mit mehreren Browser-Tabs."""
