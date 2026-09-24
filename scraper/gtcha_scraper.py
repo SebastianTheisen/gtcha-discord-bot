@@ -77,16 +77,24 @@ class GTCHAScraper:
         user_agent = random.choice(USER_AGENTS)
         logger.debug(f"User-Agent: {user_agent[:50]}...")
 
+        # Manche Server nutzen X-Forwarded-For / X-Real-IP für Geolocation statt der echten IP.
+        # Wir senden eine deutsche Telekom-IP damit der Server Deutschland als Herkunftsland erkennt.
+        # Falls die Seite Cloudflare nutzt, ignoriert CF diese Headers – dann hilft nur SCRAPER_PROXY.
+        geo_headers = {
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
+            "X-Forwarded-For": "217.237.150.100",   # Deutsche Telekom (T-Online)
+            "X-Real-IP": "217.237.150.100",
+            "CF-Connecting-IP": "217.237.150.100",
+            "X-Country": "DE",
+            "X-Country-Code": "DE",
+        }
+
         self._context = await self._browser.new_context(
             viewport={"width": 1920, "height": 1080},
             user_agent=user_agent,
-            # Kein locale="ja-JP" - Website liefert sonst japanisches Pack-Kontingent (andere Zahlen!)
-            # Ohne Locale bekommt der Bot das gleiche internationale Kontingent wie deutsche Nutzer
-            extra_http_headers={
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-                "Pragma": "no-cache",
-                "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
-            }
+            extra_http_headers=geo_headers,
         )
 
         self._page = await self._context.new_page()
