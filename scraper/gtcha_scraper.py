@@ -538,6 +538,33 @@ class GTCHAScraper:
 
         keywords = [_normalize(k) for k in category_keywords.get(category, [category.lower()])]
 
+        async def _get_tab_id(tab) -> str:
+            parts = []
+            for getter in [
+                lambda: tab.inner_text(),
+                lambda: tab.text_content(),
+                lambda: tab.get_attribute('aria-label'),
+                lambda: tab.get_attribute('title'),
+                lambda: tab.get_attribute('data-category'),
+                lambda: tab.get_attribute('class'),
+            ]:
+                try:
+                    val = await getter()
+                    if val and val.strip():
+                        parts.append(val.strip())
+                except:
+                    pass
+            try:
+                imgs = await tab.query_selector_all('img')
+                for img in imgs:
+                    for attr in ['alt', 'src', 'data-src']:
+                        val = await img.get_attribute(attr)
+                        if val and val.strip():
+                            parts.append(val.strip())
+            except:
+                pass
+            return ' '.join(parts)
+
         for attempt in range(2):
             try:
                 await asyncio.sleep(0.3)
@@ -545,22 +572,15 @@ class GTCHAScraper:
 
                 for tab in tabs:
                     try:
-                        text = await tab.inner_text()
-                        if not text.strip():
-                            text = await tab.text_content() or ''
-                        if not text.strip():
-                            text = (await tab.get_attribute('aria-label') or
-                                    await tab.get_attribute('title') or
-                                    await tab.get_attribute('data-category') or '')
-
-                        text_norm = _normalize(text.strip())
+                        combined = await _get_tab_id(tab)
+                        text_norm = _normalize(combined)
                         if not text_norm:
                             continue
 
                         for keyword in keywords:
                             if keyword in text_norm:
                                 await tab.click()
-                                logger.debug(f"   [{category}] Klick: '{text.strip()}' (keyword: {keyword})")
+                                logger.debug(f"   [{category}] Klick: '{combined[:60]}' (keyword: {keyword})")
                                 await asyncio.sleep(0.3)
                                 return True
                     except:
@@ -580,17 +600,17 @@ class GTCHAScraper:
             if attempt < 1:
                 await asyncio.sleep(1)
 
-        # Zeige verfügbare Tabs für Diagnose
+        # Zeige alle Tab-Identifier für Diagnose
         try:
             all_tabs = await page.query_selector_all('.pack_menu_list .pack_menu')
-            tab_texts = []
+            tab_info = []
             for t in all_tabs:
                 try:
-                    txt = (await t.inner_text()).strip() or (await t.text_content() or '').strip()
-                    tab_texts.append(repr(txt))
+                    info = await _get_tab_id(t)
+                    tab_info.append(repr(info[:80]) if info else "''")
                 except:
-                    pass
-            logger.warning(f"   Tab nicht gefunden: {category} | Verfügbare Tabs: {tab_texts}")
+                    tab_info.append("'?'")
+            logger.warning(f"   Tab nicht gefunden: {category} | Tabs: {tab_info}")
         except:
             logger.warning(f"   Tab nicht gefunden: {category}")
         return False
@@ -646,7 +666,35 @@ class GTCHAScraper:
 
         keywords = [_normalize(k) for k in category_keywords.get(category, [category.lower()])]
 
-        # Retry-Mechanismus (2 Versuche reichen normalerweise)
+        async def _get_tab_identifier(item) -> str:
+            """Alle möglichen Text-Quellen eines Tabs sammeln."""
+            parts = []
+            for getter in [
+                lambda: item.inner_text(),
+                lambda: item.text_content(),
+                lambda: item.get_attribute('aria-label'),
+                lambda: item.get_attribute('title'),
+                lambda: item.get_attribute('data-category'),
+                lambda: item.get_attribute('class'),
+            ]:
+                try:
+                    val = await getter()
+                    if val and val.strip():
+                        parts.append(val.strip())
+                except:
+                    pass
+            # Bild-Src (Dateiname enthält oft den Kategorienamen)
+            try:
+                imgs = await item.query_selector_all('img')
+                for img in imgs:
+                    for attr in ['alt', 'src', 'data-src']:
+                        val = await img.get_attribute(attr)
+                        if val and val.strip():
+                            parts.append(val.strip())
+            except:
+                pass
+            return ' '.join(parts)
+
         for attempt in range(2):
             try:
                 await asyncio.sleep(0.3)
@@ -654,24 +702,15 @@ class GTCHAScraper:
 
                 for item in menu_items:
                     try:
-                        # inner_text() für sichtbaren Text, text_content() als Fallback
-                        text = await item.inner_text()
-                        if not text.strip():
-                            text = await item.text_content() or ''
-                        if not text.strip():
-                            # Letzter Versuch: aria-label oder title Attribut
-                            text = (await item.get_attribute('aria-label') or
-                                    await item.get_attribute('title') or
-                                    await item.get_attribute('data-category') or '')
-
-                        text_norm = _normalize(text.strip())
+                        combined = await _get_tab_identifier(item)
+                        text_norm = _normalize(combined)
                         if not text_norm:
                             continue
 
                         for keyword in keywords:
                             if keyword in text_norm:
                                 await item.click()
-                                logger.debug(f"   Klick: '{text.strip()}' (keyword: {keyword})")
+                                logger.debug(f"   Klick: '{combined[:60]}' (keyword: {keyword})")
                                 await asyncio.sleep(0.3)
                                 return True
                     except Exception as inner_e:
@@ -691,17 +730,17 @@ class GTCHAScraper:
             if attempt < 1:
                 await asyncio.sleep(1)
 
-        # Zeige verfügbare Tabs für Diagnose
+        # Zeige alle Tab-Identifier für Diagnose (damit wir CSS-Klassen/Bilder sehen)
         try:
             all_tabs = await self._page.query_selector_all('.pack_menu_list .pack_menu')
-            tab_texts = []
+            tab_info = []
             for t in all_tabs:
                 try:
-                    txt = (await t.inner_text()).strip() or (await t.text_content() or '').strip()
-                    tab_texts.append(repr(txt))
+                    info = await _get_tab_identifier(t)
+                    tab_info.append(repr(info[:80]) if info else "''")
                 except:
-                    pass
-            logger.warning(f"   Tab nicht gefunden: {category} | Verfügbare Tabs: {tab_texts}")
+                    tab_info.append("'?'")
+            logger.warning(f"   Tab nicht gefunden: {category} | Tabs: {tab_info}")
         except:
             logger.warning(f"   Tab nicht gefunden: {category}")
         return False
