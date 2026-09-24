@@ -208,6 +208,11 @@ class Database:
     async def save_thread(self, banner_id: int, thread_id: int, channel_id: int, starter_message_id: int) -> None:
         now = datetime.now().isoformat()
         async with aiosqlite.connect(self.db_path) as db:
+            # Alte Threads für denselben Banner als expired markieren (verhindert doppelte Einträge)
+            await db.execute(
+                "UPDATE discord_threads SET is_expired = 1 WHERE banner_id = ? AND thread_id != ?",
+                (banner_id, thread_id)
+            )
             await db.execute("""
                 INSERT OR REPLACE INTO discord_threads
                 (banner_id, thread_id, channel_id, starter_message_id, created_at)
@@ -254,8 +259,10 @@ class Database:
     async def get_thread_by_banner_id(self, banner_id: int) -> Optional[Dict]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
+            # Aktive Threads zuerst (is_expired=0), dann neueste - verhindert Rückgabe alter gelöschter Threads
             cursor = await db.execute(
-                "SELECT * FROM discord_threads WHERE banner_id = ?", (banner_id,)
+                "SELECT * FROM discord_threads WHERE banner_id = ? ORDER BY is_expired ASC, id DESC LIMIT 1",
+                (banner_id,)
             )
             row = await cursor.fetchone()
             return dict(row) if row else None
