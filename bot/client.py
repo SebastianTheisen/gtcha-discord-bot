@@ -894,12 +894,12 @@ class GTCHABot(commands.Bot):
 
             await discord_rate_limiter.acquire("message_send")
             await thread.send(message)
-            logger.debug(f"Pack-Update gepostet in Thread {thread_id}")
+            logger.info(f"Pack-Update gepostet: {pack_id} ({old_packs} → {new_packs})")
 
         except discord.HTTPException as e:
-            logger.debug(f"Discord-Fehler bei Pack-Update: {e}")
+            logger.warning(f"Discord-Fehler bei Pack-Update {pack_id}: {e}")
         except Exception as e:
-            logger.debug(f"Fehler bei Pack-Update für {pack_id}: {e}")
+            logger.warning(f"Fehler bei Pack-Update {pack_id}: {e}")
 
     async def _process_banner_update(self, banner, existing: dict, semaphore: asyncio.Semaphore) -> dict:
         """
@@ -941,6 +941,7 @@ class GTCHABot(commands.Bot):
                 packs_changed = banner.current_packs != old_packs
 
                 if packs_changed:
+                    logger.info(f"Pack-Änderung erkannt: {banner.pack_id} {old_packs} -> {banner.current_packs}")
                     await self.db.update_banner_packs(
                         banner.pack_id,
                         banner.current_packs
@@ -952,7 +953,6 @@ class GTCHABot(commands.Bot):
                             banner.current_packs,
                             banner.total_packs
                         )
-                        logger.info(f"Update: {banner.pack_id} Packs: {old_packs} -> {banner.current_packs}")
                     else:
                         logger.debug(f"Initiales Pack-Update für {banner.pack_id}: {banner.current_packs} (kein Post)")
 
