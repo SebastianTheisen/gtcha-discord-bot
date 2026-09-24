@@ -41,9 +41,6 @@ class GTCHAScraper:
         self._browser: Optional[Browser] = None
         self._context: Optional[BrowserContext] = None
         self._page: Optional[Page] = None
-        self.debug_dir = Path("screenshots/debug")
-        self.debug_dir.mkdir(parents=True, exist_ok=True)
-
         # Banner-Daten
         self._captured_banners: Dict[int, Dict] = {}
         self._category_banners: Dict[str, Set[int]] = {cat: set() for cat in CATEGORIES}
@@ -120,13 +117,7 @@ class GTCHAScraper:
                         if pid:
                             self._api_pack_data[int(pid)] = item
                     if items:
-                        logger.info(f"[PACK-API] {len(items)} Packs geladen. Felder: {list(items[0].keys())}")
-
-                elif '/api/' in url:
-                    # Alle anderen API-Calls loggen (Detail-Seite etc.)
-                    body_text = await response.text()
-                    if '24027' in body_text or 'remaining' in body_text or 'stock' in body_text:
-                        logger.info(f"[API-OTHER] {url}: {body_text[:500]}")
+                        logger.debug(f"[PACK-API] {len(items)} Packs geladen")
 
             except Exception as e:
                 logger.debug(f"[PACK-API] Fehler: {e}")
@@ -216,16 +207,6 @@ class GTCHAScraper:
                     logger.warning(f"Tab-Menü nicht gefunden: {e}")
                     await asyncio.sleep(3)
 
-                # DEBUG: Was ist wirklich im DOM?
-                try:
-                    tab_count = await self._page.evaluate("document.querySelectorAll('.pack_menu').length")
-                    menu_list_count = await self._page.evaluate("document.querySelectorAll('.pack_menu_list').length")
-                    body_text = await self._page.evaluate("document.body ? document.body.innerHTML.substring(0, 500) : 'KEIN BODY'")
-                    logger.info(f"DOM-DEBUG: .pack_menu={tab_count}, .pack_menu_list={menu_list_count}")
-                    logger.info(f"DOM-DEBUG Body: {body_text[:300]}")
-                    await self._page.screenshot(path="screenshots/debug/page_load.png")
-                except Exception as de:
-                    logger.warning(f"DOM-Debug Fehler: {de}")
 
             except asyncio.CancelledError:
                 # Extern abgebrochen (z.B. durch Timeout) - weiterleiten
@@ -305,9 +286,6 @@ class GTCHAScraper:
                 if count > 0:
                     logger.info(f"   {cat}: {count} Banner")
 
-            # Einmalige Diagnose: Detail-Seite für Banner 24027 laden und alle API-Calls loggen
-            await self._probe_detail_page_api(24027)
-
             # Konvertieren
             banners = self._convert_to_scraped_banners()
 
@@ -322,78 +300,6 @@ class GTCHAScraper:
             except asyncio.CancelledError:
                 pass
             logger.debug("Heartbeat gestoppt")
-
-    async def _probe_detail_page_api(self, pack_id: int):
-        """Lädt die Detail-Seite eines Banners, loggt alle API-Calls und liest DOM aus."""
-        try:
-            logger.info(f"[DETAIL-PROBE] Lade Detail-Seite für Banner {pack_id}...")
-            detail_page = await self._context.new_page()
-
-            async def capture(response):
-                try:
-                    if response.status == 200:
-                        ct = response.headers.get('content-type', '')
-                        if 'json' in ct:
-                            url = response.url
-                            body = await response.text()
-                            logger.info(f"[DETAIL-PROBE-API] {url}: {body[:800]}")
-                except Exception:
-                    pass
-
-            detail_page.on('response', capture)
-            url = f"{self.base_url}/pack-detail?packId={pack_id}&_={int(time.time())}"
-            await detail_page.goto(url, wait_until="domcontentloaded", timeout=90000)
-            try:
-                await detail_page.wait_for_load_state("networkidle", timeout=5000)
-            except Exception:
-                pass
-            await asyncio.sleep(3)
-
-            # DOM direkt auslesen: Was sieht der Bot auf der Detail-Seite?
-            try:
-                count02 = await detail_page.evaluate(
-                    "() => { const el = document.querySelector('.count02'); return el ? el.innerText : 'NICHT GEFUNDEN'; }"
-                )
-                logger.info(f"[DETAIL-PROBE-DOM] .count02 Text: '{count02}'")
-
-                # Auch alle Elemente mit Zahlen X/Y suchen
-                all_counts = await detail_page.evaluate("""
-                    () => {
-                        const results = [];
-                        document.querySelectorAll('*').forEach(el => {
-                            if (el.children.length === 0 && el.innerText && /\\d+\\s*\\/\\s*\\d+/.test(el.innerText)) {
-                                results.push({class: el.className, text: el.innerText.trim()});
-                            }
-                        });
-                        return results.slice(0, 10);
-                    }
-                """)
-                logger.info(f"[DETAIL-PROBE-DOM] Alle X/Y Elemente: {all_counts}")
-            except Exception as e:
-                logger.warning(f"[DETAIL-PROBE-DOM] Fehler: {e}")
-
-            # Direkte API-Guesses mit bekannten Session-Cookies ausprobieren
-            for endpoint in [
-                f'/api/user/pack/detail?id={pack_id}',
-                f'/api/user/pack/detail?pack_id={pack_id}',
-                f'/api/pack/{pack_id}',
-                f'/api/user/pack/{pack_id}',
-            ]:
-                try:
-                    r = await detail_page.request.get(
-                        f"{self.base_url}{endpoint}&_={int(time.time())}",
-                        headers={"Accept": "application/json"}
-                    )
-                    if r.ok:
-                        body = await r.text()
-                        logger.info(f"[DETAIL-PROBE-DIRECT] {endpoint}: {body[:400]}")
-                except Exception:
-                    pass
-
-            await detail_page.close()
-            logger.info(f"[DETAIL-PROBE] Fertig für Banner {pack_id}")
-        except Exception as e:
-            logger.warning(f"[DETAIL-PROBE] Fehler: {e}")
 
     async def _fetch_pack_counts_via_proxy(self):
         """Holt Pack-Zahlen über den konfigurierten Proxy via curl subprocess.
@@ -614,25 +520,6 @@ class GTCHAScraper:
                 # Selektoren für Tab-Menü
                 tabs = await page.query_selector_all('.pack_menu_list .pack_menu')
 
-                if attempt == 0:
-                    # Log alle gefundenen Tabs beim ersten Versuch
-                    all_tabs = []
-                    for tab in tabs:
-                        try:
-                            t = await tab.inner_text()
-                            all_tabs.append(t.strip())
-                        except:
-                            pass
-                    logger.info(f"   [{category}] Gefundene Tabs: {all_tabs}")
-
-                    # Screenshot wenn keine Tabs gefunden
-                    if not all_tabs:
-                        try:
-                            await page.screenshot(path=f"screenshots/debug/no_tabs_{category}.png")
-                            logger.warning(f"   [{category}] Screenshot gespeichert: no_tabs_{category}.png")
-                        except:
-                            pass
-
                 for tab in tabs:
                     try:
                         text = await tab.inner_text()
@@ -724,17 +611,6 @@ class GTCHAScraper:
 
                 # Finde alle menu-items
                 menu_items = await self._page.query_selector_all('.pack_menu_list .pack_menu')
-
-                if attempt == 0:
-                    # Log alle gefundenen Tabs beim ersten Versuch (INFO damit es immer sichtbar ist)
-                    all_tabs = []
-                    for item in menu_items:
-                        try:
-                            t = await item.inner_text()
-                            all_tabs.append(t.strip())
-                        except:
-                            pass
-                    logger.info(f"[TABS] {category}: Gefundene Tabs: {all_tabs}")
 
                 for item in menu_items:
                     try:
@@ -898,10 +774,6 @@ class GTCHAScraper:
             # Packs: API bevorzugen (immer aktuell), DOM als Fallback (CDN-gecacht)
             api_item = self._api_pack_data.get(pack_id, {})
             if api_item:
-                # Alle Felder für Banner 24027 loggen (Diagnose: welches Feld hat 370?)
-                if pack_id == 24027:
-                    logger.info(f"[PACK-API-DETAIL] Banner 24027 ALLE Felder: {api_item}")
-
                 # Alle bekannten Feldnamen für Pack-Anzahl durchprobieren
                 pack_fields = ['pack_count', 'pack_remaining', 'remaining_count', 'remaining',
                                'stock', 'packs', 'pack_num', 'pack_stock', 'count']
@@ -909,11 +781,10 @@ class GTCHAScraper:
                     val = api_item.get(field)
                     if val is not None:
                         banner['current_packs'] = int(val)
-                        logger.info(f"   [PACK-API] {pack_id}: {val} (Feld: {field})")
+                        logger.debug(f"   [PACK-API] {pack_id}: {val} (Feld: {field})")
                         break
                 else:
-                    # Feld nicht gefunden: alle Felder loggen damit wir den Namen sehen
-                    logger.info(f"   [PACK-API] {pack_id}: Felder={list(api_item.keys())} Werte={api_item}")
+                    logger.debug(f"   [PACK-API] {pack_id}: unbekannte Felder {list(api_item.keys())}")
 
                 # total_packs aus API
                 total_fields = ['total_pack', 'total_count', 'pack_total', 'total', 'pack_limit']
@@ -928,18 +799,16 @@ class GTCHAScraper:
                 bar_el = await el.query_selector('.gacha_bar')
                 if bar_el:
                     bar_text = await bar_el.inner_text()
-                    logger.info(f"   [PACK-DOM] gacha_bar für {pack_id}: '{bar_text}'")
                     bar_text_clean = re.sub(r'(\d)[.,](\d{3})', r'\1\2', bar_text)
                     bar_text_clean = re.sub(r'(\d)[.,](\d{3})', r'\1\2', bar_text_clean)
                     packs_match = re.search(r'(\d+)\s*/\s*(\d+)', bar_text_clean)
                     if packs_match:
                         banner['current_packs'] = int(packs_match.group(1))
                         banner['total_packs'] = int(packs_match.group(2))
-                        logger.info(f"   [PACK-DOM] Packs für {pack_id}: {banner['current_packs']}/{banner['total_packs']}")
                     else:
-                        logger.warning(f"   [PACK-DOM] Pattern nicht gefunden für {pack_id}: '{bar_text_clean}'")
+                        logger.debug(f"   [PACK-DOM] Pattern nicht gefunden für {pack_id}: '{bar_text_clean}'")
                 else:
-                    logger.warning(f"   [PACK-DOM] Kein .gacha_bar für {pack_id}")
+                    logger.debug(f"   [PACK-DOM] Kein .gacha_bar für {pack_id}")
 
             # End-Datum aus .end-date
             # "Verkauf bis 2026/01/21 JST"

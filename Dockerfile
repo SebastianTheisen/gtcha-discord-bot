@@ -64,7 +64,7 @@ RUN playwright install chromium
 COPY . .
 
 # Verzeichnisse erstellen
-RUN mkdir -p /app/data /app/logs /app/screenshots/debug
+RUN mkdir -p /app/data /app/logs
 
 # Start
 CMD ["python", "main.py"]

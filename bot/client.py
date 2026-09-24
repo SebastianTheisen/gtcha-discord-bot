@@ -875,18 +875,7 @@ class GTCHABot(commands.Bot):
                 emoji = "📈"
                 change = f"+{new_packs - old_packs}"
 
-            # Fortschrittsbalken erstellen
-            if total > 0:
-                percent = (new_packs / total) * 100
-                filled = int(percent / 10)
-                bar = "█" * filled + "░" * (10 - filled)
-                progress = f"`{bar}` {percent:.0f}%"
-            else:
-                progress = ""
-
-            message = f"{emoji} **Pack-Update:** {old_packs} → {new_packs} ({change})"
-            if progress:
-                message += f"\n{progress}"
+            message = f"{emoji} **Pack-Update:** {old_packs} → {new_packs} / {total} ({change})"
 
             # @everyone Mention bei Pack-Update
             if MENTION_ON_PACK_UPDATE:
