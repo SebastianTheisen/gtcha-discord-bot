@@ -19,6 +19,7 @@ loguru>=0.7.0
 
 # HTTP
 aiohttp>=3.9.0
+aiohttp-socks>=0.8.0
 
 # Images
 Pillow>=10.0.0

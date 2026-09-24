@@ -396,43 +396,40 @@ class GTCHAScraper:
             logger.warning(f"[DETAIL-PROBE] Fehler: {e}")
 
     async def _fetch_pack_counts_via_proxy(self):
-        """Holt Pack-Zahlen über den konfigurierten Proxy (z.B. Tor mit deutschem Exit-Node).
+        """Holt Pack-Zahlen über den konfigurierten Proxy via aiohttp-socks.
 
-        Statt den vollen Browser durch Tor zu leiten (zu langsam), wird nur dieser
-        eine API-Call als leichter HTTP-Request durch den Proxy getunnelt.
-        Das Ergebnis überschreibt die pack_count-Werte in self._api_pack_data.
+        Playwright's HTTP-Client ist inkompatibel mit manchen SOCKS5-Proxies (WARP).
+        aiohttp + aiohttp-socks umgeht das zuverlässig.
         """
         if not SCRAPER_PROXY:
             return
 
         try:
+            import aiohttp
+            from aiohttp_socks import ProxyConnector
             logger.info(f"[PROXY-API] Hole Pack-Zahlen via Proxy ({SCRAPER_PROXY.split('@')[-1]})...")
-            # Playwright APIRequestContext: leichter HTTP-Client, kein Browser nötig
-            proxy_context = await self._playwright.request.new_context(
-                proxy={"server": SCRAPER_PROXY},
-                extra_http_headers={
-                    "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
-                    "Accept": "application/json",
-                    "Cache-Control": "no-cache",
-                },
-            )
-            try:
+            connector = ProxyConnector.from_url(SCRAPER_PROXY)
+            headers = {
+                "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
+                "Accept": "application/json",
+                "Cache-Control": "no-cache",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            }
+            async with aiohttp.ClientSession(connector=connector, headers=headers) as session:
                 url = f"{self.base_url}/api/user/pack/list?_={int(time.time())}"
-                response = await proxy_context.get(url, timeout=40000)
-                if response.ok:
-                    data = await response.json()
-                    items = data.get('list', [])
-                    updated = 0
-                    for item in items:
-                        pid = item.get('id')
-                        if pid:
-                            self._api_pack_data[int(pid)] = item
-                            updated += 1
-                    logger.info(f"[PROXY-API] {updated} Pack-Zahlen via Proxy geladen (regionaler Pool: DE)")
-                else:
-                    logger.warning(f"[PROXY-API] HTTP {response.status} - Proxy-API-Call fehlgeschlagen")
-            finally:
-                await proxy_context.dispose()
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                    if response.status == 200:
+                        data = await response.json(content_type=None)
+                        items = data.get('list', [])
+                        updated = 0
+                        for item in items:
+                            pid = item.get('id')
+                            if pid:
+                                self._api_pack_data[int(pid)] = item
+                                updated += 1
+                        logger.info(f"[PROXY-API] {updated} Pack-Zahlen via Proxy geladen (regionaler Pool: DE)")
+                    else:
+                        logger.warning(f"[PROXY-API] HTTP {response.status} - fehlgeschlagen")
         except Exception as e:
             logger.warning(f"[PROXY-API] Fehler: {e} - Fallback auf direkte Pack-Zahlen")
 
