@@ -790,15 +790,17 @@ class GTCHAScraper:
                 logger.debug(f"   Kein .limit_detail/.buy_limit für {pack_id}")
 
             # Packs: API bevorzugen (immer aktuell), DOM als Fallback (CDN-gecacht)
+            # WICHTIG: DE-Proxy kann 0 zurückgeben für Banner die nur im JP-Pool verfügbar sind.
+            # Wenn API=0 aber DOM>0 → Banner noch aktiv → DOM-Wert verwenden.
             api_item = self._api_pack_data.get(pack_id, {})
+            api_pack_count = None
             if api_item:
-                # Alle bekannten Feldnamen für Pack-Anzahl durchprobieren
                 pack_fields = ['pack_count', 'pack_remaining', 'remaining_count', 'remaining',
                                'stock', 'packs', 'pack_num', 'pack_stock', 'count']
                 for field in pack_fields:
                     val = api_item.get(field)
                     if val is not None:
-                        banner['current_packs'] = int(val)
+                        api_pack_count = int(val)
                         logger.debug(f"   [PACK-API] {pack_id}: {val} (Feld: {field})")
                         break
                 else:
@@ -812,21 +814,33 @@ class GTCHAScraper:
                         banner['total_packs'] = int(val)
                         break
 
-            # DOM-Fallback wenn API keine Pack-Zahl geliefert hat
-            if 'current_packs' not in banner:
-                bar_el = await el.query_selector('.gacha_bar')
-                if bar_el:
-                    bar_text = await bar_el.inner_text()
-                    bar_text_clean = re.sub(r'(\d)[.,](\d{3})', r'\1\2', bar_text)
-                    bar_text_clean = re.sub(r'(\d)[.,](\d{3})', r'\1\2', bar_text_clean)
-                    packs_match = re.search(r'(\d+)\s*/\s*(\d+)', bar_text_clean)
-                    if packs_match:
-                        banner['current_packs'] = int(packs_match.group(1))
-                        banner['total_packs'] = int(packs_match.group(2))
-                    else:
-                        logger.debug(f"   [PACK-DOM] Pattern nicht gefunden für {pack_id}: '{bar_text_clean}'")
+            # DOM immer lesen – als Validierung wenn API 0 zurückgibt
+            dom_pack_count = None
+            dom_total_packs = None
+            bar_el = await el.query_selector('.gacha_bar')
+            if bar_el:
+                bar_text = await bar_el.inner_text()
+                bar_text_clean = re.sub(r'(\d)[.,](\d{3})', r'\1\2', bar_text)
+                bar_text_clean = re.sub(r'(\d)[.,](\d{3})', r'\1\2', bar_text_clean)
+                packs_match = re.search(r'(\d+)\s*/\s*(\d+)', bar_text_clean)
+                if packs_match:
+                    dom_pack_count = int(packs_match.group(1))
+                    dom_total_packs = int(packs_match.group(2))
                 else:
-                    logger.debug(f"   [PACK-DOM] Kein .gacha_bar für {pack_id}")
+                    logger.debug(f"   [PACK-DOM] Pattern nicht gefunden für {pack_id}: '{bar_text_clean}'")
+            else:
+                logger.debug(f"   [PACK-DOM] Kein .gacha_bar für {pack_id}")
+
+            # Priorität: API>0 gewinnt; wenn API=0/fehlend, DOM als Fallback
+            if api_pack_count is not None and api_pack_count > 0:
+                banner['current_packs'] = api_pack_count
+            elif dom_pack_count is not None and dom_pack_count > 0:
+                banner['current_packs'] = dom_pack_count
+                if dom_total_packs is not None and 'total_packs' not in banner:
+                    banner['total_packs'] = dom_total_packs
+                logger.debug(f"   [PACK] {pack_id}: DOM-Fallback ({dom_pack_count}) da API={api_pack_count}")
+            elif api_pack_count is not None:
+                banner['current_packs'] = api_pack_count  # Beide zeigen 0 – wirklich leer
 
             # End-Datum aus .end-date
             # "Verkauf bis 2026/01/21 JST"

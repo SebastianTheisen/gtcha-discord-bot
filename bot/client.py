@@ -542,19 +542,16 @@ class GTCHABot(commands.Bot):
                         # Pruefe ob Banner neu ist
                         existing = await self.db.get_banner(banner.pack_id)
 
-                        # Bereits inaktive Banner komplett überspringen
+                        # Inaktive Banner die wieder auf der Website erscheinen reaktivieren
+                        # (kann passieren wenn bot falscherweise 0-Pack via Proxy-Fehler gelöscht hat)
                         if existing and existing.get('is_active') == 0:
-                            skipped_inactive += 1
-                            continue
+                            logger.info(f"Banner {banner.pack_id} wieder auf Website - reaktiviere und erstelle Thread neu")
+                            existing = None  # Als neuen Banner behandeln (save_banner setzt is_active=1)
 
-                        # Banner mit 0 Packs: Thread archivieren falls vorhanden
+                        # Banner mit 0 Packs: nur überspringen, NICHT löschen
+                        # DE-Proxy kann 0 zurückgeben für JP-Only-Pool-Banner die noch aktiv sind.
+                        # Echte Löschung erfolgt wenn Banner vom Website verschwindet (not_found >= 20).
                         if banner.current_packs is not None and banner.current_packs == 0:
-                            if existing and existing.get('is_active') == 1:
-                                logger.info(f"Banner {banner.pack_id} hat 0 Packs - archiviere Thread")
-                                deleted = await self._delete_banner_thread(banner.pack_id)
-                                if deleted:
-                                    deleted_count += 1
-                                    logger.info(f"   Banner {banner.pack_id} Thread archiviert!")
                             skipped_empty += 1
                             continue
 
