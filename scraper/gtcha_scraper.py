@@ -71,11 +71,12 @@ class GTCHAScraper:
         self._context = await self._browser.new_context(
             viewport={"width": 1920, "height": 1080},
             user_agent=user_agent,
-            locale="ja-JP",
+            # Kein locale="ja-JP" - Website liefert sonst japanisches Pack-Kontingent (andere Zahlen!)
+            # Ohne Locale bekommt der Bot das gleiche internationale Kontingent wie deutsche Nutzer
             extra_http_headers={
                 "Cache-Control": "no-cache, no-store, must-revalidate",
                 "Pragma": "no-cache",
-                "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8",
+                "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
             }
         )
 
