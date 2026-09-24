@@ -237,9 +237,10 @@ class GTCHAScraper:
             # Pack-Zahlen via Proxy holen (korrekter regionaler Pool, z.B. DE statt JP)
             # Mit Timeout damit der Proxy-Call den Scrape-Flow nicht blockiert
             try:
-                await asyncio.wait_for(self._fetch_pack_counts_via_proxy(), timeout=20.0)
+                # Tor braucht bis zu 30s um einen neuen Circuit aufzubauen
+                await asyncio.wait_for(self._fetch_pack_counts_via_proxy(), timeout=45.0)
             except asyncio.TimeoutError:
-                logger.warning("[PROXY-API] Timeout nach 20s - fahre mit direkten Pack-Zahlen fort")
+                logger.warning("[PROXY-API] Timeout nach 45s - fahre mit direkten Pack-Zahlen fort")
 
             # Durch alle Kategorien klicken und Banner aus DOM lesen
             # Graceful Degradation: Fehler in einer Kategorie stoppen nicht die anderen
@@ -417,7 +418,7 @@ class GTCHAScraper:
             )
             try:
                 url = f"{self.base_url}/api/user/pack/list?_={int(time.time())}"
-                response = await proxy_context.get(url, timeout=15000)
+                response = await proxy_context.get(url, timeout=40000)
                 if response.ok:
                     data = await response.json()
                     items = data.get('list', [])
