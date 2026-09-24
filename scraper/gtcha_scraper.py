@@ -84,6 +84,21 @@ class GTCHAScraper:
         # Resource-Blocking für schnelleres Scraping aktivieren
         await self._block_unnecessary_resources(self._page)
 
+        # Netzwerk-Responses loggen (API-Calls die Pack-Zahlen liefern könnten)
+        async def _log_api_response(response):
+            try:
+                url = response.url
+                ct = response.headers.get('content-type', '')
+                if response.status == 200 and 'json' in ct:
+                    body_text = await response.text()
+                    # Nur loggen wenn es Pack-relevante Daten enthält
+                    if any(k in body_text for k in ['"stock"', '"remaining"', '"count"', '"packs"', '"quantity"', '24027']):
+                        logger.info(f"[NET-DEBUG] {url[:100]}: {body_text[:300]}")
+            except Exception:
+                pass
+
+        self._page.on('response', _log_api_response)
+
         logger.info("Browser gestartet (v6 - Pure DOM + Resource-Blocking)")
 
     async def close(self):
@@ -202,14 +217,18 @@ class GTCHAScraper:
                         failed_categories.append((category, "Tab nicht gefunden"))
                         continue
 
-                    # Warte auf DOM-Update und Stabilisierung (reduziert von 1-2s)
-                    await self._random_delay(0.3, 0.5)
+                    # Warte auf AJAX-Update der Pack-Zahlen.
+                    # Die Seite rendert erst alte Werte (SSR-Cache), dann lädt JS die echten Zahlen.
+                    # networkidle würde durch WebSockets nie enden → kurzes Timeout akzeptieren.
                     try:
-                        await self._page.wait_for_load_state("domcontentloaded", timeout=5000)
+                        await self._page.wait_for_load_state("networkidle", timeout=4000)
                     except asyncio.CancelledError:
                         raise
                     except:
+                        # Timeout erwartet wegen WebSockets – trotzdem 4s gewartet, reicht für AJAX
                         pass
+                    # Zusätzlicher Buffer damit DOM komplett gerendert ist
+                    await asyncio.sleep(1.5)
 
                     # Banner aus DOM extrahieren
                     self._current_status = f"Extrahiere: {category}"
@@ -390,8 +409,14 @@ class GTCHAScraper:
                 if not clicked:
                     return (0, {})
 
-            # Warten auf DOM-Update (reduziert von 1-1.5s)
-            await self._random_delay(0.3, 0.5)
+            # Warte auf AJAX-Update der Pack-Zahlen
+            try:
+                await page.wait_for_load_state("networkidle", timeout=4000)
+            except asyncio.CancelledError:
+                raise
+            except:
+                pass
+            await asyncio.sleep(1.5)
 
             # Banner extrahieren
             count = await self._extract_banners_from_page(page, category, banners_data)
