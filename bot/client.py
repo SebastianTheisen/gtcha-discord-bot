@@ -593,6 +593,45 @@ class GTCHABot(commands.Bot):
                 # Sammle alle gefundenen Banner-IDs (inkl. der mit 0 Packs)
                 found_banner_ids = {b.pack_id for b in banners}
 
+                # === API-ONLY PACK-UPDATES ===
+                # Für DB-Banner die nicht im Scrape auftauchten (z.B. Yu-Gi-Oh!, Weiss Schwarz,
+                # Ultraman wenn deren Tabs nicht klickbar sind), Pack-Zahlen direkt aus der
+                # Proxy-API aktualisieren. Die API gibt ALLE Banner zurück, unabhängig vom Tab.
+                api_pack_data = getattr(scraper, '_api_pack_data', {})
+                if api_pack_data:
+                    db_banners_all = await self.db.get_all_active_banners_basic()
+                    pack_fields = ['pack_count', 'pack_remaining', 'remaining_count', 'remaining',
+                                   'stock', 'packs', 'pack_num', 'pack_stock', 'count']
+                    api_only_count = 0
+                    for db_b in db_banners_all:
+                        pid = db_b['pack_id']
+                        if pid in found_banner_ids:
+                            continue  # Schon normal verarbeitet
+                        api_item = api_pack_data.get(pid)
+                        if not api_item:
+                            continue  # Keine API-Daten für diesen Banner
+                        new_packs = None
+                        for field in pack_fields:
+                            val = api_item.get(field)
+                            if val is not None:
+                                new_packs = int(val)
+                                break
+                        if new_packs is None or new_packs == 0:
+                            continue
+                        old_packs = db_b.get('current_packs')
+                        total_packs = db_b.get('total_packs')
+                        if old_packs is None:
+                            await self.db.update_banner_packs(pid, new_packs)
+                            api_only_count += 1
+                        elif new_packs != old_packs:
+                            posted = await self._post_pack_update_to_thread(pid, old_packs, new_packs, total_packs)
+                            if posted:
+                                await self.db.update_banner_packs(pid, new_packs)
+                                api_only_count += 1
+                                logger.info(f"API-Only Pack-Update: {pid} ({old_packs} → {new_packs})")
+                    if api_only_count > 0:
+                        logger.info(f"API-Only Updates: {api_only_count} Banner außerhalb der gescrapten Kategorien aktualisiert")
+
                 # Hole alle bekannten Banner aus der DB
                 db_banner_ids = set(await self.db.get_all_active_banner_ids())
 

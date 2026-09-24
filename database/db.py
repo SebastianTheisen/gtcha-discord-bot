@@ -323,6 +323,16 @@ class Database:
 
             return stats
 
+    async def get_all_active_banners_basic(self) -> List[Dict]:
+        """Gibt pack_id, current_packs und total_packs aller aktiven Banner zurück."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT pack_id, current_packs, total_packs FROM banners WHERE is_active = 1"
+            )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
     async def get_all_active_banner_ids(self) -> List[int]:
         """Gibt alle aktiven Banner-IDs zurück."""
         async with aiosqlite.connect(self.db_path) as db:
