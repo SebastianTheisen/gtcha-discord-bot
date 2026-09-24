@@ -103,6 +103,7 @@ class GTCHABot(commands.Bot):
         self.db = Database()
         self.scheduler = AsyncIOScheduler()
         self._scraper: Optional[GTCHAScraper] = None
+        self._scrape_lock = asyncio.Lock()  # Verhindert parallele Scrape-Läufe
 
     async def setup_hook(self):
         """Setup beim Start."""
@@ -624,11 +625,22 @@ class GTCHABot(commands.Bot):
                             await self.db.update_banner_packs(pid, new_packs)
                             api_only_count += 1
                         elif new_packs != old_packs:
-                            posted = await self._post_pack_update_to_thread(pid, old_packs, new_packs, total_packs)
-                            if posted:
+                            # Oszillations-Schutz: Wenn letzter Post X→Y war und jetzt Y→X, überspringen
+                            last_hist = await self.db.get_last_pack_history(pid)
+                            if (last_hist and
+                                    last_hist['old_count'] == new_packs and
+                                    last_hist['new_count'] == old_packs):
+                                logger.warning(
+                                    f"[OSZILLATION/API] {pid}: Letzter Post war {last_hist['old_count']}→{last_hist['new_count']}, "
+                                    f"jetzt {old_packs}→{new_packs} - überspringe"
+                                )
                                 await self.db.update_banner_packs(pid, new_packs)
-                                api_only_count += 1
-                                logger.info(f"API-Only Pack-Update: {pid} ({old_packs} → {new_packs})")
+                            else:
+                                posted = await self._post_pack_update_to_thread(pid, old_packs, new_packs, total_packs)
+                                if posted:
+                                    await self.db.update_banner_packs(pid, new_packs)
+                                    api_only_count += 1
+                                    logger.info(f"API-Only Pack-Update: {pid} ({old_packs} → {new_packs})")
                     if api_only_count > 0:
                         logger.info(f"API-Only Updates: {api_only_count} Banner außerhalb der gescrapten Kategorien aktualisiert")
 
@@ -688,61 +700,67 @@ class GTCHABot(commands.Bot):
 
     async def _scrape_with_timeout(self):
         """Wrapper für scrape_and_post mit konfigurierbarem Timeout und Retry-Logik."""
-        timeout_seconds = SCRAPE_TIMEOUT_SECONDS
-        max_retries = 2
-        retry_delay = 30  # Sekunden zwischen Retries
+        # Verhindert parallele Scrape-Läufe (z.B. Scheduler + /refresh gleichzeitig)
+        if self._scrape_lock.locked():
+            logger.warning("Scrape läuft bereits - überspringe diesen Aufruf")
+            return
 
-        for attempt in range(max_retries + 1):
-            try:
-                if attempt > 0:
-                    logger.info(f"Retry {attempt}/{max_retries} - warte {retry_delay}s...")
-                    await asyncio.sleep(retry_delay)
+        async with self._scrape_lock:
+            timeout_seconds = SCRAPE_TIMEOUT_SECONDS
+            max_retries = 2
+            retry_delay = 30  # Sekunden zwischen Retries
 
-                await asyncio.wait_for(self.scrape_and_post(), timeout=timeout_seconds)
-                return  # Erfolg - beenden
+            for attempt in range(max_retries + 1):
+                try:
+                    if attempt > 0:
+                        logger.info(f"Retry {attempt}/{max_retries} - warte {retry_delay}s...")
+                        await asyncio.sleep(retry_delay)
 
-            except asyncio.TimeoutError:
-                logger.error(f"TIMEOUT: Scrape-Job nach {timeout_seconds}s abgebrochen! (Versuch {attempt + 1}/{max_retries + 1})")
-                # Webhook-Benachrichtigung
-                await notify_scrape_error(
-                    "Timeout",
-                    f"Scrape-Job nach {timeout_seconds}s abgebrochen",
-                    attempt, max_retries
-                )
-                # Scraper aufräumen falls noch aktiv
-                if self._scraper:
-                    try:
-                        await self._scraper.close()
-                    except Exception:
-                        pass
-                    self._scraper = None
+                    await asyncio.wait_for(self.scrape_and_post(), timeout=timeout_seconds)
+                    return  # Erfolg - beenden
 
-                if attempt < max_retries:
-                    continue  # Retry
-                else:
-                    logger.error("Alle Retries fehlgeschlagen!")
-                    await notify_all_retries_failed()
+                except asyncio.TimeoutError:
+                    logger.error(f"TIMEOUT: Scrape-Job nach {timeout_seconds}s abgebrochen! (Versuch {attempt + 1}/{max_retries + 1})")
+                    # Webhook-Benachrichtigung
+                    await notify_scrape_error(
+                        "Timeout",
+                        f"Scrape-Job nach {timeout_seconds}s abgebrochen",
+                        attempt, max_retries
+                    )
+                    # Scraper aufräumen falls noch aktiv
+                    if self._scraper:
+                        try:
+                            await self._scraper.close()
+                        except Exception:
+                            pass
+                        self._scraper = None
 
-            except Exception as e:
-                logger.error(f"Fehler im Scrape-Job: {e} (Versuch {attempt + 1}/{max_retries + 1})")
-                # Webhook-Benachrichtigung
-                await notify_scrape_error(
-                    "Exception",
-                    str(e),
-                    attempt, max_retries
-                )
-                if self._scraper:
-                    try:
-                        await self._scraper.close()
-                    except Exception:
-                        pass
-                    self._scraper = None
+                    if attempt < max_retries:
+                        continue  # Retry
+                    else:
+                        logger.error("Alle Retries fehlgeschlagen!")
+                        await notify_all_retries_failed()
 
-                if attempt < max_retries:
-                    continue  # Retry
-                else:
-                    logger.error("Alle Retries fehlgeschlagen!")
-                    await notify_all_retries_failed()
+                except Exception as e:
+                    logger.error(f"Fehler im Scrape-Job: {e} (Versuch {attempt + 1}/{max_retries + 1})")
+                    # Webhook-Benachrichtigung
+                    await notify_scrape_error(
+                        "Exception",
+                        str(e),
+                        attempt, max_retries
+                    )
+                    if self._scraper:
+                        try:
+                            await self._scraper.close()
+                        except Exception:
+                            pass
+                        self._scraper = None
+
+                    if attempt < max_retries:
+                        continue  # Retry
+                    else:
+                        logger.error("Alle Retries fehlgeschlagen!")
+                        await notify_all_retries_failed()
 
     def _get_banner_value(self, banner, key, default=None):
         """Holt einen Wert aus Banner-Objekt oder Dict."""
@@ -986,19 +1004,33 @@ class GTCHABot(commands.Bot):
                 if packs_changed:
                     logger.info(f"Pack-Änderung erkannt: {banner.pack_id} {old_packs} -> {banner.current_packs}")
                     if old_packs is not None:
-                        # Post FIRST - nur bei Erfolg DB updaten
-                        # (Fehler: DB updated, Discord-Post schlägt fehl → nächster Scrape erkennt keine Änderung mehr)
-                        posted = await self._post_pack_update_to_thread(
-                            banner.pack_id,
-                            old_packs,
-                            banner.current_packs,
-                            banner.total_packs
-                        )
-                        if posted:
+                        # Oszillations-Schutz: Wenn letzter Post X→Y war und jetzt Y→X, überspringen
+                        last_hist = await self.db.get_last_pack_history(banner.pack_id)
+                        if (last_hist and
+                                last_hist['old_count'] == banner.current_packs and
+                                last_hist['new_count'] == old_packs):
+                            logger.warning(
+                                f"[OSZILLATION] {banner.pack_id}: Letzter Post war {last_hist['old_count']}→{last_hist['new_count']}, "
+                                f"jetzt {old_packs}→{banner.current_packs} - überspringe (Quellenkonflikt DE/JP)"
+                            )
+                            # DB auf aktuellen Scrape-Wert setzen damit nächster Scrape korrekte Basis hat,
+                            # aber keinen Discord-Post senden
                             await self.db.update_banner_packs(banner.pack_id, banner.current_packs)
+                            packs_changed = False
                         else:
-                            logger.warning(f"Pack-Update-Post für {banner.pack_id} fehlgeschlagen - DB bleibt bei {old_packs}, nächster Scrape versucht es erneut")
-                            packs_changed = False  # Kein Embed/Probability-Update wenn Post fehlschlug
+                            # Post FIRST - nur bei Erfolg DB updaten
+                            # (Fehler: DB updated, Discord-Post schlägt fehl → nächster Scrape erkennt keine Änderung mehr)
+                            posted = await self._post_pack_update_to_thread(
+                                banner.pack_id,
+                                old_packs,
+                                banner.current_packs,
+                                banner.total_packs
+                            )
+                            if posted:
+                                await self.db.update_banner_packs(banner.pack_id, banner.current_packs)
+                            else:
+                                logger.warning(f"Pack-Update-Post für {banner.pack_id} fehlgeschlagen - DB bleibt bei {old_packs}, nächster Scrape versucht es erneut")
+                                packs_changed = False  # Kein Embed/Probability-Update wenn Post fehlschlug
                     else:
                         # Initiales Pack-Update (kein Discord-Post nötig)
                         await self.db.update_banner_packs(banner.pack_id, banner.current_packs)

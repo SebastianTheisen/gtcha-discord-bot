@@ -178,6 +178,17 @@ class Database:
 
             await db.commit()
 
+    async def get_last_pack_history(self, banner_id: int) -> Optional[Dict]:
+        """Gibt den letzten pack_history-Eintrag für einen Banner zurück."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT old_count, new_count, changed_at FROM pack_history WHERE banner_id = ? ORDER BY id DESC LIMIT 1",
+                (banner_id,)
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
     async def update_banner_entries(self, pack_id: int, entries_per_day: int) -> None:
         """Aktualisiert entries_per_day für einen Banner."""
         now = datetime.now().isoformat()
