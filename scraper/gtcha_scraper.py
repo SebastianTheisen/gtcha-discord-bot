@@ -59,19 +59,16 @@ class GTCHAScraper:
         logger.info("Starte Browser...")
         self._playwright = await async_playwright().start()
 
-        # Proxy konfigurieren wenn SCRAPER_PROXY gesetzt ist.
-        # Nötig wenn VPS-IP vom Website-Server als Japan erkannt wird (falscher Pack-Pool).
-        launch_kwargs = {
-            "headless": self.headless,
-            "args": ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
-        }
+        # Browser OHNE Proxy starten - der volle Browser durch Tor wäre zu langsam.
+        # Nur der gezielte API-Aufruf für Pack-Zahlen geht durch den Proxy (siehe _fetch_pack_counts_via_proxy).
+        self._browser = await self._playwright.chromium.launch(
+            headless=self.headless,
+            args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+        )
         if SCRAPER_PROXY:
-            launch_kwargs["proxy"] = {"server": SCRAPER_PROXY}
-            logger.info(f"Proxy aktiv: {SCRAPER_PROXY.split('@')[-1]}")  # Passwort verstecken
+            logger.info(f"Proxy konfiguriert für API-Calls: {SCRAPER_PROXY.split('@')[-1]}")
         else:
             logger.info("Kein Proxy konfiguriert (SCRAPER_PROXY nicht gesetzt)")
-
-        self._browser = await self._playwright.chromium.launch(**launch_kwargs)
 
         # Zufälligen User-Agent auswählen
         user_agent = random.choice(USER_AGENTS)
@@ -237,6 +234,10 @@ class GTCHAScraper:
                 logger.error(f"Ladefehler: {e}")
                 return []
 
+            # Pack-Zahlen via Proxy holen (korrekter regionaler Pool, z.B. DE statt JP)
+            # Nur ein einzelner leichter HTTP-Request durch Tor, kein voller Browser-Load
+            await self._fetch_pack_counts_via_proxy()
+
             # Durch alle Kategorien klicken und Banner aus DOM lesen
             # Graceful Degradation: Fehler in einer Kategorie stoppen nicht die anderen
             failed_categories = []
@@ -389,6 +390,47 @@ class GTCHAScraper:
             logger.info(f"[DETAIL-PROBE] Fertig für Banner {pack_id}")
         except Exception as e:
             logger.warning(f"[DETAIL-PROBE] Fehler: {e}")
+
+    async def _fetch_pack_counts_via_proxy(self):
+        """Holt Pack-Zahlen über den konfigurierten Proxy (z.B. Tor mit deutschem Exit-Node).
+
+        Statt den vollen Browser durch Tor zu leiten (zu langsam), wird nur dieser
+        eine API-Call als leichter HTTP-Request durch den Proxy getunnelt.
+        Das Ergebnis überschreibt die pack_count-Werte in self._api_pack_data.
+        """
+        if not SCRAPER_PROXY:
+            return
+
+        try:
+            logger.info(f"[PROXY-API] Hole Pack-Zahlen via Proxy ({SCRAPER_PROXY.split('@')[-1]})...")
+            # Playwright APIRequestContext: leichter HTTP-Client, kein Browser nötig
+            proxy_context = await self._playwright.request.new_context(
+                proxy={"server": SCRAPER_PROXY},
+                extra_http_headers={
+                    "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
+                    "Accept": "application/json",
+                    "Cache-Control": "no-cache",
+                },
+            )
+            try:
+                url = f"{self.base_url}/api/user/pack/list?_={int(time.time())}"
+                response = await proxy_context.get(url, timeout=30000)
+                if response.ok:
+                    data = await response.json()
+                    items = data.get('list', [])
+                    updated = 0
+                    for item in items:
+                        pid = item.get('id')
+                        if pid:
+                            self._api_pack_data[int(pid)] = item
+                            updated += 1
+                    logger.info(f"[PROXY-API] {updated} Pack-Zahlen via Proxy geladen (regionaler Pool: DE)")
+                else:
+                    logger.warning(f"[PROXY-API] HTTP {response.status} - Proxy-API-Call fehlgeschlagen")
+            finally:
+                await proxy_context.dispose()
+        except Exception as e:
+            logger.warning(f"[PROXY-API] Fehler: {e} - Fallback auf direkte Pack-Zahlen")
 
     async def scrape_all_banners_parallel(self) -> List[ScrapedBanner]:
         """Scrapet alle Kategorien parallel mit mehreren Browser-Tabs."""
