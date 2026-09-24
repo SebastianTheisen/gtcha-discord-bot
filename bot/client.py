@@ -876,6 +876,11 @@ class GTCHABot(commands.Bot):
                 change = f"+{new_packs - old_packs}"
 
             message = f"{emoji} **Pack-Update:** {old_packs} → {new_packs} / {total} ({change})"
+            if total > 0:
+                percent = (new_packs / total) * 100
+                filled = int(percent / 10)
+                bar = "█" * filled + "░" * (10 - filled)
+                message += f"\n`{bar}` {percent:.0f}%"
 
             # @everyone Mention bei Pack-Update
             if MENTION_ON_PACK_UPDATE:
