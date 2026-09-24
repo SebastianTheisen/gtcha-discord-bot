@@ -44,6 +44,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-liberation \
     fonts-noto-color-emoji \
     fonts-noto-cjk \
+    # curl für SOCKS5-Proxy-API-Calls (zuverlässiger als Python-HTTP-Clients mit SOCKS5)
+    curl \
     # Cleanup
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean

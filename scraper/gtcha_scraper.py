@@ -396,40 +396,48 @@ class GTCHAScraper:
             logger.warning(f"[DETAIL-PROBE] Fehler: {e}")
 
     async def _fetch_pack_counts_via_proxy(self):
-        """Holt Pack-Zahlen über den konfigurierten Proxy via aiohttp-socks.
+        """Holt Pack-Zahlen über den konfigurierten Proxy via curl subprocess.
 
-        Playwright's HTTP-Client ist inkompatibel mit manchen SOCKS5-Proxies (WARP).
-        aiohttp + aiohttp-socks umgeht das zuverlässig.
+        curl ist der zuverlässigste SOCKS5-Client — Python HTTP-Bibliotheken
+        haben Kompatibilitätsprobleme mit WARP's SOCKS5-Implementierung.
         """
         if not SCRAPER_PROXY:
             return
 
+        import json as _json
+        proxy_addr = SCRAPER_PROXY.replace('socks5://', '')
+        url = f"{self.base_url}/api/user/pack/list?_={int(time.time())}"
+        logger.info(f"[PROXY-API] Hole Pack-Zahlen via curl+Proxy ({proxy_addr})...")
+
+        cmd = [
+            'curl', '--socks5', proxy_addr,
+            url,
+            '-s', '--max-time', '25',
+            '-H', 'Accept-Language: de-DE,de;q=0.9,en;q=0.8',
+            '-H', 'Accept: application/json',
+            '-H', 'Cache-Control: no-cache',
+            '-H', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        ]
         try:
-            import aiohttp
-            from aiohttp_socks import ProxyConnector
-            logger.info(f"[PROXY-API] Hole Pack-Zahlen via Proxy ({SCRAPER_PROXY.split('@')[-1]})...")
-            connector = ProxyConnector.from_url(SCRAPER_PROXY)
-            headers = {
-                "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
-                "Accept": "application/json",
-                "Cache-Control": "no-cache",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            }
-            async with aiohttp.ClientSession(connector=connector, headers=headers) as session:
-                url = f"{self.base_url}/api/user/pack/list?_={int(time.time())}"
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as response:
-                    if response.status == 200:
-                        data = await response.json(content_type=None)
-                        items = data.get('list', [])
-                        updated = 0
-                        for item in items:
-                            pid = item.get('id')
-                            if pid:
-                                self._api_pack_data[int(pid)] = item
-                                updated += 1
-                        logger.info(f"[PROXY-API] {updated} Pack-Zahlen via Proxy geladen (regionaler Pool: DE)")
-                    else:
-                        logger.warning(f"[PROXY-API] HTTP {response.status} - fehlgeschlagen")
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+            if proc.returncode == 0 and stdout:
+                data = _json.loads(stdout)
+                items = data.get('list', [])
+                updated = 0
+                for item in items:
+                    pid = item.get('id')
+                    if pid:
+                        self._api_pack_data[int(pid)] = item
+                        updated += 1
+                logger.info(f"[PROXY-API] {updated} Pack-Zahlen via Proxy geladen (regionaler Pool: DE)")
+            else:
+                err = stderr.decode()[:200] if stderr else f"returncode={proc.returncode}"
+                logger.warning(f"[PROXY-API] curl Fehler: {err} - Fallback auf direkte Pack-Zahlen")
         except Exception as e:
             logger.warning(f"[PROXY-API] Fehler: {e} - Fallback auf direkte Pack-Zahlen")
 
