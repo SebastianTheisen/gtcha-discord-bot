@@ -90,17 +90,29 @@ class GTCHAScraper:
 
         async def _capture_pack_api(response):
             try:
-                if 'pack/list' in response.url and response.status == 200:
-                    ct = response.headers.get('content-type', '')
-                    if 'json' in ct:
-                        data = await response.json()
-                        items = data.get('list', [])
-                        for item in items:
-                            pid = item.get('id')
-                            if pid:
-                                self._api_pack_data[int(pid)] = item
-                        if items:
-                            logger.info(f"[PACK-API] {len(items)} Packs aus API geladen. Felder: {list(items[0].keys())}")
+                if response.status != 200:
+                    return
+                ct = response.headers.get('content-type', '')
+                if 'json' not in ct:
+                    return
+                url = response.url
+
+                if 'pack/list' in url:
+                    data = await response.json()
+                    items = data.get('list', [])
+                    for item in items:
+                        pid = item.get('id')
+                        if pid:
+                            self._api_pack_data[int(pid)] = item
+                    if items:
+                        logger.info(f"[PACK-API] {len(items)} Packs geladen. Felder: {list(items[0].keys())}")
+
+                elif '/api/' in url:
+                    # Alle anderen API-Calls loggen (Detail-Seite etc.)
+                    body_text = await response.text()
+                    if '24027' in body_text or 'remaining' in body_text or 'stock' in body_text:
+                        logger.info(f"[API-OTHER] {url}: {body_text[:500]}")
+
             except Exception as e:
                 logger.debug(f"[PACK-API] Fehler: {e}")
 
@@ -742,6 +754,10 @@ class GTCHAScraper:
             # Packs: API bevorzugen (immer aktuell), DOM als Fallback (CDN-gecacht)
             api_item = self._api_pack_data.get(pack_id, {})
             if api_item:
+                # Alle Felder für Banner 24027 loggen (Diagnose: welches Feld hat 370?)
+                if pack_id == 24027:
+                    logger.info(f"[PACK-API-DETAIL] Banner 24027 ALLE Felder: {api_item}")
+
                 # Alle bekannten Feldnamen für Pack-Anzahl durchprobieren
                 pack_fields = ['pack_count', 'pack_remaining', 'remaining_count', 'remaining',
                                'stock', 'packs', 'pack_num', 'pack_stock', 'count']
