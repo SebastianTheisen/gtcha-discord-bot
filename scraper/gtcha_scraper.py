@@ -84,20 +84,27 @@ class GTCHAScraper:
         # Resource-Blocking für schnelleres Scraping aktivieren
         await self._block_unnecessary_resources(self._page)
 
-        # Netzwerk-Responses loggen (API-Calls die Pack-Zahlen liefern könnten)
-        async def _log_api_response(response):
-            try:
-                url = response.url
-                ct = response.headers.get('content-type', '')
-                if response.status == 200 and 'json' in ct:
-                    body_text = await response.text()
-                    # Nur loggen wenn es Pack-relevante Daten enthält
-                    if any(k in body_text for k in ['"stock"', '"remaining"', '"count"', '"packs"', '"quantity"', '24027']):
-                        logger.info(f"[NET-DEBUG] {url[:100]}: {body_text[:300]}")
-            except Exception:
-                pass
+        # API-Response abfangen: /api/user/pack/list enthält echte Pack-Zahlen
+        # (DOM zeigt CDN-gecachte Werte, API immer aktuell)
+        self._api_pack_data: Dict[int, dict] = {}
 
-        self._page.on('response', _log_api_response)
+        async def _capture_pack_api(response):
+            try:
+                if 'pack/list' in response.url and response.status == 200:
+                    ct = response.headers.get('content-type', '')
+                    if 'json' in ct:
+                        data = await response.json()
+                        items = data.get('list', [])
+                        for item in items:
+                            pid = item.get('id')
+                            if pid:
+                                self._api_pack_data[int(pid)] = item
+                        if items:
+                            logger.info(f"[PACK-API] {len(items)} Packs aus API geladen. Felder: {list(items[0].keys())}")
+            except Exception as e:
+                logger.debug(f"[PACK-API] Fehler: {e}")
+
+        self._page.on('response', _capture_pack_api)
 
         logger.info("Browser gestartet (v6 - Pure DOM + Resource-Blocking)")
 
@@ -732,23 +739,47 @@ class GTCHAScraper:
             else:
                 logger.debug(f"   Kein .limit_detail/.buy_limit für {pack_id}")
 
-            # Packs aus .gacha_bar
-            # "Rückstand 100 / 2.000" oder "0 / 2,000"
-            bar_el = await el.query_selector('.gacha_bar')
-            if bar_el:
-                bar_text = await bar_el.inner_text()
-                logger.info(f"   [PACK-DEBUG] gacha_bar für {pack_id}: '{bar_text}'")
-                bar_text_clean = re.sub(r'(\d)[.,](\d{3})', r'\1\2', bar_text)
-                bar_text_clean = re.sub(r'(\d)[.,](\d{3})', r'\1\2', bar_text_clean)
-                packs_match = re.search(r'(\d+)\s*/\s*(\d+)', bar_text_clean)
-                if packs_match:
-                    banner['current_packs'] = int(packs_match.group(1))
-                    banner['total_packs'] = int(packs_match.group(2))
-                    logger.info(f"   [PACK-DEBUG] Packs für {pack_id}: {banner['current_packs']}/{banner['total_packs']}")
+            # Packs: API bevorzugen (immer aktuell), DOM als Fallback (CDN-gecacht)
+            api_item = self._api_pack_data.get(pack_id, {})
+            if api_item:
+                # Alle bekannten Feldnamen für Pack-Anzahl durchprobieren
+                pack_fields = ['pack_count', 'pack_remaining', 'remaining_count', 'remaining',
+                               'stock', 'packs', 'pack_num', 'pack_stock', 'count']
+                for field in pack_fields:
+                    val = api_item.get(field)
+                    if val is not None:
+                        banner['current_packs'] = int(val)
+                        logger.info(f"   [PACK-API] {pack_id}: {val} (Feld: {field})")
+                        break
                 else:
-                    logger.warning(f"   [PACK-DEBUG] Pattern nicht gefunden für {pack_id}: '{bar_text_clean}'")
-            else:
-                logger.warning(f"   [PACK-DEBUG] Kein .gacha_bar für {pack_id}")
+                    # Feld nicht gefunden: alle Felder loggen damit wir den Namen sehen
+                    logger.info(f"   [PACK-API] {pack_id}: Felder={list(api_item.keys())} Werte={api_item}")
+
+                # total_packs aus API
+                total_fields = ['total_pack', 'total_count', 'pack_total', 'total', 'pack_limit']
+                for field in total_fields:
+                    val = api_item.get(field)
+                    if val is not None:
+                        banner['total_packs'] = int(val)
+                        break
+
+            # DOM-Fallback wenn API keine Pack-Zahl geliefert hat
+            if 'current_packs' not in banner:
+                bar_el = await el.query_selector('.gacha_bar')
+                if bar_el:
+                    bar_text = await bar_el.inner_text()
+                    logger.info(f"   [PACK-DOM] gacha_bar für {pack_id}: '{bar_text}'")
+                    bar_text_clean = re.sub(r'(\d)[.,](\d{3})', r'\1\2', bar_text)
+                    bar_text_clean = re.sub(r'(\d)[.,](\d{3})', r'\1\2', bar_text_clean)
+                    packs_match = re.search(r'(\d+)\s*/\s*(\d+)', bar_text_clean)
+                    if packs_match:
+                        banner['current_packs'] = int(packs_match.group(1))
+                        banner['total_packs'] = int(packs_match.group(2))
+                        logger.info(f"   [PACK-DOM] Packs für {pack_id}: {banner['current_packs']}/{banner['total_packs']}")
+                    else:
+                        logger.warning(f"   [PACK-DOM] Pattern nicht gefunden für {pack_id}: '{bar_text_clean}'")
+                else:
+                    logger.warning(f"   [PACK-DOM] Kein .gacha_bar für {pack_id}")
 
             # End-Datum aus .end-date
             # "Verkauf bis 2026/01/21 JST"
