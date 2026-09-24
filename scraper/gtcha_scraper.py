@@ -209,11 +209,11 @@ class GTCHAScraper:
                 self._current_status = "Seite laden"
                 # Cache-Busting: Timestamp-Parameter verhindert CDN-Cache-Treffer
                 cache_bust_url = f"{self.base_url}?_={int(time.time())}"
-                await self._page.goto(cache_bust_url, wait_until="load", timeout=30000)
+                await self._page.goto(cache_bust_url, wait_until="domcontentloaded", timeout=90000)
                 logger.info("Seite geladen, warte auf Tabs...")
                 # Warte auf Tab-Menü
                 try:
-                    await self._page.wait_for_selector('.pack_menu_list .pack_menu', timeout=15000)
+                    await self._page.wait_for_selector('.pack_menu_list .pack_menu', timeout=30000)
                     await asyncio.sleep(1)
                 except Exception as e:
                     logger.warning(f"Tab-Menü nicht gefunden: {e}")
@@ -337,7 +337,7 @@ class GTCHAScraper:
 
             detail_page.on('response', capture)
             url = f"{self.base_url}/pack-detail?packId={pack_id}&_={int(time.time())}"
-            await detail_page.goto(url, wait_until="load", timeout=30000)
+            await detail_page.goto(url, wait_until="domcontentloaded", timeout=90000)
             try:
                 await detail_page.wait_for_load_state("networkidle", timeout=5000)
             except Exception:
@@ -495,11 +495,11 @@ class GTCHAScraper:
         try:
             # Seite laden - Cache-Busting via Timestamp-Parameter
             cache_bust_url = f"{self.base_url}?_={int(time.time())}"
-            await page.goto(cache_bust_url, wait_until="load", timeout=30000)
+            await page.goto(cache_bust_url, wait_until="domcontentloaded", timeout=90000)
 
             # Warte auf Tab-Menü (JavaScript lädt die Tabs)
             try:
-                await page.wait_for_selector('.pack_menu_list .pack_menu', timeout=15000)
+                await page.wait_for_selector('.pack_menu_list .pack_menu', timeout=30000)
                 await asyncio.sleep(1)
             except Exception as e:
                 logger.debug(f"   [{category}] wait_for_selector fehlgeschlagen: {e}")
@@ -511,9 +511,9 @@ class GTCHAScraper:
                 # Retry: Seite neu laden und nochmal versuchen
                 logger.debug(f"   [{category}] Retry nach Tab-Fehler...")
                 retry_url = f"{self.base_url}?_={int(time.time())}"
-                await page.goto(retry_url, wait_until="load", timeout=30000)
+                await page.goto(retry_url, wait_until="domcontentloaded", timeout=90000)
                 try:
-                    await page.wait_for_selector('.pack_menu_list .pack_menu', timeout=15000)
+                    await page.wait_for_selector('.pack_menu_list .pack_menu', timeout=30000)
                     await asyncio.sleep(1)
                 except Exception:
                     await asyncio.sleep(3)
@@ -603,7 +603,7 @@ class GTCHAScraper:
                 logger.debug(f"   [{category}] Versuch {attempt+1} fehlgeschlagen: {e}")
                 if "crashed" in str(e).lower():
                     try:
-                        await page.reload(wait_until="domcontentloaded", timeout=30000)
+                        await page.reload(wait_until="domcontentloaded", timeout=90000)
                         await self._random_delay(2.0, 4.0)
                     except:
                         pass
@@ -708,7 +708,7 @@ class GTCHAScraper:
                 if "crashed" in str(e).lower():
                     try:
                         logger.warning(f"   Seite crasht - lade neu...")
-                        await self._page.reload(wait_until="domcontentloaded", timeout=30000)
+                        await self._page.reload(wait_until="domcontentloaded", timeout=90000)
                         await self._random_delay(2.0, 4.0)
                     except:
                         pass
@@ -945,7 +945,7 @@ class GTCHAScraper:
 
         try:
             logger.debug(f"   Lade Detail-Seite: {detail_url}")
-            await self._page.goto(detail_url, wait_until="domcontentloaded", timeout=30000)
+            await self._page.goto(detail_url, wait_until="domcontentloaded", timeout=90000)
             await self._random_delay(2.0, 4.0)
 
             # Suche nach der ersten Karte (Rang 1)
