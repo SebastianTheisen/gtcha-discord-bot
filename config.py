@@ -34,12 +34,9 @@ class Config:
         channel_ids = {
             "Bonus": int(os.getenv("CHANNEL_BONUS") or "0"),
             "MIX": int(os.getenv("CHANNEL_MIX") or "0"),
-            "Yu-Gi-Oh!": int(os.getenv("CHANNEL_YUGIOH") or "0"),
             "Pokémon": int(os.getenv("CHANNEL_POKEMON") or "0"),
-            "Weiss Schwarz": int(os.getenv("CHANNEL_WEISS_SCHWARZ") or "0"),
             "One piece": int(os.getenv("CHANNEL_ONE_PIECE") or "0"),
             "Dragon Ball": int(os.getenv("CHANNEL_DRAGON_BALL") or "0"),
-            "Ultraman": int(os.getenv("CHANNEL_ULTRAMAN") or "0"),
         }
 
         return cls(
@@ -63,7 +60,7 @@ except ValueError as e:
     config = None
 
 # Direkte Exporte fuer einfachen Import
-CATEGORIES = ["Bonus", "MIX", "Yu-Gi-Oh!", "Pokémon", "Weiss Schwarz", "One piece", "Dragon Ball", "Ultraman"]
+CATEGORIES = ["Bonus", "MIX", "Pokémon", "One piece", "Dragon Ball"]
 MEDAL_EMOJIS = {"T1": "🥇", "T2": "🥈", "T3": "🥉"}
 
 # Kompatibilitaets-Exporte
@@ -76,12 +73,9 @@ DATABASE_PATH = os.getenv("DATABASE_PATH", "data/gtcha_bot.db")
 CHANNEL_IDS = {
     "Bonus": int(os.getenv("CHANNEL_BONUS") or "0"),
     "MIX": int(os.getenv("CHANNEL_MIX") or "0"),
-    "Yu-Gi-Oh!": int(os.getenv("CHANNEL_YUGIOH") or "0"),
     "Pokémon": int(os.getenv("CHANNEL_POKEMON") or "0"),
-    "Weiss Schwarz": int(os.getenv("CHANNEL_WEISS_SCHWARZ") or "0"),
     "One piece": int(os.getenv("CHANNEL_ONE_PIECE") or "0"),
     "Dragon Ball": int(os.getenv("CHANNEL_DRAGON_BALL") or "0"),
-    "Ultraman": int(os.getenv("CHANNEL_ULTRAMAN") or "0"),
 }
 
 # Admin-Channel für Bot-Benachrichtigungen (optional)

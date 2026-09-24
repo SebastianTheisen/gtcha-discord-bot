@@ -528,12 +528,9 @@ class GTCHAScraper:
         category_keywords = {
             "Bonus": ["bonus", "ボーナス"],
             "MIX": ["mix"],
-            "Yu-Gi-Oh!": ["yu-gi-oh", "yugioh", "遊戯王", "遊☆戯☆王", "遊戯", "gi-oh", "yugi"],
             "Pokémon": ["pokemon", "pokémon", "poke", "ポケモン"],
-            "Weiss Schwarz": ["weiss", "schwarz", "ヴァイスシュヴァルツ", "ヴァイスシュバルツ", "ヴァイス", "weis"],
             "One piece": ["one piece", "onepiece", "ワンピース"],
             "Dragon Ball": ["dragon ball", "dragonball", "ドラゴンボール"],
-            "Ultraman": ["ultraman", "ウルトラマン", "ウルトラ"],
         }
 
         keywords = [_normalize(k) for k in category_keywords.get(category, [category.lower()])]
@@ -636,12 +633,9 @@ class GTCHAScraper:
         category_keywords = {
             "Bonus": ["bonus", "ボーナス"],
             "MIX": ["mix"],
-            "Yu-Gi-Oh!": ["yu-gi-oh", "yugioh", "遊戯王", "遊☆戯☆王", "遊戯", "gi-oh", "yugi"],
             "Pokémon": ["pokemon", "pokémon", "poke", "ポケモン"],
-            "Weiss Schwarz": ["weiss", "schwarz", "ヴァイスシュヴァルツ", "ヴァイスシュバルツ", "ヴァイス", "weis"],
             "One piece": ["one piece", "onepiece", "ワンピース"],
             "Dragon Ball": ["dragon ball", "dragonball", "ドラゴンボール"],
-            "Ultraman": ["ultraman", "ウルトラマン", "ウルトラ"],
         }
 
         keywords = [_normalize(k) for k in category_keywords.get(category, [category.lower()])]

@@ -595,9 +595,8 @@ class GTCHABot(commands.Bot):
                 found_banner_ids = {b.pack_id for b in banners}
 
                 # === API-ONLY PACK-UPDATES ===
-                # Für DB-Banner die nicht im Scrape auftauchten (z.B. Yu-Gi-Oh!, Weiss Schwarz,
-                # Ultraman wenn deren Tabs nicht klickbar sind), Pack-Zahlen direkt aus der
-                # Proxy-API aktualisieren. Die API gibt ALLE Banner zurück, unabhängig vom Tab.
+                # Für DB-Banner die nicht im DOM-Scrape auftauchten (z.B. Banner die auf keinem
+                # sichtbaren Tab landen), Pack-Zahlen direkt aus der Proxy-API aktualisieren.
                 api_pack_data = getattr(scraper, '_api_pack_data', {})
                 if api_pack_data:
                     db_banners_all = await self.db.get_all_active_banners_basic()
@@ -777,9 +776,7 @@ class GTCHABot(commands.Bot):
         category_colors = {
             "Bonus": 0xFFD700,      # Gold
             "MIX": 0x9B59B6,        # Lila
-            "Yu-Gi-Oh!": 0x8B4513,  # Braun
             "Pokémon": 0xFFCC00,    # Pokémon-Gelb
-            "Weiss Schwarz": 0x2C3E50,  # Dunkelblau
             "One piece": 0xE74C3C,  # Rot
             "Dragon Ball": 0xF57C00,  # Orange
         }
