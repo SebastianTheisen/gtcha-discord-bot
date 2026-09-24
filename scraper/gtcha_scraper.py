@@ -567,7 +567,20 @@ class GTCHAScraper:
             if attempt < 1:
                 await asyncio.sleep(1)
 
-        logger.warning(f"   Tab nicht gefunden: {category}")
+        # Zeige verfügbare Tabs damit wir sehen welche Namen die Website aktuell nutzt
+        try:
+            all_tabs = await page.query_selector_all('.pack_menu_list .pack_menu')
+            tab_texts = []
+            for t in all_tabs:
+                try:
+                    text = await t.inner_text()
+                    if text.strip():
+                        tab_texts.append(repr(text.strip()))
+                except:
+                    pass
+            logger.warning(f"   Tab nicht gefunden: {category} | Verfügbare Tabs: {tab_texts}")
+        except:
+            logger.warning(f"   Tab nicht gefunden: {category}")
         return False
 
     async def _extract_banners_from_page(self, page: Page, category: str, banners_data: Dict[int, Dict]) -> int:
@@ -662,7 +675,20 @@ class GTCHAScraper:
             if attempt < 1:
                 await asyncio.sleep(1)
 
-        logger.warning(f"   Tab nicht gefunden: {category}")
+        # Zeige verfügbare Tabs damit wir sehen welche Namen die Website aktuell nutzt
+        try:
+            all_tabs = await self._page.query_selector_all('.pack_menu_list .pack_menu')
+            tab_texts = []
+            for t in all_tabs:
+                try:
+                    text = await t.inner_text()
+                    if text.strip():
+                        tab_texts.append(repr(text.strip()))
+                except:
+                    pass
+            logger.warning(f"   Tab nicht gefunden: {category} | Verfügbare Tabs: {tab_texts}")
+        except:
+            logger.warning(f"   Tab nicht gefunden: {category}")
         return False
 
     async def _extract_banners_from_dom(self, category: str) -> int:
