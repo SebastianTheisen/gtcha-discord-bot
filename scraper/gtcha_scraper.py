@@ -79,14 +79,24 @@ class GTCHAScraper:
         user_agent = random.choice(USER_AGENTS)
         logger.debug(f"User-Agent: {user_agent[:50]}...")
 
-        # Keine gefälschten IP-/Länder-Header: Die Seite bestimmt das Land selbst über
-        # api/user/country, und gefälschte Header können dort einen falschen Pool auslösen.
+        # Manche Server nutzen X-Forwarded-For / X-Real-IP für Geolocation statt der echten IP.
+        # Wir senden eine deutsche Telekom-IP damit der Server Deutschland als Herkunftsland erkennt.
+        geo_headers = {
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
+            "X-Forwarded-For": "217.237.150.100",   # Deutsche Telekom (T-Online)
+            "X-Real-IP": "217.237.150.100",
+            "CF-Connecting-IP": "217.237.150.100",
+            "X-Country": "DE",
+            "X-Country-Code": "DE",
+        }
+
         proxy_cfg = {"server": SCRAPER_PROXY} if SCRAPER_PROXY else None
         self._context = await self._browser.new_context(
             viewport={"width": 1920, "height": 1080},
             user_agent=user_agent,
-            locale="de-DE",
-            extra_http_headers={"Cache-Control": "no-cache", "Pragma": "no-cache"},
+            extra_http_headers=geo_headers,
             proxy=proxy_cfg,
         )
 
