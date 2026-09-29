@@ -75,30 +75,38 @@ def ip_headers(ip):
 
 
 def main():
-    pid = sys.argv[1] if len(sys.argv) > 1 else "24125"
-    phone_ips = sys.argv[2:]
-    variants = [
-        ("Direkt (Contabo-IP)", {}),
-        ("WARP", {"warp": True}),
-        ("Sprache ja", {"lang": "ja-JP,ja;q=0.9"}),
-        ("Sprache en", {"lang": "en-US,en;q=0.9"}),
-        ("IP-Header DE Telekom", {"headers": ip_headers("217.237.150.100")}),
-        ("IP-Header DE Vodafone", {"headers": ip_headers("188.97.1.1")}),
-        ("IP-Header JP", {"headers": ip_headers("126.0.0.1")}),
-        ("IP-Header US", {"headers": ip_headers("8.8.8.8")}),
-    ]
-    if port_open(TOR):
-        for i in (1, 2, 3):
-            variants.append((f"Tor #{i}", {"proxy": TOR, "circuit": f"diag{i}"}))
-    else:
-        print(f"Tor nicht erreichbar ({TOR}) - Tor-Test übersprungen")
-    print(f"Ausgangs-IP direkt: {egress_ip(None)} | WARP: {egress_ip(WARP)}")
-    for ip in phone_ips:
-        variants.append((f"IP-Header Handy {ip}", {"headers": ip_headers(ip)}))
-        variants.append((f"Nur X-Forwarded-For {ip}", {"headers": [f"X-Forwarded-For: {ip}"]}))
+    args = [a for a in sys.argv[1:] if a != "--nur-tor"]
+    only_tor = "--nur-tor" in sys.argv
+    pid = args[0] if args else "24125"
+    phone_ips = args[1:]
+    variants = []
+    if not only_tor:
+        variants = [
+            ("Direkt (Contabo-IP)", {}),
+            ("WARP", {"warp": True}),
+            ("Sprache ja", {"lang": "ja-JP,ja;q=0.9"}),
+            ("IP-Header DE Telekom", {"headers": ip_headers("217.237.150.100")}),
+        ]
+        for ip in phone_ips:
+            variants.append((f"IP-Header Handy {ip}", {"headers": ip_headers(ip)}))
+            variants.append((f"Nur X-Forwarded-For {ip}", {"headers": [f"X-Forwarded-For: {ip}"]}))
+        print(f"Ausgangs-IP direkt: {egress_ip(None)} | WARP: {egress_ip(WARP)}")
     print(f"Banner {pid} - pack_count je Variante:")
     for label, kw in variants:
         print(f"  {label:<40} {pack_count(pid, **kw)}", flush=True)
+
+    if not port_open(TOR):
+        print(f"Tor nicht erreichbar ({TOR}) - Tor-Test übersprungen")
+        return
+    print("Tor-Verbindungscheck (max. 45 s)...", flush=True)
+    check = curl(["--socks5-hostname", TOR, "https://check.torproject.org/api/ip"], timeout=45)
+    print(f"  {' '.join(check.split())[:150]}", flush=True)
+    if '"IsTor":true' not in check.replace(" ", ""):
+        print("  Tor baut keine Verbindung auf - Tor-Test übersprungen")
+        return
+    for i in (1, 2, 3):
+        print(f"  Tor #{i} läuft...", flush=True)
+        print(f"  {'Tor #' + str(i):<40} {pack_count(pid, proxy=TOR, circuit=f'diag{i}')}", flush=True)
 
 
 if __name__ == "__main__":
