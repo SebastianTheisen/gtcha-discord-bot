@@ -79,25 +79,14 @@ class GTCHAScraper:
         user_agent = random.choice(USER_AGENTS)
         logger.debug(f"User-Agent: {user_agent[:50]}...")
 
-        # Manche Server nutzen X-Forwarded-For / X-Real-IP für Geolocation statt der echten IP.
-        # Wir senden eine deutsche Telekom-IP damit der Server Deutschland als Herkunftsland erkennt.
-        # Falls die Seite Cloudflare nutzt, ignoriert CF diese Headers – dann hilft nur SCRAPER_PROXY.
-        geo_headers = {
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Pragma": "no-cache",
-            "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
-            "X-Forwarded-For": "217.237.150.100",   # Deutsche Telekom (T-Online)
-            "X-Real-IP": "217.237.150.100",
-            "CF-Connecting-IP": "217.237.150.100",
-            "X-Country": "DE",
-            "X-Country-Code": "DE",
-        }
-
+        # Keine gefälschten IP-/Länder-Header: Die Seite bestimmt das Land selbst über
+        # api/user/country, und gefälschte Header können dort einen falschen Pool auslösen.
         proxy_cfg = {"server": SCRAPER_PROXY} if SCRAPER_PROXY else None
         self._context = await self._browser.new_context(
             viewport={"width": 1920, "height": 1080},
             user_agent=user_agent,
-            extra_http_headers=geo_headers,
+            locale="de-DE",
+            extra_http_headers={"Cache-Control": "no-cache", "Pragma": "no-cache"},
             proxy=proxy_cfg,
         )
 
@@ -110,6 +99,7 @@ class GTCHAScraper:
         # Listener am Kontext-Level → gilt für alle Pages (main + parallel).
         # Browser läuft über WARP (DE-Pool) → konsistente Pack-Zahlen für DE-Nutzer.
         self._api_pack_data: Dict[int, dict] = {}
+        self._logged_country_urls: Set[str] = set()
 
         async def _capture_pack_api(response):
             try:
@@ -118,6 +108,10 @@ class GTCHAScraper:
                 ct = response.headers.get('content-type', '')
                 if 'json' not in ct:
                     return
+                if '/api/user/country' in response.url and response.url not in self._logged_country_urls:
+                    self._logged_country_urls.add(response.url)
+                    body = (await response.text())[:300]
+                    logger.info(f"[LAND] {response.url.split('/api/user/')[-1]}: {body}")
                 if 'pack/list' in response.url:
                     data = await response.json()
                     items = data.get('list', [])
