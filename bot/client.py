@@ -205,17 +205,19 @@ class GTCHABot(commands.Bot):
         # Startup-Benachrichtigung senden
         await notify_bot_started()
 
-        # Parallelisiere Startup-Tasks für schnelleren Start (~20-40s gespart)
-        await asyncio.gather(
-            self._recover_threads_from_discord(),      # Threads aus Discord wiederherstellen
-            self._sync_medals_from_discord(),          # Medaillen synchronisieren
-            self._cleanup_duplicate_probability_messages(),  # Aufräumen
-        )
+        # Nur die Thread-Wiederherstellung muss vor dem ersten Scrape fertig sein
+        # (sonst entstehen doppelte Threads); der Rest läuft parallel zum Scrape.
+        await self._recover_threads_from_discord()
 
-        # Erster Scrape nach 10 Sekunden - über Scheduler triggern statt direkt aufrufen
-        # Das vermeidet Konflikte mit dem regulären Scheduler-Job
-        await asyncio.sleep(10)
+        # Erster Scrape sofort - über Scheduler triggern statt direkt aufrufen,
+        # das vermeidet Konflikte mit dem regulären Scheduler-Job
         self.scheduler.modify_job('scrape_job', next_run_time=datetime.now())
+
+        self._startup_tasks = asyncio.gather(
+            self._sync_medals_from_discord(),
+            self._cleanup_duplicate_probability_messages(),
+            return_exceptions=True,
+        )
 
     async def _recover_threads_from_discord(self):
         """Stellt Thread-Daten aus Discord wieder her (für DB-Verlust nach Neustart)."""
