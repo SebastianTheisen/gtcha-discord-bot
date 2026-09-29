@@ -106,7 +106,10 @@ class GTCHAScraper:
         # bewusst fehl, statt direkt (mit falschem Zähler) zu laden.
         self._browser = await self._playwright.chromium.launch(
             headless=self.headless,
-            args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+            # Bilder per Browser-Einstellung statt page.route() blockieren: page.route() schaltet
+            # den HTTP-Cache ab, dann lädt jeder Tab alle Skripte erneut über Tor.
+            args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
+                  '--blink-settings=imagesEnabled=false'],
         )
         if SCRAPER_PROXY:
             logger.info(f"Browser-Proxy: {SCRAPER_PROXY.split('@')[-1]}")
@@ -119,9 +122,9 @@ class GTCHAScraper:
 
         # Manche Server nutzen X-Forwarded-For / X-Real-IP für Geolocation statt der echten IP.
         # Wir senden eine deutsche Telekom-IP damit der Server Deutschland als Herkunftsland erkennt.
+        # Kein Cache-Control/Pragma: die Seite liefert HTML und API ohnehin mit no-store,
+        # und die Header würden den Browser-Cache für die (unveränderlichen) Skripte umgehen.
         geo_headers = {
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Pragma": "no-cache",
             "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
             "X-Forwarded-For": "217.237.150.100",   # Deutsche Telekom (T-Online)
             "X-Real-IP": "217.237.150.100",
@@ -140,8 +143,6 @@ class GTCHAScraper:
 
         self._page = await self._context.new_page()
 
-        # Resource-Blocking für schnelleres Scraping aktivieren
-        await self._block_unnecessary_resources(self._page)
 
         # API-Response abfangen: /api/user/pack/list enthält echte Pack-Zahlen.
         # Listener am Kontext-Level → gilt für alle Pages (main + parallel).
@@ -173,7 +174,7 @@ class GTCHAScraper:
 
         self._context.on('response', _capture_pack_api)
 
-        logger.info("Browser gestartet (v6 - Pure DOM + Resource-Blocking)")
+        logger.info("Browser gestartet (v6 - Pure DOM, Bilder aus)")
 
     async def close(self):
         if self._context:
@@ -188,28 +189,6 @@ class GTCHAScraper:
         """Zufällige Verzögerung um menschliches Verhalten zu simulieren."""
         delay = random.uniform(min_sec, max_sec)
         await asyncio.sleep(delay)
-
-    async def _block_unnecessary_resources(self, page: Page):
-        """Blockt Bilder, Fonts, CSS und Tracking für schnelleres Scraping.
-
-        Da wir nur das DOM brauchen, können wir diese Ressourcen überspringen.
-        Spart ~40-60% Ladezeit pro Seite.
-        """
-        # Bilder blockieren (verschiedene Formate)
-        await page.route("**/*.{png,jpg,jpeg,gif,webp,svg,ico}", lambda r: r.abort())
-
-        # Fonts blockieren
-        await page.route("**/*.{woff,woff2,ttf,eot,otf}", lambda r: r.abort())
-
-        # Analytics und Tracking blockieren
-        await page.route("**/analytics*", lambda r: r.abort())
-        await page.route("**/tracking*", lambda r: r.abort())
-        await page.route("**/google-analytics*", lambda r: r.abort())
-        await page.route("**/gtag*", lambda r: r.abort())
-        await page.route("**/facebook*", lambda r: r.abort())
-        await page.route("**/twitter*", lambda r: r.abort())
-
-        logger.debug("Resource-Blocking aktiviert")
 
     async def _heartbeat(self, start_time: datetime):
         """Heartbeat-Task der alle 30 Sekunden den Status loggt."""
@@ -251,7 +230,7 @@ class GTCHAScraper:
                 logger.info("Seite geladen, warte auf Tabs...")
                 # Warte auf Tab-Menü
                 try:
-                    await self._page.wait_for_selector('.pack_menu_list .pack_menu', timeout=30000)
+                    await self._page.wait_for_selector('.pack_menu_list .pack_menu', timeout=60000)
                     await asyncio.sleep(1)
                 except Exception as e:
                     logger.warning(f"Tab-Menü nicht gefunden: {e}")
@@ -422,14 +401,14 @@ class GTCHAScraper:
 
                 for category in category_group:
                     page = await self._context.new_page()
-                    # Resource-Blocking für schnelleres Scraping
-                    await self._block_unnecessary_resources(page)
                     pages.append(page)
                     task = self._scrape_single_category_parallel(page, category)
                     tasks.append(task)
 
-                # Parallel ausführen
-                results = await asyncio.gather(*tasks, return_exceptions=True)
+                # Erster Tab allein füllt den Browser-Cache (Skripte), die übrigen laden
+                # danach parallel aus dem Cache statt alle gleichzeitig über Tor.
+                results = await asyncio.gather(tasks[0], return_exceptions=True)
+                results += await asyncio.gather(*tasks[1:], return_exceptions=True)
 
                 # Pages schließen
                 for page in pages:
@@ -492,7 +471,7 @@ class GTCHAScraper:
 
             # Warte auf Tab-Menü (JavaScript lädt die Tabs)
             try:
-                await page.wait_for_selector('.pack_menu_list .pack_menu', timeout=30000)
+                await page.wait_for_selector('.pack_menu_list .pack_menu', timeout=60000)
                 await asyncio.sleep(1)
             except Exception as e:
                 logger.debug(f"   [{category}] wait_for_selector fehlgeschlagen: {e}")
@@ -506,7 +485,7 @@ class GTCHAScraper:
                 retry_url = f"{self.base_url}?_={int(time.time())}"
                 await page.goto(retry_url, wait_until="domcontentloaded", timeout=90000)
                 try:
-                    await page.wait_for_selector('.pack_menu_list .pack_menu', timeout=30000)
+                    await page.wait_for_selector('.pack_menu_list .pack_menu', timeout=60000)
                     await asyncio.sleep(1)
                 except Exception:
                     await asyncio.sleep(3)
