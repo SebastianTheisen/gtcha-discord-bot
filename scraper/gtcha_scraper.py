@@ -15,13 +15,50 @@ from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Set
 from datetime import datetime, timezone, timedelta
 
-from playwright.async_api import async_playwright, Page, Browser, BrowserContext, ElementHandle
+from playwright.async_api import async_playwright, Page, Browser, BrowserContext
 from loguru import logger
 
 from .models import ScrapedBanner
 from config import CATEGORIES, PARALLEL_SCRAPING, PARALLEL_TABS, SCRAPER_PROXY
 
 JST = timezone(timedelta(hours=9))
+
+TITLE_SELECTORS = ['.gacha_name', '.gacha-name', '.title', '.name', '.pack-name',
+                   '.gacha_title', 'h3', 'h4', '.header .text']
+
+# Liest pro Banner-Element dieselben Felder wie früher die Einzelabfragen, aber alle in einem
+# Browser-Aufruf. innerText entspricht Playwrights inner_text(), die Sichtbarkeit is_visible().
+BANNER_EXTRACT_JS = """(els, titleSelectors) => els.map(el => {
+    const q = s => { try { return el.querySelector(s); } catch (e) { return null; } };
+    const text = e => (e ? e.innerText : null);
+    const rect = el.getBoundingClientRect();
+    const visible = rect.width > 0 && rect.height > 0 && getComputedStyle(el).visibility !== 'hidden';
+    let title = null;
+    for (const s of titleSelectors) {
+        const t = text(q(s));
+        if (t && t.trim().length > 1) { title = t.trim(); break; }
+    }
+    const priceEl = q('.gacha_pay div:not(:has(img))') || q('.gacha_pay');
+    const limitEl = q('.limit_detail') || q('.buy_limit .limit_detail') || q('.buy_limit');
+    const img = q('img.current, .image img');
+    const cd = q('.countdown');
+    let timer = null;
+    if (cd) { try { timer = cd.querySelector('.num.timer-font, .num, .timer-font'); } catch (e) {} }
+    return {
+        id: el.getAttribute('data-pack-id'),
+        visible,
+        title,
+        price: text(priceEl),
+        limit: text(limitEl),
+        bar: text(q('.gacha_bar')),
+        end: text(q('.end-date')),
+        has_img: !!img,
+        img: img ? img.getAttribute('src') : null,
+        has_countdown: !!cd,
+        timer: text(timer),
+        countdown: text(cd),
+    };
+})"""
 
 
 def _normalize(text: str) -> str:
@@ -569,30 +606,29 @@ class GTCHAScraper:
             logger.warning(f"   Tab nicht gefunden: {category}")
         return False
 
+    async def _read_banner_elements(self, page: Page) -> List[Dict]:
+        """Liest alle Banner-Rohtexte in einem einzigen Browser-Aufruf (statt ~25 Abfragen pro Banner)."""
+        return await page.eval_on_selector_all('[data-pack-id]', BANNER_EXTRACT_JS, TITLE_SELECTORS)
+
     async def _extract_banners_from_page(self, page: Page, category: str, banners_data: Dict[int, Dict]) -> int:
         """Extrahiert Banner aus einer spezifischen Page."""
         count = 0
 
         try:
-            banner_elements = await page.query_selector_all('[data-pack-id]')
-
-            for el in banner_elements:
+            for raw in await self._read_banner_elements(page):
                 try:
-                    is_visible = await el.is_visible()
-                    if not is_visible:
+                    if not raw.get('visible'):
                         continue
-
-                    pack_id_str = await el.get_attribute('data-pack-id')
-                    if not pack_id_str or not pack_id_str.isdigit():
+                    pack_id_str = raw.get('id') or ''
+                    if not pack_id_str.isdigit():
                         continue
-
                     pack_id = int(pack_id_str)
 
                     if pack_id in banners_data:
                         count += 1
                         continue
 
-                    banner = await self._parse_banner_element(el, pack_id, category)
+                    banner = self._parse_banner_raw(raw, pack_id, category)
                     if banner:
                         banners_data[pack_id] = banner
                         count += 1
@@ -682,22 +718,16 @@ class GTCHAScraper:
         count = 0
 
         try:
-            # Finde alle Banner-Elemente
-            banner_elements = await self._page.query_selector_all('[data-pack-id]')
-            logger.debug(f"   Gefundene [data-pack-id] Elemente: {len(banner_elements)}")
+            raw_banners = await self._read_banner_elements(self._page)
+            logger.debug(f"   Gefundene [data-pack-id] Elemente: {len(raw_banners)}")
 
-            for el in banner_elements:
+            for raw in raw_banners:
                 try:
-                    # Prüfe Sichtbarkeit
-                    is_visible = await el.is_visible()
-                    if not is_visible:
+                    if not raw.get('visible'):
                         continue
-
-                    # Pack ID
-                    pack_id_str = await el.get_attribute('data-pack-id')
-                    if not pack_id_str or not pack_id_str.isdigit():
+                    pack_id_str = raw.get('id') or ''
+                    if not pack_id_str.isdigit():
                         continue
-
                     pack_id = int(pack_id_str)
 
                     # Wenn Banner schon existiert, nur Kategorie hinzufügen
@@ -707,7 +737,7 @@ class GTCHAScraper:
                         continue
 
                     # Neuen Banner aus DOM extrahieren
-                    banner = await self._parse_banner_element(el, pack_id, category)
+                    banner = self._parse_banner_raw(raw, pack_id, category)
                     if banner:
                         self._captured_banners[pack_id] = banner
                         self._category_banners[category].add(pack_id)
@@ -721,45 +751,21 @@ class GTCHAScraper:
 
         return count
 
-    async def _parse_banner_element(self, el: ElementHandle, pack_id: int, category: str) -> Optional[Dict]:
-        """Parst ein Banner-Element und extrahiert alle Daten."""
+    def _parse_banner_raw(self, raw: Dict, pack_id: int, category: str) -> Optional[Dict]:
+        """Wertet die Rohtexte eines Banner-Elements aus (siehe BANNER_EXTRACT_JS)."""
         banner = {
             'pack_id': pack_id,
             'category': category,
         }
 
         try:
-            # Titel/Name aus verschiedenen möglichen Elementen
-            title_selectors = [
-                '.gacha_name',
-                '.gacha-name',
-                '.title',
-                '.name',
-                '.pack-name',
-                '.gacha_title',
-                'h3',
-                'h4',
-                '.header .text',
-            ]
-            for sel in title_selectors:
-                try:
-                    title_el = await el.query_selector(sel)
-                    if title_el:
-                        title_text = await title_el.inner_text()
-                        title_text = title_text.strip()
-                        if title_text and len(title_text) > 1:
-                            banner['title'] = title_text
-                            break
-                except:
-                    pass
+            if raw.get('title'):
+                banner['title'] = raw['title']
 
             # Preis aus .gacha_pay
             # <div class="gacha_pay"><img ...><div>1.111</div></div>
-            price_el = await el.query_selector('.gacha_pay div:not(:has(img))')
-            if not price_el:
-                price_el = await el.query_selector('.gacha_pay')
-            if price_el:
-                price_text = await price_el.inner_text()
+            price_text = raw.get('price')
+            if price_text:
                 price_text = price_text.strip().replace('.', '').replace(',', '').replace(' ', '')
                 # Extrahiere Zahl
                 price_match = re.search(r'(\d+)', price_text)
@@ -770,13 +776,8 @@ class GTCHAScraper:
             # Deutsch: "Beschränkt auf 10 Mal" oder "Beschränkt auf 10 Mal pro Tag"
             # Japanisch: "1日50回限定" (50 mal pro Tag limitiert)
             # Erst .limit_detail versuchen (spezifischer), dann .buy_limit
-            limit_el = await el.query_selector('.limit_detail')
-            if not limit_el:
-                limit_el = await el.query_selector('.buy_limit .limit_detail')
-            if not limit_el:
-                limit_el = await el.query_selector('.buy_limit')
-            if limit_el:
-                limit_text = await limit_el.inner_text()
+            limit_text = raw.get('limit')
+            if limit_text is not None:
                 logger.debug(f"   limit_detail Text für {pack_id}: '{limit_text}'")
 
                 # Japanisches Format: "1日50回限定" -> 50 (Zahl vor 回)
@@ -829,9 +830,8 @@ class GTCHAScraper:
             # DOM immer lesen – als Validierung wenn API 0 zurückgibt
             dom_pack_count = None
             dom_total_packs = None
-            bar_el = await el.query_selector('.gacha_bar')
-            if bar_el:
-                bar_text = await bar_el.inner_text()
+            bar_text = raw.get('bar')
+            if bar_text is not None:
                 bar_text_clean = re.sub(r'(\d)[.,](\d{3})', r'\1\2', bar_text)
                 bar_text_clean = re.sub(r'(\d)[.,](\d{3})', r'\1\2', bar_text_clean)
                 packs_match = re.search(r'(\d+)\s*/\s*(\d+)', bar_text_clean)
@@ -856,15 +856,12 @@ class GTCHAScraper:
 
             # End-Datum aus .end-date
             # "Verkauf bis 2026/01/21 JST"
-            end_el = await el.query_selector('.end-date')
-            if end_el:
-                end_text = await end_el.inner_text()
-                banner['sale_end_date'] = end_text.strip()
+            if raw.get('end') is not None:
+                banner['sale_end_date'] = raw['end'].strip()
 
             # Bild-URL aus img.current
-            img_el = await el.query_selector('img.current, .image img')
-            if img_el:
-                img_src = await img_el.get_attribute('src')
+            if raw.get('has_img'):
+                img_src = raw.get('img')
                 if img_src:
                     if not img_src.startswith('http'):
                         img_src = f"{self.base_url}{img_src}"
@@ -874,20 +871,17 @@ class GTCHAScraper:
 
             # Prüfe ob Banner aktiv ist (kein Countdown = aktiv)
             # Wenn "Bis zum Verkaufsbeginn" sichtbar ist oder Timer > 0, ist der Banner noch nicht aktiv
-            countdown_el = await el.query_selector('.countdown')
-            if countdown_el:
+            if raw.get('has_countdown'):
                 # Prüfe auf Timer-Wert
-                timer_el = await countdown_el.query_selector('.num.timer-font, .num, .timer-font')
-                if timer_el:
-                    timer_text = await timer_el.inner_text()
-                    timer_text = timer_text.strip()
+                if raw.get('timer') is not None:
+                    timer_text = raw['timer'].strip()
                     # Wenn Timer nicht leer und nicht "00.00.00" oder ähnlich
                     if timer_text and not all(c in '0.: ' for c in timer_text):
                         logger.debug(f"   Banner {pack_id} noch nicht aktiv (Timer: {timer_text})")
                         return None
 
                 # Fallback: Prüfe auf "Verkaufsbeginn" Text
-                countdown_text = await countdown_el.inner_text()
+                countdown_text = raw.get('countdown') or ''
                 if 'Verkaufsbeginn' in countdown_text or 'start' in countdown_text.lower():
                     logger.debug(f"   Banner {pack_id} noch nicht aktiv (Countdown)")
                     return None
