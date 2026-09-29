@@ -407,14 +407,7 @@ class GTCHAScraper:
                         logger.warning(f"   Fehler bei {category}: {result}")
                         failed_categories.append((category, str(result)))
                     elif result is not None:
-                        count, banners_data = result
-                        # Banner-Daten mergen
-                        for pack_id, data in banners_data.items():
-                            if pack_id not in self._captured_banners:
-                                self._captured_banners[pack_id] = data
-                            self._category_banners[category].add(pack_id)
-                        successful_categories.append((category, count))
-                        logger.info(f"   -> {count} Banner in {category}")
+                        successful_categories.append((category, result[0]))
 
                 # Kurze Pause zwischen Gruppen
                 if group_idx < len(category_groups) - 1:
@@ -495,6 +488,10 @@ class GTCHAScraper:
 
             # Banner extrahieren
             count = await self._extract_banners_from_page(page, category, banners_data)
+            for pack_id, data in banners_data.items():
+                self._captured_banners.setdefault(pack_id, data)
+                self._category_banners[category].add(pack_id)
+            logger.info(f"   -> {count} Banner in {category}")
             return (count, banners_data)
 
         except asyncio.CancelledError:
