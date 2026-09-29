@@ -46,7 +46,7 @@ def fetch(extra_headers, use_warp, bust):
         data = json.loads(body)
     except Exception:
         data = None
-    return status, headers, data
+    return status, headers, data, body
 
 
 def packs(item):
@@ -65,14 +65,15 @@ def main():
         for bust in (True, False):
             for i in range(2):
                 label = f"{name} {'cache-bust' if bust else 'ohne-bust'} #{i + 1}"
-                status, headers, data = fetch(hdrs, warp, bust)
+                status, headers, data, body = fetch(hdrs, warp, bust)
                 print(f"\n=== {label}: {status}")
+                if not isinstance(data, dict):
+                    print(f"    content-type: {headers.get('content-type', '?')}")
+                    print(f"    Body: {' '.join(body.split())[:400]}")
+                    continue
                 for h in SHOW_HEADERS:
                     if h in headers:
                         print(f"    {h}: {headers[h]}")
-                if not isinstance(data, dict):
-                    print("    (keine JSON-Antwort)")
-                    continue
                 extra = {k: v for k, v in data.items() if k != "list"}
                 if extra:
                     print(f"    Weitere Felder: {json.dumps(extra, ensure_ascii=False)[:300]}")
