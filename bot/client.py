@@ -623,23 +623,14 @@ class GTCHABot(commands.Bot):
                         if old_packs is None:
                             await self.db.update_banner_packs(pid, new_packs)
                             api_only_count += 1
-                        elif new_packs != old_packs:
-                            # Oszillations-Schutz: Wenn letzter Post X→Y war und jetzt Y→X, überspringen
-                            last_hist = await self.db.get_last_pack_history(pid)
-                            if (last_hist and
-                                    last_hist['old_count'] == new_packs and
-                                    last_hist['new_count'] == old_packs):
-                                logger.warning(
-                                    f"[OSZILLATION/API] {pid}: Letzter Post war {last_hist['old_count']}→{last_hist['new_count']}, "
-                                    f"jetzt {old_packs}→{new_packs} - überspringe"
-                                )
+                        elif new_packs > old_packs:
+                            logger.warning(f"[PACK-ANSTIEG IGNORIERT/API] {pid}: {old_packs} -> {new_packs}")
+                        elif new_packs < old_packs:
+                            posted = await self._post_pack_update_to_thread(pid, old_packs, new_packs, total_packs)
+                            if posted:
                                 await self.db.update_banner_packs(pid, new_packs)
-                            else:
-                                posted = await self._post_pack_update_to_thread(pid, old_packs, new_packs, total_packs)
-                                if posted:
-                                    await self.db.update_banner_packs(pid, new_packs)
-                                    api_only_count += 1
-                                    logger.info(f"API-Only Pack-Update: {pid} ({old_packs} → {new_packs})")
+                                api_only_count += 1
+                                logger.info(f"API-Only Pack-Update: {pid} ({old_packs} → {new_packs})")
                     if api_only_count > 0:
                         logger.info(f"API-Only Updates: {api_only_count} Banner außerhalb der gescrapten Kategorien aktualisiert")
 
@@ -995,39 +986,34 @@ class GTCHABot(commands.Bot):
                     old_entries_str = old_entries if old_entries else "unbegrenzt"
                     logger.info(f"Update: {banner.pack_id} Entries: {old_entries_str} -> {banner.entries_per_day}")
 
-                # Track ob sich Packs geändert haben
+                # Packs können auf der Website nur sinken - ein höherer Wert stammt immer
+                # aus einer falschen Quelle (anderer Regional-Pool / Cache) und wird verworfen.
+                if (old_packs is not None and banner.current_packs is not None
+                        and banner.current_packs > old_packs):
+                    logger.warning(
+                        f"[PACK-ANSTIEG IGNORIERT] {banner.pack_id}: {old_packs} -> {banner.current_packs} "
+                        f"(Packs können nicht steigen - bleibe bei {old_packs})"
+                    )
+                    banner.current_packs = old_packs
+
                 packs_changed = banner.current_packs != old_packs
 
                 if packs_changed:
                     logger.info(f"Pack-Änderung erkannt: {banner.pack_id} {old_packs} -> {banner.current_packs}")
                     if old_packs is not None:
-                        # Oszillations-Schutz: Wenn letzter Post X→Y war und jetzt Y→X, überspringen
-                        last_hist = await self.db.get_last_pack_history(banner.pack_id)
-                        if (last_hist and
-                                last_hist['old_count'] == banner.current_packs and
-                                last_hist['new_count'] == old_packs):
-                            logger.warning(
-                                f"[OSZILLATION] {banner.pack_id}: Letzter Post war {last_hist['old_count']}→{last_hist['new_count']}, "
-                                f"jetzt {old_packs}→{banner.current_packs} - überspringe (Quellenkonflikt DE/JP)"
-                            )
-                            # DB auf aktuellen Scrape-Wert setzen damit nächster Scrape korrekte Basis hat,
-                            # aber keinen Discord-Post senden
+                        # Post FIRST - nur bei Erfolg DB updaten
+                        # (Fehler: DB updated, Discord-Post schlägt fehl → nächster Scrape erkennt keine Änderung mehr)
+                        posted = await self._post_pack_update_to_thread(
+                            banner.pack_id,
+                            old_packs,
+                            banner.current_packs,
+                            banner.total_packs
+                        )
+                        if posted:
                             await self.db.update_banner_packs(banner.pack_id, banner.current_packs)
-                            packs_changed = False
                         else:
-                            # Post FIRST - nur bei Erfolg DB updaten
-                            # (Fehler: DB updated, Discord-Post schlägt fehl → nächster Scrape erkennt keine Änderung mehr)
-                            posted = await self._post_pack_update_to_thread(
-                                banner.pack_id,
-                                old_packs,
-                                banner.current_packs,
-                                banner.total_packs
-                            )
-                            if posted:
-                                await self.db.update_banner_packs(banner.pack_id, banner.current_packs)
-                            else:
-                                logger.warning(f"Pack-Update-Post für {banner.pack_id} fehlgeschlagen - DB bleibt bei {old_packs}, nächster Scrape versucht es erneut")
-                                packs_changed = False  # Kein Embed/Probability-Update wenn Post fehlschlug
+                            logger.warning(f"Pack-Update-Post für {banner.pack_id} fehlgeschlagen - DB bleibt bei {old_packs}, nächster Scrape versucht es erneut")
+                            packs_changed = False  # Kein Embed/Probability-Update wenn Post fehlschlug
                     else:
                         # Initiales Pack-Update (kein Discord-Post nötig)
                         await self.db.update_banner_packs(banner.pack_id, banner.current_packs)
