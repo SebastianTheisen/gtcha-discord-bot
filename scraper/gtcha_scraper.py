@@ -64,14 +64,15 @@ class GTCHAScraper:
         logger.info("Starte Browser...")
         self._playwright = await async_playwright().start()
 
-        # Browser über WARP-Proxy starten damit DOM und API beide den DE-Pool sehen.
-        # Früher nur curl-API-Call durch WARP → jetzt läuft der ganze Browser durch WARP.
+        # Der ganze Browser läuft über SCRAPER_PROXY (Tor), weil die Seite den VPS- und
+        # WARP-IPs einen falschen Pack-Zähler liefert. Fällt der Proxy aus, schlägt der Scrape
+        # bewusst fehl, statt direkt (mit falschem Zähler) zu laden.
         self._browser = await self._playwright.chromium.launch(
             headless=self.headless,
             args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
         )
         if SCRAPER_PROXY:
-            logger.info(f"Browser-Proxy (WARP): {SCRAPER_PROXY.split('@')[-1]} - alle Requests gehen durch DE-Pool")
+            logger.info(f"Browser-Proxy: {SCRAPER_PROXY.split('@')[-1]}")
         else:
             logger.info("Kein Proxy konfiguriert (SCRAPER_PROXY nicht gesetzt)")
 
@@ -107,7 +108,6 @@ class GTCHAScraper:
 
         # API-Response abfangen: /api/user/pack/list enthält echte Pack-Zahlen.
         # Listener am Kontext-Level → gilt für alle Pages (main + parallel).
-        # Browser läuft über WARP (DE-Pool) → konsistente Pack-Zahlen für DE-Nutzer.
         self._api_pack_data: Dict[int, dict] = {}
         self._logged_country_urls: Set[str] = set()
 
@@ -130,7 +130,7 @@ class GTCHAScraper:
                         if pid:
                             self._api_pack_data[int(pid)] = item
                     if items:
-                        logger.debug(f"[PACK-API] {len(items)} Pack-Zahlen via Browser+WARP geladen")
+                        logger.debug(f"[PACK-API] {len(items)} Pack-Zahlen via Browser+Proxy geladen")
             except Exception as e:
                 logger.debug(f"[PACK-API] Fehler: {e}")
 

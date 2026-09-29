@@ -1,12 +1,23 @@
-version: '3.8'
 services:
+  tor:
+    build: ./tor
+    container_name: gtcha-tor
+    restart: unless-stopped
+    network_mode: host
+
   gtcha-bot:
     build: .
     container_name: gtcha-discord-bot
     restart: unless-stopped
     network_mode: host
+    depends_on:
+      - tor
     env_file:
       - .env
+    environment:
+      # Die Seite liefert den bisher genutzten IPs (VPS, WARP) einen falschen Pack-Zähler;
+      # über Tor-Ausgänge kommen die echten Werte.
+      - SCRAPER_PROXY=socks5://127.0.0.1:9050
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
