@@ -70,6 +70,14 @@ class Database:
                     changed_at TEXT
                 );
 
+                CREATE TABLE IF NOT EXISTS card_value_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    banner_id INTEGER,
+                    card_id TEXT, name TEXT,
+                    old_value INTEGER, new_value INTEGER,
+                    changed_at TEXT
+                );
+
                 CREATE TABLE IF NOT EXISTS convert_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     banner_id INTEGER,
@@ -243,7 +251,7 @@ class Database:
             await db.commit()
 
     async def get_banners_without_pool(self, limit: int, prefer_ids: List[int],
-                                       max_age_hours: int = 24) -> List[int]:
+                                       max_age_hours: int = 6) -> List[int]:
         """Aktive Banner mit Thread, deren Kartenpool fehlt oder älter als max_age_hours ist.
 
         Reihenfolge: prefer_ids (z.B. neue Banner), dann fehlende Pools, dann die ältesten.
@@ -372,6 +380,18 @@ class Database:
                             f"{old.get('players')} -> {stats.get('players')} Spieler)")
             await db.commit()
         return True
+
+    async def save_value_changes(self, pack_id: int, changes: List[Dict]) -> None:
+        """Merkt geänderte Kartenwerte (aus dem Vergleich zweier geladener Pools)."""
+        if not changes:
+            return
+        now = datetime.now().isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.executemany(
+                "INSERT INTO card_value_history (banner_id, card_id, name, old_value, new_value, changed_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [(pack_id, c["id"], c["name"], c["old"], c["new"], now) for c in changes])
+            await db.commit()
 
     async def update_converted(self, pack_id: int, coins: int) -> Optional[int]:
         """Speichert den Coin-Wert aller umgewandelten Karten (total_kangen) und merkt jede Änderung.
@@ -685,6 +705,7 @@ class Database:
                 old_ids
             )
             await db.execute(f"DELETE FROM convert_history WHERE banner_id IN ({placeholders})", old_ids)
+            await db.execute(f"DELETE FROM card_value_history WHERE banner_id IN ({placeholders})", old_ids)
 
             # Threads löschen
             await db.execute(

@@ -180,13 +180,13 @@ class ScrapingMixin:
                     for pid, pool in pools.items():
                         old_pool = await self.db.get_card_pool(pid)
                         await self.db.save_card_pool(pid, pool)
-                        if old_pool and old_pool.get('version') == 2:
-                            old_values = {h['id']: h['value'] for h in old_pool.get('hits', [])}
-                            for hit in pool.get('hits', []):
-                                before = old_values.get(hit['id'])
-                                if before is not None and before != hit['value']:
-                                    logger.info(f"[POOL] {pid}: Kartenwert geändert: {hit['name']} "
-                                                f"{fmt_coins(before)} -> {fmt_coins(hit['value'])}")
+                        changes = card_value_changes(old_pool, pool)
+                        if changes:
+                            await self.db.save_value_changes(pid, changes)
+                            shown = ", ".join(f"{c['name']} {fmt_coins(c['old'])} -> {fmt_coins(c['new'])}"
+                                              for c in changes[:5])
+                            more = f" (+{len(changes) - 5} weitere)" if len(changes) > 5 else ""
+                            logger.info(f"[POOL] {pid}: {len(changes)} Kartenwert(e) geändert: {shown}{more}")
                         await self._refresh_pool_views(pid, initial_pool=not old_pool)
 
                 # === HIT-ERKENNUNG über die Rückgabe-Zähler aus pack/list ===
