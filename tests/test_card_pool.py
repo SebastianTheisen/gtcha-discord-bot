@@ -229,3 +229,11 @@ def test_history_uses_medal_to_resolve_group():
     pool = _glurak_pool()
     result = match_shipment_history(pool, [[8, 37900]], claimed={keys_by_name(pool)["Lugia"]})
     assert result["certain"] == [keys_by_name(pool)["Lugia"]] and result["groups"] == []
+
+
+def test_estimate_for_pool_without_shipping_hits():
+    # Wie 24060 (Coin-Banner, gratis): keine Versand-Hits, Preis 0
+    pool = summarize_cards([card(1, 30000), card(2, 10000), card(3, 5000), card(4, 100, copies=97)])
+    stats = estimate(pool, 60, 100, set(), 0)
+    assert stats is not None and stats["tracked_hits"] is False
+    assert stats["ev_pct"] is None and stats["cost_to_hit"] is None

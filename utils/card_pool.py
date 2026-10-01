@@ -197,6 +197,7 @@ def estimate(pool: Dict, remaining: Optional[int], total_packs: Optional[int],
         hits_total, hits_left = len(relevant), float(len(relevant_open))
     else:
         hits_total = pool.get("hits_total", 0)
+        rest_hits = hits_total - sum(1 for u in units if u.get("hit", u["shipping_only"]))
         hits_left = (sum(1 for u in open_units if u.get("hit", u["shipping_only"]))
                      + max(0, rest_hits) * rest_left_share)
     ev = value_left / remaining
