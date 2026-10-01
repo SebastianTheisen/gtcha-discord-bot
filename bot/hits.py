@@ -199,10 +199,10 @@ class HitsMixin:
         for group in groups:
             names = " oder ".join(label[k] for k in group["keys"])
             amount = "eine der Karten" if group["pulled"] == 1 else f"{group['pulled']} der Karten"
-            lines.append(f"🔥 **Hit gezogen:** {amount} mit {fmt_coins(group['value'])} Coins ❓ ({names})")
+            lines.append(f"🔥 **Hit gezogen:** {amount} mit {self._value_span(group)} ❓ ({names})")
         for group in maybe:
             names = " oder ".join(label[k] for k in group["keys"])
-            lines.append(f"❓ **Möglicher Hit:** Eine Karte mit {fmt_coins(group['value'])} Coins wurde verschickt. "
+            lines.append(f"❓ **Möglicher Hit:** Eine Karte mit {self._value_span(group)} wurde verschickt. "
                          f"Das kann {names} sein, aber auch eine normale Karte mit gleichem Wert.")
         key_tier = {k: t for t, k in tier_keys(pool).items()}
         asks = [f"**{key_tier[k]}**" for k in certain if k in key_tier]
@@ -221,6 +221,13 @@ class HitsMixin:
         await thread.send(mention + "\n".join(lines))
 
     @staticmethod
+    def _value_span(group: dict) -> str:
+        low, high = group['value'], group.get('value_max') or group['value']
+        if high == low:
+            return f"{fmt_coins(low)} Coins"
+        return f"{fmt_coins(low)}–{fmt_coins(high)} Coins"
+
+    @staticmethod
     def _rank_icon(rank: int) -> str:
         return {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"{rank}.")
 
@@ -232,7 +239,7 @@ class HitsMixin:
         for group in unsure:
             if key in group["keys"] and group["pulled"] > 0 and not set(group["keys"]) <= pulled:
                 amount = "eine" if group["pulled"] == 1 else str(group["pulled"])
-                return f"❓ {amount} von {len(group['keys'])} Karten mit diesem Wert gezogen", 0xE67E22
+                return f"❓ {amount} von {len(group['keys'])} ähnlich teuren Karten gezogen", 0xE67E22
         if key in pulled:
             return "✅ gezogen" + (" (erkannt)" if key in detected else ""), 0x95A5A6
         for group in unsure:

@@ -18,6 +18,7 @@ TIERS = ("T1", "T2", "T3")
 MAX_MEDALS = 10           # Medaillen T1-T10 = Platz 1-10 der Hit-Liste
 MAX_SHIPMENT_CARDS = 10   # größere Versand-Sprünge werden nicht exakt zerlegt
 MAX_SHIPMENT_VALUE = 5_000_000
+VALUE_TOLERANCE = 0.05     # Kartenwerte schwanken mit der Zeit
 
 
 def summarize_cards(cards: List[Dict]) -> Optional[Dict]:
@@ -195,14 +196,37 @@ def _normal_sums(pool: Dict, max_cards: int, max_value: int) -> List[int]:
     return sums
 
 
-def match_shipped_hits(pool: Dict, count: int, value: int, pulled_keys: Set[str]) -> Dict:
+def _value_classes(units: List[Dict], tol: float) -> List[Dict]:
+    """Fasst Hits mit fast gleichem Wert (innerhalb 2 x Toleranz) zu Klassen zusammen."""
+    classes: List[Dict] = []
+    for unit in sorted(units, key=lambda u: -u["value"]):
+        if classes and unit["value"] >= classes[-1]["max"] * (1 - 2 * tol):
+            cls = classes[-1]
+            cls["keys"].append(unit["key"])
+            cls["min"] = unit["value"]
+        else:
+            classes.append({"keys": [unit["key"]], "max": unit["value"], "min": unit["value"]})
+    return classes
+
+
+def _any_bit(mask: int, lo: int, hi: int) -> bool:
+    lo = max(lo, 0)
+    if hi < lo:
+        return False
+    return (mask >> lo) & ((1 << (hi - lo + 1)) - 1) != 0
+
+
+def match_shipped_hits(pool: Dict, count: int, value: int, pulled_keys: Set[str],
+                       tol: float = VALUE_TOLERANCE) -> Dict:
     """Welche Versand-Hits stecken in einer Sendung aus `count` Karten im Wert `value`?
 
-    Probiert alle Kombinationen offener Hits; der Rest muss sich aus genau so vielen normalen
-    Karten exakt ergeben. Ergebnis:
+    Kartenwerte ändern sich mit der Zeit, deshalb gilt eine Toleranz: Hits plus genau so viele
+    normale Karten müssen den Versandwert auf ±tol treffen. Hits mit fast gleichem Wert bilden
+    Klassen und sind nicht unterscheidbar. Ergebnis:
       certain: Schlüssel von Hits, die sicher verschickt wurden
-      groups:  wertgleiche Hits, von denen sicher `pulled` Stück verschickt wurden, aber unklar welche
-      maybe:   Einzelsendung, deren Wert zu Hits passt, aber auch zu normalen Karten (nicht sicher)
+      groups:  Hits, von denen sicher `pulled` Stück verschickt wurden, aber unklar welche
+               (value/value_max: Wertspanne der Gruppe)
+      maybe:   Einzelsendung, die zu Hits passt, aber auch zu einer normalen Karte (nicht sicher)
     Nicht zerlegbare oder zu große Sendungen liefern nichts.
     """
     result = {"certain": [], "groups": [], "maybe": []}
@@ -211,34 +235,55 @@ def match_shipped_hits(pool: Dict, count: int, value: int, pulled_keys: Set[str]
     open_hits = [u for u in tracked_units(pool) if u["shipping_only"] and u["key"] not in pulled_keys]
     if not open_hits:
         return result
-    sums = _normal_sums(pool, count, value)
-    # Nur die Werte der verschickten Hits zählen; wertgleiche Hits lassen sich nicht unterscheiden
-    possible = set()
-    for size in range(0, min(count, len(open_hits)) + 1):
-        for combo in combinations(open_hits, size):
-            rest = value - sum(u["value"] for u in combo)
-            if rest >= 0 and (sums[count - size] >> rest) & 1:
-                possible.add(tuple(sorted(u["value"] for u in combo)))
-    if not possible:
+    classes = _value_classes(open_hits, tol)
+    upper = int(value / (1 - tol)) + 2
+    sums = _normal_sums(pool, count, upper)
+
+    possible: List[tuple] = []
+
+    def walk(i: int, taken: List[int], lo: float, hi: float, n: int):
+        if lo > upper:
+            return
+        if i == len(classes):
+            # Jede Karte darf um ±tol von ihrem gespeicherten Wert abweichen:
+            # hits_lo + N·(1-tol) <= value <= hits_hi + N·(1+tol)  ->  Spanne für die Normal-Summe N
+            k = count - n
+            if _any_bit(sums[k], int((value - hi) / (1 + tol)), int((value - lo) / (1 - tol)) + 1):
+                possible.append(tuple(taken))
+            return
+        cls = classes[i]
+        for m in range(0, min(len(cls["keys"]), count - n) + 1):
+            walk(i + 1, taken + [m], lo + m * cls["min"] * (1 - tol), hi + m * cls["max"] * (1 + tol), n + m)
+            if len(possible) > 50000:
+                return
+
+    walk(0, [], 0.0, 0.0, 0)
+    if not possible or len(possible) > 50000:
         return result
 
-    certain_values = None
-    for values in possible:
-        counted = {v: values.count(v) for v in set(values)}
-        certain_values = counted if certain_values is None else {
-            v: min(n, counted.get(v, 0)) for v, n in certain_values.items() if counted.get(v, 0)}
-    by_value: Dict[int, List[str]] = {}
-    for unit in open_hits:
-        by_value.setdefault(unit["value"], []).append(unit["key"])
-
-    for v, n in sorted(certain_values.items(), reverse=True):
-        keys = by_value.get(v, [])
-        if len(keys) <= n:
-            result["certain"] += keys
+    certain_per_class = [min(t[i] for t in possible) for i in range(len(classes))]
+    for cls, n in zip(classes, certain_per_class):
+        if n <= 0:
+            continue
+        if len(cls["keys"]) <= n:
+            result["certain"] += cls["keys"]
         else:
-            result["groups"].append({"value": v, "keys": keys, "pulled": n})
-    if count == 1 and not certain_values and value in by_value:
-        result["maybe"].append({"value": value, "keys": by_value[value], "pulled": 0})
+            result["groups"].append({"value": cls["min"], "value_max": cls["max"], "keys": cls["keys"], "pulled": n})
+
+    # Mindestens so viele Hits stecken in jeder möglichen Zerlegung, auch wenn die Klasse offen ist
+    extra = min(sum(t) for t in possible) - sum(certain_per_class)
+    if extra > 0:
+        involved = [cls for i, cls in enumerate(classes)
+                    if any(t[i] > certain_per_class[i] for t in possible)]
+        result["groups"].append({
+            "value": min(c["min"] for c in involved), "value_max": max(c["max"] for c in involved),
+            "keys": [k for c in involved for k in c["keys"]], "pulled": extra,
+        })
+    elif count == 1 and not result["certain"] and not result["groups"]:
+        for i, cls in enumerate(classes):
+            if any(t[i] for t in possible):
+                result["maybe"].append({"value": cls["min"], "value_max": cls["max"],
+                                        "keys": cls["keys"], "pulled": 0})
     return result
 
 

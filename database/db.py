@@ -138,6 +138,7 @@ class Database:
                                ('banners', 'site_stats TEXT'),
                                ('discord_threads', 'hit_list_sig TEXT'),
                                ('discord_threads', 'title TEXT'),
+                               ('banners', 'pool_updated_at TEXT'),
                                ('banners', 'starts_at INTEGER'),
                                ('banners', 'start_announced INTEGER DEFAULT 0'),
                                ('discord_threads', 'top5_message_id INTEGER'),
@@ -148,6 +149,15 @@ class Database:
                     logger.info(f"Migration: {table}.{col.split()[0]} hinzugefügt")
                 except Exception:
                     pass  # Spalte existiert bereits
+
+            # Versand-Abgleich mit Toleranz: bisherige Versand-Summen einmal neu auswerten lassen
+            cursor = await db.execute("SELECT value FROM bot_meta WHERE key = 'ship_match_version'")
+            row = await cursor.fetchone()
+            if not row or row[0] != '2':
+                await db.execute("UPDATE banners SET ship_count = NULL, ship_value = NULL")
+                await db.execute("INSERT OR REPLACE INTO bot_meta (key, value) VALUES ('ship_match_version', '2')")
+                await db.commit()
+                logger.info("Migration: Versand-Summen werden mit Toleranz neu ausgewertet")
 
             # Performance-Indexes hinzufügen (IF NOT EXISTS für idempotente Migration)
             await db.executescript("""
@@ -209,23 +219,31 @@ class Database:
 
             await db.commit()
 
-    async def get_banners_without_pool(self, limit: int, prefer_ids: List[int]) -> List[int]:
-        """Aktive Banner mit Thread, deren Kartenpool noch fehlt; prefer_ids (z.B. neue Banner) zuerst."""
+    async def get_banners_without_pool(self, limit: int, prefer_ids: List[int],
+                                       max_age_hours: int = 24) -> List[int]:
+        """Aktive Banner mit Thread, deren Kartenpool fehlt oder älter als max_age_hours ist.
+
+        Reihenfolge: prefer_ids (z.B. neue Banner), dann fehlende Pools, dann die ältesten.
+        """
+        cutoff = (datetime.now() - timedelta(hours=max_age_hours)).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute("""
-                SELECT b.pack_id FROM banners b
+                SELECT b.pack_id, b.card_pool IS NULL OR b.card_pool NOT LIKE '%"version": 2%' AS missing,
+                       COALESCE(b.pool_updated_at, '') AS updated
+                FROM banners b
                 JOIN discord_threads t ON t.banner_id = b.pack_id AND t.is_expired = 0
-                WHERE b.is_active = 1 AND (b.card_pool IS NULL OR b.card_pool NOT LIKE '%"version": 2%')
-            """)
-            ids = [row[0] for row in await cursor.fetchall()]
+                WHERE b.is_active = 1 AND (b.card_pool IS NULL OR b.card_pool NOT LIKE '%"version": 2%'
+                                           OR b.pool_updated_at IS NULL OR b.pool_updated_at < ?)
+            """, (cutoff,))
+            rows = await cursor.fetchall()
         preferred = set(prefer_ids)
-        ids.sort(key=lambda pid: pid not in preferred)
-        return ids[:limit]
+        rows.sort(key=lambda r: (r[0] not in preferred, not r[1], r[2]))
+        return [r[0] for r in rows[:limit]]
 
     async def save_card_pool(self, pack_id: int, pool: Dict) -> None:
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("UPDATE banners SET card_pool = ? WHERE pack_id = ?",
-                             (json.dumps(pool, ensure_ascii=False), pack_id))
+            await db.execute("UPDATE banners SET card_pool = ?, pool_updated_at = ? WHERE pack_id = ?",
+                             (json.dumps(pool, ensure_ascii=False), datetime.now().isoformat(), pack_id))
             await db.commit()
 
     async def get_card_pool(self, pack_id: int) -> Optional[Dict]:
