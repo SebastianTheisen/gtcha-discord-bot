@@ -82,3 +82,13 @@ def test_parse_thread_title_new_and_old_format():
         {"pack_id": 24114, "price": 1333, "entries": 10, "total": 5000}
     assert parse_thread_title("ID: 24106 / Kosten: 1111 Coins / Anzahl Pulls: unbegrenzt / Pulls Gesamt: 5000") == \
         {"pack_id": 24106, "price": 1111, "entries": None, "total": 5000}
+
+
+def test_sale_end_formats_from_the_site():
+    from datetime import datetime, timezone
+    from utils.banner_info import sale_end_timestamp
+    expected = int(datetime(2026, 10, 31, 14, 59, tzinfo=timezone.utc).timestamp())   # 23:59 JST
+    assert sale_end_timestamp("Erhältlich bis 31/10/2026 23:59 JST") == expected
+    assert sale_end_timestamp("2026/10/31 23:59 まで販売") == expected
+    assert sale_end_timestamp("2026/10/31") == expected                                # ohne Uhrzeit: 23:59
+    assert sale_end_timestamp("bald") is None and sale_end_timestamp(None) is None

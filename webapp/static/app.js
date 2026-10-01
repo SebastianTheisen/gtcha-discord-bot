@@ -65,9 +65,15 @@ function flags(b) {
   return out.length ? `<div class="flags">${out.map((f) => `<span class="flag">${esc(f)}</span>`).join("")}</div>` : "";
 }
 
-function untilText(end) {
-  if (!end) return "";
-  const t = String(end);
+// Verkaufsende einheitlich in deutscher Zeit (die Seite liefert verschiedene Formate, teils japanisch)
+function untilText(b) {
+  if (b.end_ts) {
+    const d = new Date(b.end_ts * 1000);
+    const date = d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "Europe/Berlin" });
+    const clock = d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Berlin" });
+    return `Erhältlich bis ${date}, ${clock} Uhr`;
+  }
+  const t = String(b.end || "");
   return /erhältlich/i.test(t) ? t : `Erhältlich bis ${t}`;
 }
 
@@ -98,7 +104,7 @@ function row(b, rank) {
           </div>
           ${shipLine(b)}
           ${outLine(b)}
-          ${b.end ? `<div class="until">${esc(untilText(b.end))}</div>` : ""}
+          ${b.end ? `<div class="until">${esc(untilText(b))}</div>` : ""}
         </div>
       </div>
     </div>`;
@@ -345,7 +351,7 @@ async function showBanner(id) {
       ${openLink(b)}
       <div class="remaining">Verbleibend: <b>${num(b.remaining)} / ${num(b.total)}</b>
         <div class="bar" style="margin-top:4px"><span style="width:${left}%"></span></div></div>
-      ${b.end ? `<div class="until">${esc(untilText(b.end))}</div>` : ""}
+      ${b.end ? `<div class="until">${esc(untilText(b))}</div>` : ""}
     </div>`;
   renderCards(b);
 }
