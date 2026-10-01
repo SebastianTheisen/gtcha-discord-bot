@@ -13,9 +13,11 @@ from bot.hits import HitsMixin
 from bot.medals import MedalsMixin
 from bot.hot_banner import HotBannerMixin
 from bot.fast_poll import FastPollMixin
+from bot.app_link import AppLinkMixin
 
 
-class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, HitsMixin, MedalsMixin, HotBannerMixin, commands.Bot):
+class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, HitsMixin, MedalsMixin, HotBannerMixin,
+              AppLinkMixin, commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
@@ -58,6 +60,11 @@ class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, Hits
             description="Hot-Banner manuell aktualisieren",
             callback=self.hotbanner_command
         ))
+        self.tree.add_command(app_commands.Command(
+            name="app-verknüpfen",
+            description="Code, um die GTCHA-Tracker-App mit deinem Discord-Konto zu verknüpfen",
+            callback=self.app_link_command
+        ))
 
         # Scheduler starten (mit Timeout-Wrapper)
         # Läuft alle X Minuten um xx:00:20, xx:05:20, xx:10:20, etc.
@@ -72,6 +79,11 @@ class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, Hits
             coalesce=True,  # Verpasste Jobs zusammenfassen
             max_instances=1,  # Maximal eine Instanz gleichzeitig
             misfire_grace_time=SCRAPE_INTERVAL_MINUTES * 60,  # Grace Time = Intervall
+        )
+        # In der Web-App gemeldete Medaillen abarbeiten
+        self.scheduler.add_job(
+            self._process_app_requests, 'interval', seconds=5,
+            id='app_requests_job', replace_existing=True, coalesce=True, max_instances=1,
         )
         self.scheduler.add_job(
             self._backup_database, 'cron', hour=3, minute=30,

@@ -288,6 +288,12 @@ class HitsMixin:
             entries = units[:MAX_LISTED]
             open_count = sum(1 for u in units if u["key"] not in pulled)
             header = f"🏆 **Hits im Pool** (nur Versand) · noch drin: {open_count} von {len(units)}"
+        elif len(claimable_units(pool, price)) > len(units):
+            # ohne Versand-Hits: alle Karten ab Packpreis, Platz = Medaille (T1, T2, ...)
+            units = claimable_units(pool, price)
+            entries = units[:MAX_LISTED]
+            open_count = sum(1 for u in units if u["key"] not in pulled and u["key"] not in (winners or {}))
+            header = f"🏆 **Karten ab Packpreis** · noch drin: {open_count} von {len(units)}"
         else:
             # verfolgte Exemplare (T1-T3, gleiche Karte ggf. mehrfach), danach weitere teure Karten
             seen = {str(u.get("id")) for u in units}

@@ -316,3 +316,22 @@ def test_medal_hits_already_shipped_are_not_counted_twice():
     # sicher zugeordnete Hits verbrauchen den Versandwert
     out = out_of_banner_value(pool, 0, 32_200, {keys["Glurak"]}, {keys["Lugia"]})   # 35.420 = Lugia
     assert out == 35_420 + 36_740
+
+
+def test_claimable_cards_from_pack_price():
+    from utils.card_pool import claimable_units, medal_units
+    # ohne Versand-Hits: alle Karten ab Packpreis melden, Platz = Medaille
+    pool = summarize_cards([card(1, 9000, copies=2), card(2, 5000), card(3, 2000), card(4, 300, copies=50)])
+    assert [u["key"] for u in claimable_units(pool, 1000)] == ["1", "1#2", "2", "3"]
+    assert list(tier_keys(pool).values())[:4] == ["1", "1#2", "2", "3"]
+    assert len(claimable_units(pool, None)) == 3                       # gratis: wie bisher T1-T3
+    assert len(medal_units(pool)) == 50                                # höchstens T50
+    # mit Versand-Hits: die Hits ab Packpreis
+    assert [u["name"] for u in claimable_units(hit_pool(), 5000)] == ["Top", "Zweiter", "Gleich A", "Gleich B"]
+
+
+def test_claimed_normal_cards_are_not_counted_twice():
+    # Normale Karten werden umgewandelt und stecken dann in "umgewandelt" - nicht extra zählen
+    from utils.card_pool import out_of_banner_value
+    pool = summarize_cards([card(1, 9000), card(2, 5000), card(4, 300, copies=50)])
+    assert out_of_banner_value(pool, 9000, 0, {"1"}) == 9000

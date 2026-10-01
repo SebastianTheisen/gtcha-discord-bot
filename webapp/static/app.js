@@ -325,6 +325,8 @@ async function showBanner(id) {
     <div class="watch-row"><button class="watch-btn" id="watch-btn">🔔 Beobachten</button>
       <a class="hint" href="#/settings">Pushes einstellen ›</a></div>
     ${hits.length ? `<div class="ribbon">Was du gewinnen kannst</div>${podium(hits.slice(0, 3))}` : ""}
+    ${hits.length ? `<h2>🏅 Gezogen melden <small>wie „T1“ im Discord-Thread</small></h2>
+      <div class="rows" id="claims"></div>` : ""}
     <h2>📊 Auswertung <small>ID ${b.id}</small></h2>
     <div class="stats">
       ${b.ev != null ? stat("Ø Rückgabe pro Zug", `<span class="ev ${evClass(b.ev_pct)}">${num(b.ev)} Coins</span>`, (b.ev_pct != null ? pct(b.ev_pct) + " vom Preis" : "") + (b.ev_from_site ? " · aus Zahlen der Seite" : " · geschätzt")) : ""}
@@ -369,6 +371,7 @@ async function showBanner(id) {
     </div>`;
   renderCards(b);
   wireWatchButton(String(b.id)).catch(() => {});
+  renderClaims(b).catch(() => {});
 }
 
 // --- Push ---
@@ -461,6 +464,7 @@ async function showSettings() {
         ${watched.length ? watched.sort((a, b) => b - a).map((id) => watchCard(id, prefs.watch[id], byId[id])).join("")
           : `<div class="hint">Noch kein Banner beobachtet. Auch auf jeder Banner-Seite über „🔔 Beobachten“.</div>`}
       </div>` : ""}
+    ${linkPanel(await me())}
     <h2>🔗 GTCHA-Seite öffnen in</h2>
     <div class="panel">
       <select id="link-mode" aria-label="GTCHA-Seite öffnen in">${Object.entries(LINK_MODES).map(([k, label]) =>
@@ -472,6 +476,7 @@ async function showSettings() {
     <div class="panel"><div class="hint">Private, inoffizielle App mit den Daten deines GTCHA-Discord-Bots.
       Kein Angebot von GTCHA. Gezogen wird immer auf der offiziellen Seite.</div></div>`;
   view.querySelector("#link-mode")?.addEventListener("change", (e) => save("linkMode", e.target.value));
+  wireLinkPanel();
   const msg = view.querySelector("#msg");
   const readToggles = () => view.querySelectorAll("[data-event]").forEach((i) => { prefs[i.dataset.event] = i.checked; });
   view.querySelector("#on")?.addEventListener("click", async () => {
@@ -536,6 +541,93 @@ async function wireWatchButton(id) {
     if (prefs.watch[id]) delete prefs.watch[id]; else prefs.watch[id] = [...WATCH_DEFAULT];
     await savePrefs(sub, prefs);
     paint();
+  });
+}
+
+// --- Discord-Verknüpfung und Medaillen ---
+const deviceToken = () => load("deviceToken", "");
+async function me() {
+  if (!deviceToken()) return null;
+  if (state.me !== undefined) return state.me;
+  const res = await fetch("/api/me", { headers: { "X-Device-Token": deviceToken() }, cache: "no-store" });
+  state.me = res.ok ? await res.json() : null;
+  if (res.status === 401) save("deviceToken", "");
+  return state.me;
+}
+async function authApi(path, body) {
+  const res = await fetch(path, { method: body ? "POST" : "GET", cache: "no-store",
+    headers: { "Content-Type": "application/json", "X-Device-Token": deviceToken() },
+    body: body ? JSON.stringify(body) : undefined });
+  const data = await res.json().catch(async () => ({ error: await res.text().catch(() => "") }));
+  if (!res.ok) throw new Error(data.error || data.text || `Fehler ${res.status}`);
+  return data;
+}
+
+async function renderClaims(b) {
+  const box = view.querySelector("#claims");
+  if (!box) return;
+  const user = await me();
+  box.innerHTML = (!user ? `<div class="line muted">Zum Melden einmal mit Discord verknüpfen:
+      <a href="#/settings" style="color:var(--blue-dark)">Push → Discord verknüpfen ›</a></div>` : "")
+    + b.hits.map((h) => {
+      const mine = user && h.medal_user === String(user.user_id);
+      const status = h.medal_user ? (mine ? "✅ von dir gemeldet" : "✅ gemeldet")
+        : h.state === "pulled" ? `✅ ${esc(h.note || "gezogen")}` : h.state === "unsure" ? `❓ ${esc(h.note || "")}` : "";
+      const btn = !user ? "" : mine ? `<button class="claim undo" data-tier="${h.tier}" data-action="unclaim">Zurücknehmen</button>`
+        : !h.medal_user ? `<button class="claim" data-tier="${h.tier}" data-action="claim">Ich hab's gezogen</button>` : "";
+      return `<div class="line claim-row ${h.medal_user || h.state === "pulled" ? "done" : ""}">
+        <span><b>${h.tier}</b> ${esc(h.name)}<br><span class="muted">${num(h.value)} Coins ${status ? "· " + status : ""}</span></span>
+        ${btn}</div>`;
+    }).join("");
+  box.querySelectorAll(".claim").forEach((el) => el.addEventListener("click", async () => {
+    const verb = el.dataset.action === "claim" ? `${el.dataset.tier} als von dir gezogen melden?` : `${el.dataset.tier} zurücknehmen?`;
+    if (!confirm(verb + "\nDer Bot postet das im Discord-Thread.")) return;
+    el.disabled = true;
+    el.textContent = "Wird gesendet …";
+    try {
+      const { id } = await authApi("/api/medal", { pack_id: b.id, tier: el.dataset.tier, action: el.dataset.action });
+      for (let i = 0; i < 20; i++) {        // der Bot arbeitet Meldungen alle 5 s ab
+        await new Promise((r) => setTimeout(r, 1500));
+        const r = await authApi(`/api/medal/${id}`);
+        if (r.status === "ok") { await state.current(); return; }
+        if (r.status === "rejected") { alert("Nicht übernommen: " + (r.reason || "")); await state.current(); return; }
+      }
+      alert("Der Bot hat noch nicht geantwortet – die Meldung wird gleich verarbeitet.");
+    } catch (e) {
+      alert("Melden fehlgeschlagen: " + e.message);
+    }
+    await state.current();
+  }));
+}
+
+function linkPanel(user) {
+  return `<h2>🔗 Discord verknüpfen</h2><div class="panel">${user
+    ? `<div>Verknüpft als <b>${esc(user.name)}</b> – du kannst Hits melden, sie erscheinen im Discord-Thread.</div>
+       <button class="btn" id="unlink">Verknüpfung trennen</button>`
+    : `<div class="hint">1. In Discord <b>/app-verknüpfen</b> eingeben – der Bot zeigt dir einen Code (nur für dich).<br>
+       2. Code hier eingeben. Danach kannst du auf jeder Banner-Seite Hits als gezogen melden.</div>
+       <div class="add-watch"><input id="link-code" class="code-input" maxlength="8" autocomplete="one-time-code"
+         autocapitalize="characters" placeholder="Code, z. B. K7M2QX">
+       <button class="btn primary" id="link-btn">Verknüpfen</button></div>
+       <div class="hint" id="link-msg"></div>`}</div>`;
+}
+
+function wireLinkPanel() {
+  view.querySelector("#unlink")?.addEventListener("click", async () => {
+    await authApi("/api/unlink", {}).catch(() => {});
+    save("deviceToken", ""); state.me = undefined;
+    showSettings();
+  });
+  view.querySelector("#link-btn")?.addEventListener("click", async () => {
+    const msg = view.querySelector("#link-msg");
+    try {
+      const res = await fetch("/api/link", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: view.querySelector("#link-code").value }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Code ungültig");
+      save("deviceToken", data.token); state.me = { user_id: data.user_id, name: data.name };
+      showSettings();
+    } catch (e) { msg.textContent = e.message; }
   });
 }
 
