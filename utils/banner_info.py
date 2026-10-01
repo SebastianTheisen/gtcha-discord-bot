@@ -1,6 +1,7 @@
 """Reine Hilfsfunktionen rund um Banner: Zahlen lesen, Hit-Chance, Kaufbedingungen."""
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -107,3 +108,45 @@ def jst_timestamp(text: Optional[str]) -> Optional[int]:
 
 def is_upcoming(item: dict) -> bool:
     return bool(item.get("is_before"))
+
+
+def berlin_time(ts: int) -> datetime:
+    """Unix-Zeit -> deutsche Zeit (MEZ/MESZ, Umstellung am letzten Sonntag im März/Oktober um 01:00 UTC)."""
+    utc = datetime.fromtimestamp(ts, timezone.utc)
+
+    def last_sunday(month: int) -> datetime:
+        day = datetime(utc.year, month, 31, 1, tzinfo=timezone.utc)
+        return day - timedelta(days=(day.weekday() + 1) % 7)
+
+    summer = last_sunday(3) <= utc < last_sunday(10)
+    return utc.astimezone(timezone(timedelta(hours=2 if summer else 1)))
+
+
+STATUS_ICONS = {"running": "🎯", "endspurt": "⚡ Endspurt", "hits_out": "🔴 Hits raus"}
+
+
+def thread_title(pack_id: int, price, total, entries, status: str, starts_at: Optional[int] = None) -> str:
+    """Kompakter Thread-Titel: Status · Preis · Packs · Limit · ID (max. 100 Zeichen)."""
+    if status == "upcoming" and starts_at:
+        head = f"🕒 ab {berlin_time(starts_at):%d.%m. %H:%M}"
+    else:
+        head = STATUS_ICONS.get(status, "🎯")
+    parts = [head, f"{fmt_coins(to_int(price))} Coins", f"{fmt_coins(to_int(total))} Packs"]
+    if to_int(entries):
+        parts.append(f"{to_int(entries)}/Tag")
+    parts.append(f"ID {pack_id}")
+    return " · ".join(parts)[:100]
+
+
+def parse_thread_title(name: str) -> dict:
+    """ID, Preis, Limit und Packs aus einem Thread-Titel (neues und altes Format)."""
+    def number(pattern):
+        m = re.search(pattern, name)
+        return int(m.group(1).replace(".", "")) if m else None
+
+    return {
+        "pack_id": number(r"\bID:?\s*(\d+)"),
+        "price": number(r"([\d.]+) Coins") or number(r"Kosten:\s*(\d+)"),
+        "entries": number(r"(\d+)/Tag") or number(r"Anzahl(?: Pulls)?:\s*(\d+)"),
+        "total": number(r"([\d.]+) Packs") or number(r"Gesamt:\s*(\d+)"),
+    }

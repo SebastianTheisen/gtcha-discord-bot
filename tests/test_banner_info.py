@@ -60,3 +60,25 @@ def test_jst_timestamp_reads_site_times():
     assert jst_timestamp("2026-10-02 18:00:00") == 1790931600     # 09:00 UTC
     assert jst_timestamp("2026/11/01 00:00") == jst_timestamp("2026-11-01 00:00:00")
     assert jst_timestamp("") is None and jst_timestamp("kaputt") is None
+
+
+def test_berlin_time_handles_summer_and_winter():
+    from utils.banner_info import berlin_time
+    assert berlin_time(1790931600).strftime("%d.%m. %H:%M") == "02.10. 11:00"   # 09:00 UTC, Sommerzeit
+    assert berlin_time(1793922600).strftime("%d.%m. %H:%M") == "06.11. 00:50"   # 05.11. 23:50 UTC, Winterzeit
+
+
+def test_thread_title_formats():
+    from utils.banner_info import thread_title
+    assert thread_title(24172, 30000, 300, 0, "upcoming", 1790931600) == \
+        "🕒 ab 02.10. 11:00 · 30.000 Coins · 300 Packs · ID 24172"
+    assert thread_title(24106, 1111, 5000, 10, "running") == "🎯 · 1.111 Coins · 5.000 Packs · 10/Tag · ID 24106"
+    assert thread_title(24164, 2222, 5000, None, "hits_out").startswith("🔴 Hits raus · 2.222 Coins")
+
+
+def test_parse_thread_title_new_and_old_format():
+    from utils.banner_info import parse_thread_title
+    assert parse_thread_title("⚡ Endspurt · 1.333 Coins · 5.000 Packs · 10/Tag · ID 24114") == \
+        {"pack_id": 24114, "price": 1333, "entries": 10, "total": 5000}
+    assert parse_thread_title("ID: 24106 / Kosten: 1111 Coins / Anzahl Pulls: unbegrenzt / Pulls Gesamt: 5000") == \
+        {"pack_id": 24106, "price": 1111, "entries": None, "total": 5000}

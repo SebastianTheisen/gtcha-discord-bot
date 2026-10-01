@@ -189,6 +189,10 @@ class ScrapingMixin:
                     if row.get('card_pool'):
                         await self._refresh_pool_views(pid, embed=False)
 
+                # === THREAD-TITEL abgleichen (Status: angekündigt, Endspurt, Hits raus) ===
+                for pid in await self.db.get_active_banners():
+                    await self._sync_thread_title(pid)
+
                 # === KAUFBEDINGUNGEN und VERSAND-ZAHLEN aus pack/list ===
                 for pid, item in (getattr(scraper, '_api_pack_data', {}) or {}).items():
                     changed = await self.db.update_conditions(pid, banner_conditions(item))
