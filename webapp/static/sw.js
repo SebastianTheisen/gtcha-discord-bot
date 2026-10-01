@@ -1,6 +1,6 @@
 // Service Worker: App-Hülle offline verfügbar halten, Push-Benachrichtigungen anzeigen.
-const CACHE = "gtcha-tracker-v19";
-const SHELL = ["/", "/static/style.css", "/static/app.js", "/static/icon-180.png?v=2", "/manifest.webmanifest"];
+const CACHE = "gtcha-tracker-v20";
+const SHELL = ["/", "/static/style.css", "/static/app.js", "/static/icon-180.png?v=3", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -30,8 +30,8 @@ self.addEventListener("push", (event) => {
   try { data = event.data ? event.data.json() : {}; } catch (e) { data = { title: "GTCHA Tracker", body: event.data?.text() }; }
   event.waitUntil(self.registration.showNotification(data.title || "GTCHA Tracker", {
     body: data.body || "",
-    icon: "/static/icon-512.png?v=2",
-    badge: "/static/icon-180.png?v=2",
+    icon: "/static/icon-512.png?v=3",
+    badge: "/static/icon-180.png?v=3",
     data: { url: data.url || "/" },
   }));
 });
