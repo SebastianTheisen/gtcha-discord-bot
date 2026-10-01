@@ -117,3 +117,11 @@ def test_pool_minimum_from_new_and_old_pools():
     assert pool_minimum(pool) == {"value": 300, "copies": 50, "name": "Karte 8"}
     old = {k: v for k, v in pool.items() if k != "min"}
     assert pool_minimum(old) == {"value": 300, "copies": 50, "name": None}
+
+
+def test_hits_below_pack_price_do_not_count():
+    pool = hit_pool()
+    stats = estimate(pool, 100, 100, set(), 5000)
+    assert stats["hits_total"] == 4          # 3.000er-Hit liegt unter dem Packpreis
+    assert [u["name"] for u in stats["open_units"]] == ["Top", "Zweiter", "Gleich A", "Gleich B"]
+    assert estimate(pool, 100, 100, set(), None)["hits_total"] == 5

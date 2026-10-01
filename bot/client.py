@@ -44,12 +44,13 @@ from utils.banner_info import (
 )
 from utils.card_pool import (
     estimate, fmt_coins, fmt_pct, TIERS, MAX_LISTED, EMBEDS_PER_MESSAGE, decided_value, detect_jump_pulls,
-    match_shipped_hits, pool_minimum, shipment_values, tier_keys, tracked_units,
+    is_relevant_hit, match_shipped_hits, pool_minimum, relevant_units, shipment_values, tier_keys,
+    tracked_units,
 )
 
 
 # Erhöhen, wenn der Startbeitrag neue Felder bekommt: alle Threads werden dann einmal aktualisiert
-EMBED_VERSION = 1
+EMBED_VERSION = 2
 # Endspurt-Alarm, sobald höchstens so viel Prozent der Packs übrig sind und noch Hits drin sind
 ENDSPURT_PERCENT = float(os.getenv("ENDSPURT_PERCENT") or "10")
 # Zeitraum für das Abverkaufs-Tempo
@@ -1395,7 +1396,12 @@ class GTCHABot(commands.Bot):
     async def _invalid_medal_reason(self, pack_id: Optional[int], tier: str) -> Optional[str]:
         """Fehlertext, wenn es die Medaille bei diesem Banner nicht gibt, sonst None."""
         pool = await self.db.get_card_pool(pack_id) if pack_id else None
-        available = len(tier_keys(pool)) if pool and pool.get('version') == 2 else len(TIERS)
+        if pool and pool.get('version') == 2:
+            price = _int((await self.db.get_banner(pack_id) or {}).get('price_coins')) or None
+            listed = relevant_units(pool, price) if pool.get('hits') else tracked_units(pool)
+            available = max(1, min(len(tier_keys(pool)), len(listed)))
+        else:
+            available = len(TIERS)
         if int(tier[1:]) > available:
             return (f"❌ Diesen Banner gibt es nur mit T1–T{available}. "
                     f"Die Nummer entspricht dem Platz in der Hit-Liste.")
@@ -1432,8 +1438,11 @@ class GTCHABot(commands.Bot):
             return
         rows = await self.db.get_active_banners()
         logger.info(f"Neue Felder im Startbeitrag: aktualisiere {len(rows)} Threads einmalig...")
-        for row in rows.values():
-            await self._update_thread_embed(row)
+        for pid, row in rows.items():
+            if row.get('card_pool'):
+                await self._refresh_pool_views(pid)
+            else:
+                await self._update_thread_embed(row)
         await self.db.set_meta('embed_version', str(EMBED_VERSION))
         logger.info("Startbeiträge aktualisiert")
 
@@ -1558,9 +1567,13 @@ class GTCHABot(commands.Bot):
                 if not first_look:
                     medals = await self.db.get_medals(thread_id)
                     medal_keys = {k for t, k in tier_keys(pool).items() if t in medals}
-                    certain = [k for k in match["certain"] if k not in medal_keys]
-                    if certain or match["groups"] or match["maybe"]:
-                        await self._announce_detected_hits(thread_id, pool, certain, match["groups"], match["maybe"])
+                    price = _int((await self.db.get_banner(pid) or {}).get('price_coins')) or None
+                    worth = {u["key"] for u in tracked_units(pool) if is_relevant_hit(u, price)}
+                    certain = [k for k in match["certain"] if k not in medal_keys and k in worth]
+                    groups = [g for g in match["groups"] if set(g["keys"]) & worth]
+                    maybe = [g for g in match["maybe"] if set(g["keys"]) & worth]
+                    if certain or groups or maybe:
+                        await self._announce_detected_hits(thread_id, pool, certain, groups, maybe)
                 await self._refresh_pool_views(pid)
                 await self._update_probability_message(thread_id, pid)
             except Exception as e:
@@ -1632,9 +1645,11 @@ class GTCHABot(commands.Bot):
         return None, 0xFFD700
 
     def _build_hit_messages(self, pool: dict, pulled: set, detected: set, unsure: list,
-                            winners: Optional[dict] = None) -> list:
-        """[(Überschrift, Embeds), ...]: alle Versand-Hits in Nachrichten zu je 10, sonst die Top 5."""
-        units = tracked_units(pool)
+                            winners: Optional[dict] = None, price: Optional[int] = None) -> list:
+        """[(Überschrift, Embeds), ...]: alle Versand-Hits ab Packpreis in Nachrichten zu je 10, sonst Top 5."""
+        units = relevant_units(pool, price) if pool.get('hits') else tracked_units(pool)
+        if pool.get('hits') and not units:
+            units = tracked_units(pool)[:5]
         if pool.get('hits'):
             entries = units[:MAX_LISTED]
             open_count = sum(1 for u in units if u["key"] not in pulled)
@@ -1678,7 +1693,8 @@ class GTCHABot(commands.Bot):
 
             pulled, detected, winners = await self._pulled_cards(thread_id, pack_id, pool)
             unsure = (await self.db.get_pull_tracking(pack_id))["unsure"]
-            messages = self._build_hit_messages(pool, pulled, detected, unsure, winners)
+            messages = self._build_hit_messages(pool, pulled, detected, unsure, winners,
+                                                price=_int(banner.get('price_coins')) or None)
             if not messages:
                 return
 

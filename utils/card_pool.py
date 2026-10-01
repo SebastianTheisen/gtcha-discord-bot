@@ -106,6 +106,19 @@ def tier_keys(pool: Dict) -> Dict[str, str]:
     return {f"T{i}": unit["key"] for i, unit in enumerate(tracked_units(pool)[:MAX_MEDALS], 1)}
 
 
+def is_relevant_hit(unit: Dict, price: Optional[int]) -> bool:
+    """Zählt als Hit: Versand-/Top-Karte, die mindestens so viel wert ist wie ein Pack.
+
+    Wie die Gewinner-Vorschau der Seite, die Karten unter dem Packpreis nicht zeigt.
+    """
+    is_hit = unit.get("hit", unit.get("shipping_only", True))
+    return bool(is_hit) and (not price or unit["value"] >= price)
+
+
+def relevant_units(pool: Dict, price: Optional[int]) -> List[Dict]:
+    return [u for u in tracked_units(pool) if is_relevant_hit(u, price)]
+
+
 def estimate(pool: Dict, remaining: Optional[int], total_packs: Optional[int],
              pulled_keys: Set[str], price: Optional[int]) -> Optional[Dict]:
     """Geschätzte Ø-Rückgabe pro Zug und Hit-Chance für die verbleibenden Packs.
@@ -133,21 +146,28 @@ def estimate(pool: Dict, remaining: Optional[int], total_packs: Optional[int],
     rest_left_share = (rest_count - unknown_pulls) / rest_count if rest_count > 0 else 0.0
 
     value_left = sum(u["value"] for u in open_units) + rest_value * rest_left_share
-    hits_left = (sum(1 for u in open_units if u.get("hit", u["shipping_only"]))
-                 + max(0, rest_hits) * rest_left_share)
+    relevant = [u for u in units if is_relevant_hit(u, price)]
+    relevant_open = [u for u in open_units if is_relevant_hit(u, price)]
+    if pool.get("hits"):
+        hits_total, hits_left = len(relevant), float(len(relevant_open))
+    else:
+        hits_total = pool.get("hits_total", 0)
+        hits_left = (sum(1 for u in open_units if u.get("hit", u["shipping_only"]))
+                     + max(0, rest_hits) * rest_left_share)
     ev = value_left / remaining
     keys = tier_keys(pool)
     return {
         "ev": ev,
         "ev_pct": ev / price * 100 if price else None,
         "estimated": pulled > 0,
-        "hits_total": pool.get("hits_total", 0),
-        "hits_open": sum(1 for u in open_units if u.get("hit", u["shipping_only"])),
+        "hits_total": hits_total,
+        "hits_open": len(relevant_open) if pool.get("hits") else sum(
+            1 for u in open_units if u.get("hit", u["shipping_only"])),
         "hits_left": hits_left,
         "hit_chance_pct": min(100.0, hits_left / remaining * 100),
         "open_tiers": [t for t in TIERS if t in keys and keys[t] not in pulled_keys],
         "tracked_hits": bool(pool.get("hits")),
-        "open_units": open_units,
+        "open_units": relevant_open if pool.get("hits") else open_units,
     }
 
 
