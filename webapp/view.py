@@ -314,7 +314,7 @@ class BannerView:
             gone = len(of_card(certain, cid))
             groups = [g for g in open_groups if of_card(g["keys"], cid)]
             unsure = (f"{groups[0]['pulled']} von {len(groups[0]['keys'])} raus" if groups else None)
-            cards.append({"name": c["name"], "value": c["value"], "copies": c["copies"], "image": c.get("image"),
+            cards.append({"id": cid, "name": c["name"], "value": c["value"], "copies": c["copies"], "image": c.get("image"),
                           "hit": bool(c.get("hit")), "pulled": min(gone, c["copies"]), "unsure": unsure,
                           "share": round(c["copies"] / total * 100, 3)})
         above = sum(c["copies"] for c in pool['cards'] if price and c["value"] >= price)
