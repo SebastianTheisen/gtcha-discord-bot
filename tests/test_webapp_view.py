@@ -26,11 +26,15 @@ def test_out_lists_shipped_and_medal_hits_most_valuable_first():
 
 def test_out_of_banner_uses_site_values():
     pool = {"total_value": 2_922_940}
-    row = {"decided_value": 1_800_000, "current_packs": 315,
-           "site_stats": json.dumps({"cards": 45, "coins": 633_293, "players": 8})}
+    site = json.dumps({"cards": 45, "coins": 633_293, "players": 8})
+    row = {"converted": 1_166_707, "decided_value": 1, "current_packs": 315, "total_packs": 1200, "site_stats": site}
     data = BannerView._out_of_banner(row, pool)
-    assert data["converted"] == 1_800_000 - 633_293           # umgewandelt = Summe - verschickt
-    assert data["out_total"] == 1_800_000                       # wie von der Seite geliefert
+    assert data["converted"] == 1_166_707                       # eigene Spalte hat Vorrang
+    assert data["out_total"] == 1_166_707 + 633_293             # wie von der Seite geliefert
+    assert data["converted_max_cards"] == 885 - 45              # gezogen minus verschickt
     assert data["left_value"] == 2_922_940 - 1_166_707 - 696_622  # Versand als Kartenwert (x1,1)
     assert data["left_per_pack"] == round(data["left_value"] / 315)
-    assert BannerView._out_of_banner({"decided_value": None}, pool)["out_total"] is None
+    # ältere Stände ohne eigene Spalte: Summe minus Versand
+    old = {"decided_value": 1_800_000, "current_packs": 315, "total_packs": 1200, "site_stats": site}
+    assert BannerView._out_of_banner(old, pool)["converted"] == 1_800_000 - 633_293
+    assert BannerView._out_of_banner({"site_stats": site}, pool)["out_total"] is None
