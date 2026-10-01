@@ -3,6 +3,7 @@ Discord Bot Client - Forum-Channel Version
 """
 
 import asyncio
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -37,7 +38,7 @@ from utils.rate_limiter import discord_rate_limiter
 from utils.memory_monitor import memory_monitor
 from utils.cache import banner_cache
 from utils.card_pool import (
-    estimate, fmt_coins, fmt_pct, TIERS, MAX_LISTED, decided_value, detect_jump_pulls,
+    estimate, fmt_coins, fmt_pct, TIERS, MAX_LISTED, EMBEDS_PER_MESSAGE, decided_value, detect_jump_pulls,
     match_shipped_hits, shipment_values, tier_keys, tracked_units,
 )
 
@@ -1213,7 +1214,7 @@ class GTCHABot(commands.Bot):
         detected = set((await self.db.get_pull_tracking(pack_id))["pulled"])
         keys = tier_keys(pool)
         by_medal = {keys[t] for t in TIERS if t in keys and medals.get(t)}
-        return detected | by_medal, detected
+        return detected | by_medal, detected - by_medal
 
     async def _claimed_tiers(self, thread_id: int, pack_id: int) -> dict:
         """T1-T3 als gezogen (Medaille oder automatisch erkannt) für die 🎯-Nachricht."""
@@ -1265,10 +1266,11 @@ class GTCHABot(commands.Bot):
                     continue
 
                 state = await self.db.get_pull_tracking(pid)
-                pulled = list(state["pulled"])
+                pulled, unsure = list(state["pulled"]), list(state["unsure"])
                 ships = shipment_values(item) or (None, None)
                 value = decided_value(item)
-                found, first_look, reason = [], False, ""
+                match = {"certain": [], "groups": [], "maybe": []}
+                first_look, reason = False, ""
 
                 if pool.get('hits'):
                     count, ship_value = ships
@@ -1276,34 +1278,40 @@ class GTCHABot(commands.Bot):
                     if count is None:
                         pass
                     elif prev_count is None:
-                        # Erste Messung: bisherige Sendungen nur zerlegen, wenn es eindeutig ist
-                        found = match_shipped_hits(pool, count, ship_value, set(pulled))
+                        # Erste Messung: bisherige Sendungen nur auswerten, soweit es eindeutig ist
+                        match = match_shipped_hits(pool, count, ship_value, set(pulled))
                         first_look, reason = True, f"bisher {count} Karten / {ship_value:,} Coins verschickt"
                     elif count > prev_count and ship_value > prev_value:
-                        found = match_shipped_hits(pool, count - prev_count, ship_value - prev_value, set(pulled))
+                        match = match_shipped_hits(pool, count - prev_count, ship_value - prev_value, set(pulled))
                         reason = f"{count - prev_count} Karte(n) / {ship_value - prev_value:,} Coins verschickt"
                 elif value is not None and state["decided_value"] is not None and value > state["decided_value"]:
-                    found = detect_jump_pulls(pool, value - state["decided_value"], set(pulled))
+                    match["certain"] = detect_jump_pulls(pool, value - state["decided_value"], set(pulled))
                     reason = f"Anstieg {value - state['decided_value']:,} Coins"
 
-                await self.db.set_pull_tracking(pid, value, ships[0], ships[1], pulled + found)
-                if not found:
+                # Bei wertgleichen Hits zählt für die Rechnung ein Stellvertreter als gezogen
+                stand_ins = [g["keys"][i] for g in match["groups"] for i in range(g["pulled"])]
+                await self.db.set_pull_tracking(pid, value, ships[0], ships[1],
+                                                pulled + match["certain"] + stand_ins,
+                                                unsure + match["groups"] + match["maybe"])
+                if not (match["certain"] or match["groups"] or match["maybe"]):
                     continue
 
-                logger.info(f"[HIT] {pid}: {reason} -> erkannt {found}")
+                logger.info(f"[HIT] {pid}: {reason} -> sicher {match['certain']}, "
+                            f"wertgleich {match['groups']}, möglich {match['maybe']}")
                 thread_id = int(thread_data['thread_id'])
                 if not first_look:
                     medals = await self.db.get_medal_status(thread_id)
                     medal_keys = {k for t, k in tier_keys(pool).items() if medals.get(t)}
-                    announce = [k for k in found if k not in medal_keys]
-                    if announce:
-                        await self._announce_detected_hits(thread_id, pool, announce)
+                    certain = [k for k in match["certain"] if k not in medal_keys]
+                    if certain or match["groups"] or match["maybe"]:
+                        await self._announce_detected_hits(thread_id, pool, certain, match["groups"], match["maybe"])
                 await self._refresh_pool_views(pid)
                 await self._update_probability_message(thread_id, pid)
             except Exception as e:
                 logger.warning(f"[HIT] Fehler bei Banner {pid}: {e}")
 
-    async def _announce_detected_hits(self, thread_id: int, pool: dict, keys: list):
+    async def _announce_detected_hits(self, thread_id: int, pool: dict, certain: list,
+                                      groups: list = (), maybe: list = ()):
         thread = self.get_channel(thread_id) or await self.fetch_channel(thread_id)
         if not isinstance(thread, discord.Thread):
             return
@@ -1311,22 +1319,31 @@ class GTCHABot(commands.Bot):
             await discord_rate_limiter.acquire("thread_edit")
             await thread.edit(archived=False)
         units = tracked_units(pool)
+        rank = {u["key"]: i for i, u in enumerate(units, 1)}
+        label = {u["key"]: f"{self._rank_icon(rank[u['key']])} {u['name']}" for u in units}
         lines = []
-        for rank, unit in enumerate(units, 1):
-            if unit["key"] not in keys:
-                continue
-            card_text = f"{self._rank_icon(rank)} {unit['name']} ({fmt_coins(unit['value'])} Coins)"
+        for key in certain:
+            unit = units[rank[key] - 1]
+            card_text = f"{label[key]} ({fmt_coins(unit['value'])} Coins)"
             if unit["shipping_only"]:
                 lines.append(f"🔥 **Hit gezogen:** {card_text}")
-            elif rank == 1:
+            elif rank[key] == 1:
                 lines.append(f"🔥 **T1 gezogen:** {card_text}")
             else:
-                lines.append(f"🔥 **Großer Hit gezogen**, vermutlich T{rank}: {card_text}")
+                lines.append(f"🔥 **Großer Hit gezogen**, vermutlich T{rank[key]}: {card_text}")
+        for group in groups:
+            names = " oder ".join(label[k] for k in group["keys"])
+            amount = "eine der Karten" if group["pulled"] == 1 else f"{group['pulled']} der Karten"
+            lines.append(f"🔥 **Hit gezogen:** {amount} mit {fmt_coins(group['value'])} Coins ❓ ({names})")
+        for group in maybe:
+            names = " oder ".join(label[k] for k in group["keys"])
+            lines.append(f"❓ **Möglicher Hit:** Eine Karte mit {fmt_coins(group['value'])} Coins wurde verschickt. "
+                         f"Das kann {names} sein, aber auch eine normale Karte mit gleichem Wert.")
         if all(u["shipping_only"] for u in units):
             lines.append("*Automatisch erkannt: die Karte wurde gerade zum Versand angefordert.*")
         else:
             lines.append("*Automatisch erkannt: die Karte wurde gerade in Coins umgewandelt oder verschickt.*")
-        mention = "@everyone " if MENTION_ON_PACK_UPDATE else ""
+        mention = "@everyone " if MENTION_ON_PACK_UPDATE and (certain or groups) else ""
         await discord_rate_limiter.acquire("message_send")
         await thread.send(mention + "\n".join(lines))
 
@@ -1334,8 +1351,22 @@ class GTCHABot(commands.Bot):
     def _rank_icon(rank: int) -> str:
         return {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"{rank}.")
 
-    def _build_hit_embeds(self, pool: dict, pulled: set, detected: set) -> tuple:
-        """(Überschrift, Embeds): alle Versand-Hits (max. 10), sonst die Top 5 nach Coin-Wert."""
+    @staticmethod
+    def _card_status(key: str, pulled: set, detected: set, unsure: list) -> tuple:
+        """(Text, Farbe) für eine Karte in der Hit-Liste; None-Text = noch drin."""
+        for group in unsure:
+            if key in group["keys"] and group["pulled"] > 0 and not set(group["keys"]) <= pulled:
+                amount = "eine" if group["pulled"] == 1 else str(group["pulled"])
+                return f"❓ {amount} von {len(group['keys'])} Karten mit diesem Wert gezogen", 0xE67E22
+        if key in pulled:
+            return "✅ gezogen" + (" (erkannt)" if key in detected else ""), 0x95A5A6
+        for group in unsure:
+            if key in group["keys"] and group["pulled"] == 0:
+                return "❓ möglicherweise gezogen (gleicher Wert wie eine normale Karte)", 0xE67E22
+        return None, 0xFFD700
+
+    def _build_hit_messages(self, pool: dict, pulled: set, detected: set, unsure: list) -> list:
+        """[(Überschrift, Embeds), ...]: alle Versand-Hits in Nachrichten zu je 10, sonst die Top 5."""
         units = tracked_units(pool)
         if pool.get('hits'):
             entries = units[:MAX_LISTED]
@@ -1347,22 +1378,21 @@ class GTCHABot(commands.Bot):
             header = "🏆 **Top 5 Karten** (Coin-Wert)"
         embeds = []
         for rank, card in enumerate(entries, 1):
-            is_pulled = card.get("key") in pulled
-            description = f"**{fmt_coins(card['value'])} Coins**"
-            if is_pulled:
-                description += " · ✅ gezogen" + (" (erkannt)" if card["key"] in detected else "")
-            embed = discord.Embed(
-                title=f"{self._rank_icon(rank)} {card['name']}"[:256],
-                description=description,
-                color=0x95A5A6 if is_pulled else 0xFFD700,
-            )
+            status, color = self._card_status(card.get("key"), pulled, detected, unsure)
+            description = f"**{fmt_coins(card['value'])} Coins**" + (f" · {status}" if status else "")
+            embed = discord.Embed(title=f"{self._rank_icon(rank)} {card['name']}"[:256],
+                                  description=description, color=color)
             if card.get('image'):
                 embed.set_thumbnail(url=card['image'])
             embeds.append(embed)
-        return header, embeds
+        chunks = [embeds[i:i + EMBEDS_PER_MESSAGE] for i in range(0, len(embeds), EMBEDS_PER_MESSAGE)]
+        if len(chunks) <= 1:
+            return [(header, chunks[0])] if chunks else []
+        return [(f"{header} · Teil 1/{len(chunks)}" if i == 0 else f"🏆 **Hits im Pool** · Teil {i + 1}/{len(chunks)}",
+                 chunk) for i, chunk in enumerate(chunks)]
 
     async def _refresh_pool_views(self, pack_id: int, initial_pool: bool = False):
-        """Aktualisiert Startbeitrag (Ø Rückgabe, Hits) und die Hit-Nachricht eines Banners."""
+        """Aktualisiert Startbeitrag (Ø Rückgabe, Hits) und die Hit-Nachricht(en) eines Banners."""
         try:
             banner = await self.db.get_banner(pack_id)
             thread_data = await self.db.get_thread_by_banner_id(pack_id)
@@ -1380,24 +1410,37 @@ class GTCHABot(commands.Bot):
                 return
 
             pulled, detected = await self._pulled_cards(thread_id, pack_id, pool)
-            content, embeds = self._build_hit_embeds(pool, pulled, detected)
-            if not embeds:
+            unsure = (await self.db.get_pull_tracking(pack_id))["unsure"]
+            messages = self._build_hit_messages(pool, pulled, detected, unsure)
+            if not messages:
                 return
 
-            msg_id = thread_data.get('top5_message_id')
-            if msg_id:
+            old_ids = json.loads(thread_data.get('hit_message_ids') or 'null') or (
+                [thread_data['top5_message_id']] if thread_data.get('top5_message_id') else [])
+            new_ids = []
+            for i, (content, embeds) in enumerate(messages):
+                msg = None
+                if i < len(old_ids):
+                    try:
+                        msg = await thread.fetch_message(int(old_ids[i]))
+                        await discord_rate_limiter.acquire("message_edit")
+                        await msg.edit(content=content, embeds=embeds)
+                    except discord.NotFound:
+                        msg = None
+                if msg is None:
+                    await discord_rate_limiter.acquire("message_send")
+                    msg = await thread.send(content=content, embeds=embeds)
+                    logger.info(f"Hit-Nachricht {i + 1}/{len(messages)} gepostet: Banner {pack_id}")
+                new_ids.append(msg.id)
+            for extra_id in old_ids[len(messages):]:
                 try:
-                    msg = await thread.fetch_message(int(msg_id))
-                    await discord_rate_limiter.acquire("message_edit")
-                    await msg.edit(content=content, embeds=embeds)
-                    return
+                    old = await thread.fetch_message(int(extra_id))
+                    await discord_rate_limiter.acquire("message_delete")
+                    await old.delete()
                 except discord.NotFound:
                     pass
-
-            await discord_rate_limiter.acquire("message_send")
-            msg = await thread.send(content=content, embeds=embeds)
-            await self.db.set_top5_message_id(thread_id, msg.id)
-            logger.info(f"Hit-Nachricht gepostet: Banner {pack_id}")
+            if new_ids != old_ids:
+                await self.db.set_hit_message_ids(thread_id, new_ids)
         except Exception as e:
             logger.warning(f"Fehler bei Hit-Nachricht/Ø-Update für {pack_id}: {e}")
 

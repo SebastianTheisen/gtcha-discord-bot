@@ -12,7 +12,8 @@ from typing import Dict, List, Optional, Set
 
 POOL_VERSION = 2
 HIT_ACTION_TYPE = 2       # "Versand nur" (Flugzeug-Symbol auf der Seite)
-MAX_LISTED = 10           # Discord erlaubt 10 Embeds pro Nachricht
+EMBEDS_PER_MESSAGE = 10   # Discord erlaubt 10 Embeds pro Nachricht
+MAX_LISTED = 50           # Obergrenze für die Hit-Liste (5 Nachrichten)
 TIERS = ("T1", "T2", "T3")
 MAX_SHIPMENT_CARDS = 10   # größere Versand-Sprünge werden nicht exakt zerlegt
 MAX_SHIPMENT_VALUE = 5_000_000
@@ -142,20 +143,24 @@ def _normal_sums(pool: Dict, max_cards: int, max_value: int) -> List[int]:
     return sums
 
 
-def match_shipped_hits(pool: Dict, count: int, value: int, pulled_keys: Set[str]) -> List[str]:
-    """Welche Versand-Hits sind sicher in einer Sendung aus `count` Karten im Wert `value` enthalten?
+def match_shipped_hits(pool: Dict, count: int, value: int, pulled_keys: Set[str]) -> Dict:
+    """Welche Versand-Hits stecken in einer Sendung aus `count` Karten im Wert `value`?
 
     Probiert alle Kombinationen offener Hits; der Rest muss sich aus genau so vielen normalen
-    Karten exakt ergeben. Nur Hits, die in jeder möglichen Kombination vorkommen, gelten als
-    sicher verschickt. Nicht zerlegbare oder zu große Sendungen liefern nichts.
+    Karten exakt ergeben. Ergebnis:
+      certain: Schlüssel von Hits, die sicher verschickt wurden
+      groups:  wertgleiche Hits, von denen sicher `pulled` Stück verschickt wurden, aber unklar welche
+      maybe:   Einzelsendung, deren Wert zu Hits passt, aber auch zu normalen Karten (nicht sicher)
+    Nicht zerlegbare oder zu große Sendungen liefern nichts.
     """
+    result = {"certain": [], "groups": [], "maybe": []}
     if count <= 0 or value <= 0 or count > MAX_SHIPMENT_CARDS or value > MAX_SHIPMENT_VALUE:
-        return []
+        return result
     open_hits = [u for u in tracked_units(pool) if u["shipping_only"] and u["key"] not in pulled_keys]
     if not open_hits:
-        return []
+        return result
     sums = _normal_sums(pool, count, value)
-    # Wertgleiche Hits sind austauschbar: es zählt nur, welche Werte wie oft verschickt wurden
+    # Nur die Werte der verschickten Hits zählen; wertgleiche Hits lassen sich nicht unterscheiden
     possible = set()
     for size in range(0, min(count, len(open_hits)) + 1):
         for combo in combinations(open_hits, size):
@@ -163,18 +168,26 @@ def match_shipped_hits(pool: Dict, count: int, value: int, pulled_keys: Set[str]
             if rest >= 0 and (sums[count - size] >> rest) & 1:
                 possible.add(tuple(sorted(u["value"] for u in combo)))
     if not possible:
-        return []
+        return result
+
     certain_values = None
     for values in possible:
         counted = {v: values.count(v) for v in set(values)}
         certain_values = counted if certain_values is None else {
             v: min(n, counted.get(v, 0)) for v, n in certain_values.items() if counted.get(v, 0)}
-    shipped = []
+    by_value: Dict[int, List[str]] = {}
     for unit in open_hits:
-        if certain_values.get(unit["value"], 0) > 0:
-            shipped.append(unit["key"])
-            certain_values[unit["value"]] -= 1
-    return shipped
+        by_value.setdefault(unit["value"], []).append(unit["key"])
+
+    for v, n in sorted(certain_values.items(), reverse=True):
+        keys = by_value.get(v, [])
+        if len(keys) <= n:
+            result["certain"] += keys
+        else:
+            result["groups"].append({"value": v, "keys": keys, "pulled": n})
+    if count == 1 and not certain_values and value in by_value:
+        result["maybe"].append({"value": value, "keys": by_value[value], "pulled": 0})
+    return result
 
 
 def decided_value(item: Dict) -> Optional[int]:

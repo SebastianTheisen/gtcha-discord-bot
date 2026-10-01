@@ -127,6 +127,8 @@ class Database:
                                ('banners', 'ship_count INTEGER'),
                                ('banners', 'ship_value INTEGER'),
                                ('banners', 'pulled_cards TEXT'),
+                               ('banners', 'unsure_cards TEXT'),
+                               ('discord_threads', 'hit_message_ids TEXT'),
                                ('discord_threads', 'top5_message_id INTEGER'),
                                ('discord_threads', 'value_alert_sent INTEGER DEFAULT 0')]:
                 try:
@@ -225,21 +227,28 @@ class Database:
         """Zuletzt gesehene Zähler (None = noch nie gesehen) und als gezogen erkannte Karten."""
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
-                "SELECT decided_value, ship_count, ship_value, pulled_cards FROM banners WHERE pack_id = ?",
-                (pack_id,))
+                "SELECT decided_value, ship_count, ship_value, pulled_cards, unsure_cards "
+                "FROM banners WHERE pack_id = ?", (pack_id,))
             row = await cursor.fetchone()
         if not row:
-            return {"decided_value": None, "ship_count": None, "ship_value": None, "pulled": []}
+            return {"decided_value": None, "ship_count": None, "ship_value": None, "pulled": [], "unsure": []}
         return {"decided_value": row[0], "ship_count": row[1], "ship_value": row[2],
-                "pulled": json.loads(row[3]) if row[3] else []}
+                "pulled": json.loads(row[3]) if row[3] else [],
+                "unsure": json.loads(row[4]) if row[4] else []}
 
     async def set_pull_tracking(self, pack_id: int, decided_value: Optional[int], ship_count: Optional[int],
-                                ship_value: Optional[int], pulled: List[str]) -> None:
+                                ship_value: Optional[int], pulled: List[str], unsure: List[Dict]) -> None:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
-                "UPDATE banners SET decided_value = ?, ship_count = ?, ship_value = ?, pulled_cards = ? "
-                "WHERE pack_id = ?",
-                (decided_value, ship_count, ship_value, json.dumps(pulled), pack_id))
+                "UPDATE banners SET decided_value = ?, ship_count = ?, ship_value = ?, pulled_cards = ?, "
+                "unsure_cards = ? WHERE pack_id = ?",
+                (decided_value, ship_count, ship_value, json.dumps(pulled), json.dumps(unsure), pack_id))
+            await db.commit()
+
+    async def set_hit_message_ids(self, thread_id: int, message_ids: List[int]) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE discord_threads SET hit_message_ids = ?, top5_message_id = ? WHERE thread_id = ?",
+                             (json.dumps(message_ids), message_ids[0] if message_ids else None, thread_id))
             await db.commit()
 
     async def set_top5_message_id(self, thread_id: int, message_id: int) -> None:
