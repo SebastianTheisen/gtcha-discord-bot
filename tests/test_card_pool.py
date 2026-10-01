@@ -51,7 +51,8 @@ def test_equal_valued_hits_form_a_group():
     keys = keys_by_name(pool)
     result = match_shipped_hits(pool, 1, 8000, set())
     assert result["certain"] == []
-    assert result["groups"] == [{"value": 8000, "keys": [keys["Gleich A"], keys["Gleich B"]], "pulled": 1}]
+    assert result["groups"] == [{"value": 8000, "value_max": 8000,
+                                 "keys": [keys["Gleich A"], keys["Gleich B"]], "pulled": 1}]
 
 
 def test_both_equal_valued_hits_shipped_are_certain():
@@ -64,7 +65,8 @@ def test_hit_with_same_value_as_normal_card_is_only_possible():
     pool = hit_pool()
     result = match_shipped_hits(pool, 1, 3000, set())
     assert result["certain"] == [] and result["groups"] == []
-    assert result["maybe"] == [{"value": 3000, "keys": [keys_by_name(pool)["Klein"]], "pulled": 0}]
+    assert result["maybe"] == [{"value": 3000, "value_max": 3000,
+                                "keys": [keys_by_name(pool)["Klein"]], "pulled": 0}]
 
 
 def test_shipment_of_normal_cards_or_unknown_value_detects_nothing():
@@ -133,3 +135,18 @@ def test_cost_to_next_hit():
     # 5 offene Hits, 99 Packs: (99 + 1) / (5 + 1) Züge à 1.000 Coins
     assert round(stats["cost_to_hit"]) == round(1000 * 100 / 6)
     assert estimate(pool, 99, 100, set(), None)["cost_to_hit"] is None
+
+
+def test_drifted_card_value_still_matches_within_tolerance():
+    pool = hit_pool()
+    # Top-Hit ist inzwischen 50.240 statt 50.000 wert
+    assert match_shipped_hits(pool, 1, 50240, set())["certain"] == [keys_by_name(pool)["Top"]]
+
+
+def test_shipment_needing_one_of_several_similar_hits_becomes_group():
+    # Wie 24111: 3 Karten, Summe nur mit genau einem Hit erreichbar, mehrere Hits kommen in Frage
+    pool = summarize_cards([card(1, 26180, hit=True), card(2, 25410, hit=True), card(3, 18260, hit=True),
+                            card(4, 18260, hit=True), card(5, 5000, copies=20), card(6, 300, copies=500)])
+    result = match_shipped_hits(pool, 3, 25915, set())
+    assert result["certain"] == []
+    assert len(result["groups"]) == 1 and result["groups"][0]["pulled"] == 1

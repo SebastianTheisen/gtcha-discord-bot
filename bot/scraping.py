@@ -178,8 +178,16 @@ class ScrapingMixin:
                         logger.warning(f"[POOL] Kartenpools nicht geladen: {e}")
                         pools = {}
                     for pid, pool in pools.items():
+                        old_pool = await self.db.get_card_pool(pid)
                         await self.db.save_card_pool(pid, pool)
-                        await self._refresh_pool_views(pid, initial_pool=True)
+                        if old_pool and old_pool.get('version') == 2:
+                            old_values = {h['id']: h['value'] for h in old_pool.get('hits', [])}
+                            for hit in pool.get('hits', []):
+                                before = old_values.get(hit['id'])
+                                if before is not None and before != hit['value']:
+                                    logger.info(f"[POOL] {pid}: Kartenwert geändert: {hit['name']} "
+                                                f"{fmt_coins(before)} -> {fmt_coins(hit['value'])}")
+                        await self._refresh_pool_views(pid, initial_pool=not old_pool)
 
                 # === HIT-ERKENNUNG über die Rückgabe-Zähler aus pack/list ===
                 await self._detect_pulled_hits(getattr(scraper, '_api_pack_data', {}) or {})

@@ -14,7 +14,7 @@ import sys
 from itertools import combinations
 
 sys.path.insert(0, "/app")
-from utils.card_pool import _normal_sums, tracked_units  # noqa: E402
+from utils.card_pool import VALUE_TOLERANCE, _normal_sums, match_shipped_hits, tracked_units  # noqa: E402
 
 DB = "/app/data/gtcha_bot.db"
 
@@ -56,6 +56,15 @@ def main():
 
     if not count or not value:
         return
+    result = match_shipped_hits(pool, count, value, set())
+    print(f"\nErgebnis des Bots (Toleranz ±{VALUE_TOLERANCE:.0%} je Karte):")
+    print(f"  sicher verschickt: {[names[k] for k in result['certain']] or 'keine'}")
+    for g in result["groups"]:
+        print(f"  ❓ {g['pulled']} von {len(g['keys'])} Karten ({g['value']:,}–{g['value_max']:,} Coins): "
+              f"{[names[k] for k in g['keys']]}".replace(",", "."))
+    for g in result["maybe"]:
+        print(f"  möglich (auch normale Karte denkbar): {[names[k] for k in g['keys']]}")
+    print("\nExakte Kombinationen mit den gespeicherten Kartenwerten:")
     if count > 10:
         print("\nMehr als 10 Karten verschickt - der Bot zerlegt das nicht.")
         return
