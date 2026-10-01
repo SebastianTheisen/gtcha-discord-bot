@@ -198,6 +198,7 @@ h2 small { font-size: 13px; color: var(--muted); font-weight: 400; }
 .ev.good { color: var(--good); }
 .ev.ok { color: #a56b00; }
 .ev.low { color: var(--muted); }
+.ev.bad { color: var(--red); }
 
 .hits { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; padding: 0 10px; }
 .hit { background: var(--surface); border-radius: 10px; overflow: hidden; position: relative; box-shadow: var(--shadow); }
