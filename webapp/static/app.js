@@ -90,10 +90,18 @@ function row(b, rank) {
             ${b.ev_pct != null ? `<span class="pill ${evClass(b.ev_pct)}">Ø ${pct(b.ev_pct)}</span>` : ""}
             ${hitsText(b) ? `<span class="pill">${hitsText(b)}${b.unsure ? " ❓" : ""}</span>` : ""}
           </div>
+          ${shipLine(b)}
           ${b.end ? `<div class="until">${esc(untilText(b.end))}</div>` : ""}
         </div>
       </div>
     </div>`;
+}
+
+// "📦 18 verschickt · 103.070 Coins" (Kartenwert der verschickten Karten)
+function shipLine(b) {
+  if (b.ship_cards == null) return "";
+  if (!b.ship_cards) return `<div class="ship muted">📦 Noch nichts verschickt</div>`;
+  return `<div class="ship">📦 <b>${num(b.ship_cards)}</b> verschickt · <b>${num(b.ship_value)}</b> Coins</div>`;
 }
 
 function wireRows() {
@@ -277,7 +285,8 @@ async function showBanner(id) {
       ${b.hits_open != null ? stat("Hits noch drin", hitsText(b) + (b.unsure ? " ❓" : ""), b.cost_to_hit ? `Ø ${num(b.cost_to_hit)} Coins bis Hit` : "") : ""}
       ${b.min_value != null ? stat("Mindestens zurück", num(b.min_value) + " Coins", b.price ? pct(b.min_value / b.price * 100) + " vom Preis" : "") : ""}
       ${b.pool_value ? stat("Alle Karten", num(b.pool_value) + " Coins", b.all_packs_cost ? `Alle Packs: ${num(b.all_packs_cost)} (${pct(b.pool_value / b.all_packs_cost * 100)})` : "") : ""}
-      ${b.shipped ? stat("Verschickt", esc(b.shipped).replace(/ · /, "<br>")) : ""}
+      ${b.ship_cards != null ? stat("Verschickt", b.ship_cards ? `${num(b.ship_cards)} Karten` : "Noch nichts",
+        b.ship_cards ? `${num(b.ship_value)} Coins Kartenwert · ${num(b.ship_players)} Spieler` : "") : ""}
       ${b.per_day ? stat("Pro Tag", `${b.per_day}×`) : ""}
     </div>
     ${b.conditions ? `<div class="notice">${esc(b.conditions).replace(/\*\*/g, "").replace(/\n/g, "<br>")}</div>` : ""}

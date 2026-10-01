@@ -12,7 +12,7 @@ import aiosqlite
 from database.db import Database
 from utils.banner_info import RANK_ORDER, format_conditions, format_shipping, to_int
 from utils.card_pool import (
-    estimate, pool_minimum, relevant_units, resolve_pulled, tier_keys, tracked_units,
+    TAX_FACTOR, estimate, pool_minimum, relevant_units, resolve_pulled, tier_keys, tracked_units,
 )
 from utils.hot_list import min_rank, needs_password, rank_entries
 
@@ -96,12 +96,22 @@ class BannerView:
             "rank": min_rank(row.get('conditions')), "password": needs_password(row.get('conditions')),
             **self._rank_info(row.get('conditions')),
             "shipped": format_shipping(row.get('site_stats')),
+            **self._shipping(row.get('site_stats')),
             "thread_id": thread_id or None,
         }
         if with_pool:
             data["hits"] = self._hit_list(pool, pulled, sure, winners, unsure, price) if pool else []
             data["hit_keys_detected"] = sorted(sure)
         return data
+
+    @staticmethod
+    def _shipping(raw: Optional[str]) -> Dict:
+        """Verschickte Karten; Coins als Kartenwert (die Seite zählt ohne 10 % Steuer)."""
+        st = json.loads(raw) if raw else None
+        if not st:
+            return {"ship_cards": None, "ship_value": None, "ship_players": None}
+        return {"ship_cards": to_int(st.get("cards")), "ship_value": round(to_int(st.get("coins")) * TAX_FACTOR),
+                "ship_players": to_int(st.get("players"))}
 
     @staticmethod
     def _rank_info(conditions: Optional[str]) -> Dict:
