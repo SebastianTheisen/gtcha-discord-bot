@@ -160,3 +160,13 @@ def test_shipment_needing_one_of_several_similar_hits_becomes_group():
     result = match_shipped_hits(pool, 3, 25915, set())
     assert result["certain"] == []
     assert len(result["groups"]) == 1 and result["groups"][0]["pulled"] == 1
+
+
+def test_identical_duplicate_hits_are_checked_off_one_by_one():
+    # Wie 24158: 5 Exemplare derselben Karte, eins wird verschickt -> genau eins sicher abgehakt
+    pool = summarize_cards([card(1, 165000, copies=5, hit=True, name="Box"), card(2, 55000, copies=10),
+                            card(3, 300, copies=200)])
+    result = match_shipped_hits(pool, 1, 165000, set())
+    assert len(result["certain"]) == 1 and result["groups"] == []
+    second = match_shipped_hits(pool, 1, 165000, set(result["certain"]))
+    assert len(second["certain"]) == 1 and second["certain"] != result["certain"]
