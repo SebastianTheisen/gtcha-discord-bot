@@ -38,6 +38,7 @@ from utils.notifications import (
 from utils.rate_limiter import discord_rate_limiter
 from utils.memory_monitor import memory_monitor
 from utils.cache import banner_cache
+from utils.maintenance import backup_database, start_watchdog, touch_heartbeat
 from utils.banner_info import (
     banner_conditions, chance_at_least_one, format_conditions, format_shipping, shipping_stats,
     to_int as _int,
@@ -183,7 +184,13 @@ class GTCHABot(commands.Bot):
             max_instances=1,  # Maximal eine Instanz gleichzeitig
             misfire_grace_time=SCRAPE_INTERVAL_MINUTES * 60,  # Grace Time = Intervall
         )
+        self.scheduler.add_job(
+            self._backup_database, 'cron', hour=3, minute=30,
+            id='db_backup_job', replace_existing=True, coalesce=True, max_instances=1,
+        )
         self.scheduler.start()
+        # Wächter: ohne erfolgreichen Scrape in 20 Min wird der Prozess neu gestartet
+        start_watchdog(max_silence_seconds=20 * 60, startup_grace_seconds=20 * 60)
         logger.info(f"Scheduler: Alle {SCRAPE_INTERVAL_MINUTES} Min um xx:xx:20")
 
         # Hot-Banner Job (alle 30 Min um xx:00:20 und xx:30:20)
@@ -780,6 +787,7 @@ class GTCHABot(commands.Bot):
                 if skipped_inactive > 0:
                     logger.debug(f"Übersprungen: {skipped_inactive} inaktive Banner")
                 logger.info(f"Scrape done: {elapsed:.1f}s, {new_count} neu, {deleted_count} archiviert, {expired_count} abgelaufen")
+                touch_heartbeat()
 
                 # Erfolgs-Benachrichtigung immer senden
                 await notify_scrape_success(
@@ -795,6 +803,14 @@ class GTCHABot(commands.Bot):
             await self._report_scrape_problem(f"Scrape-Fehler: {e}")
         finally:
             self._scraper = None
+
+    async def _backup_database(self):
+        try:
+            target = await asyncio.to_thread(backup_database, self.db.db_path)
+            logger.info(f"Datenbank-Backup erstellt: {target}")
+        except Exception as e:
+            logger.error(f"Datenbank-Backup fehlgeschlagen: {e}")
+            await notify_critical_error(f"Datenbank-Backup fehlgeschlagen: {e}")
 
     async def _report_scrape_problem(self, reason: str):
         """Zählt Probleme in Folge; ab SCRAPE_PROBLEM_ALERT_AFTER einmalig Meldung im Admin-Kanal."""

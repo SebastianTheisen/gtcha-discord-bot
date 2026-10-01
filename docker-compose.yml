@@ -4,6 +4,11 @@ services:
     container_name: gtcha-tor
     restart: unless-stopped
     network_mode: host
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
 
   gtcha-bot:
     build: .
@@ -21,3 +26,15 @@ services:
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+    healthcheck:
+      # gesund, wenn in den letzten 15 Minuten ein Scrape fertig wurde
+      test: ["CMD", "python", "-c", "import os,sys,time; sys.exit(time.time() - os.path.getmtime('/app/data/heartbeat') > 900)"]
+      interval: 2m
+      timeout: 10s
+      start_period: 20m
+      retries: 1
