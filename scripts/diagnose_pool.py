@@ -4,7 +4,7 @@ Klärt, ob card_list den aktuellen Restbestand zeigt (Summe num == verbleibende 
 und berechnet den Durchschnittswert pro Zug.
 
 Aufruf auf dem VPS (im laufenden Container, nutzt dessen Tor-Proxy):
-    docker exec -i gtcha-discord-bot python - 24114 24125 < scripts/diagnose_pool.py
+    docker exec -i gtcha-discord-bot python - 24114 < scripts/diagnose_pool.py
 """
 
 import asyncio
@@ -100,7 +100,7 @@ async def main():
         for e in sorted(endpoints):
             print(f"  {e}")
         print("\n=== Probeabruf von Adressen, die nach Gewinnern/Verlauf klingen:")
-        hints = ("rank", "win", "hist", "log", "result", "draw", "lottery", "gacha")
+        hints = ("rank", "winner", "hist", "result")
         for e in sorted(endpoints):
             if any(h in e.lower() for h in hints):
                 for path in (f"/{e.rstrip('/')}/{pids[0]}", f"/{e.rstrip('/')}/{pids[0]}/1", f"/{e.rstrip('/')}"):
