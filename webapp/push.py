@@ -16,10 +16,14 @@ from loguru import logger
 from utils.card_pool import fmt_coins, fmt_pct
 from utils.hot_list import ALERT_PCT, ALERT_RESET_PCT, new_alerts
 
-EVENTS = ("value", "hit", "new")   # allgemein: über 100 %, Hit verschickt, neuer Banner
+# Allgemein (für alle Banner): neuer Banner, über 100 % (nur ziehbare, wie Top 10) und dieselben
+# Banner-Ereignisse wie beim Beobachten. Pack-Bewegung für alle wird zu einem Push zusammengefasst.
+EVENTS = ("new", "value", "hit", "packs", "ship", "low", "end")
+DEFAULTS = {"new": True, "value": True, "hit": True, "packs": False, "ship": False, "low": True, "end": False}
 # pro beobachtetem Banner: Hit raus, Packs weniger, Versandschub, über 100 %, Endspurt, beendet
 WATCH_EVENTS = ("hit", "packs", "ship", "ev", "low", "end")
 MAX_WATCHED = 50
+MAX_PACK_LINES = 6
 
 
 def _watch_events(b: Dict, old: Dict) -> List[tuple]:
@@ -59,12 +63,13 @@ def _banner_state(b: Dict, old: Dict) -> Dict:
             "ev_high": ev_high, "endspurt": b.get("status") == "endspurt"}
 
 
-def build_events(banners: List[Dict], hot: List[Dict], state: Dict, watched=frozenset()) -> tuple:
+def build_events(banners: List[Dict], hot: List[Dict], state: Dict) -> tuple:
     """(Nachrichten, neuer Stand) aus dem aktuellen und dem zuletzt gesehenen Stand.
 
-    Nachricht = (Art, Titel, Text, Banner-ID, nur_für_Beobachter). Ereignisse einzelner Banner werden
-    nur für beobachtete Banner (watched) erzeugt. Beim ersten Durchlauf - und für Banner, die noch
-    keinen Stand haben - wird nur gemerkt, nichts gemeldet.
+    Nachricht = (Art, Titel, Text, Banner-ID, Banner-Ereignis). Banner-Ereignisse (Hit raus, Packs,
+    Versand, über 100 %, Endspurt, beendet) entstehen für jeden Banner; wer sie bekommt, entscheidet
+    recipients() - je Gerät "für alle" oder nur für beobachtete Banner. Beim ersten Durchlauf und für
+    Banner ohne bisherigen Stand wird nur gemerkt, nichts gemeldet.
     """
     first = not state
     by_id = {b["id"]: b for b in banners}
@@ -84,39 +89,25 @@ def build_events(banners: List[Dict], hot: List[Dict], state: Dict, watched=froz
                              f"Ø {fmt_pct(e['pct'])} % zurück · {fmt_coins(e['price'])} Coins · "
                              f"{fmt_coins(e['remaining'])} Packs übrig", e["id"], False))
 
-    seen = {str(k): set(v) for k, v in state.get("detected", {}).items()}
-    detected = {}
-    for b in banners:
-        keys = set(b.get("hit_keys_detected") or [])
-        detected[str(b["id"])] = sorted(keys)
-        before = seen.get(str(b["id"]))
-        if first or before is None:
-            continue
-        for hit in b.get("hits") or []:
-            if hit["key"] in keys - before:
-                messages.append(("hit", f"📦 Hit verschickt · Banner {b['id']}",
-                                 f"{hit['name']} ({fmt_coins(hit['value'])} Coins)", b["id"], False))
-
-    # Beobachtete Banner
     old_banners = state.get("banners", {})
     new_banners = {}
     for b in banners:
         old = old_banners.get(str(b["id"]))
-        if old is not None and b["id"] in watched:
+        if old is not None:
             messages += [(kind, title, body, b["id"], True) for kind, title, body in _watch_events(b, old)]
         new_banners[str(b["id"])] = _banner_state(b, old or {})
     for bid, old in old_banners.items():
-        if int(bid) not in by_id and int(bid) in watched and old.get("remaining", 0) > 0:
+        if int(bid) not in by_id and old.get("remaining", 0) > 0:
             messages.append(("end", f"🏁 Banner {bid} beendet", f"{old.get('title') or ''} ist nicht mehr online",
                              int(bid), True))
 
-    new_state = {"known": sorted(by_id), "alerted": sorted(alerted), "detected": detected, "banners": new_banners}
+    new_state = {"known": sorted(by_id), "alerted": sorted(alerted), "banners": new_banners}
     return messages, new_state
 
 
 def clean_prefs(prefs: Dict) -> Dict:
     """Einstellungen eines Geräts: allgemeine Pushes an/aus und beobachtete Banner mit Ereignissen."""
-    clean = {e: bool(prefs.get(e, True)) for e in EVENTS}
+    clean = {e: bool(prefs.get(e, DEFAULTS[e])) for e in EVENTS}
     watch = {}
     for bid, kinds in list((prefs.get("watch") or {}).items())[:MAX_WATCHED]:
         try:
@@ -129,14 +120,35 @@ def clean_prefs(prefs: Dict) -> Dict:
 
 
 def recipients(messages: List[tuple], prefs: Dict) -> List[tuple]:
-    """Welche Nachrichten ein Gerät bekommt; doppelte (allgemein + beobachtet) nur einmal."""
+    """Welche Nachrichten ein Gerät bekommt.
+
+    Beobachtete Banner: die dort gewählten Ereignisse, einzeln. Sonst die allgemeinen Schalter;
+    Pack-Bewegung aller übrigen Banner kommt als ein zusammengefasster Push. Jede Meldung nur einmal.
+    """
     watch = prefs.get("watch") or {}
-    picked = [m for m in messages if m[4] and m[0] in watch.get(str(m[3]), [])]
-    covered = {(m[3], m[0]) for m in picked}
-    same = {"hit": "hit", "value": "ev"}   # allgemein -> entsprechendes Banner-Ereignis
+    on = lambda e: prefs.get(e, DEFAULTS.get(e, False))
+    picked, packs = [], []
     for m in messages:
-        if not m[4] and prefs.get(m[0], True) and (m[3], same.get(m[0])) not in covered:
+        kind, _, _, bid, banner_event = m
+        if not banner_event:
+            continue
+        if kind in watch.get(str(bid), []):
             picked.append(m)
+        elif kind == "packs" and on("packs"):
+            packs.append(m)
+        elif kind != "packs" and kind != "ev" and on(kind):
+            picked.append(m)
+    covered = {(m[3], m[0]) for m in picked}
+    for m in messages:
+        if not m[4] and on(m[0]) and not (m[0] == "value" and (m[3], "ev") in covered):
+            picked.append(m)
+    if packs:
+        lines = [m[1].split(": ", 1)[-1].replace(" Packs", "") for m in packs]
+        body = " · ".join(f"{m[3]}: {line}" for m, line in zip(packs[:MAX_PACK_LINES], lines))
+        if len(packs) > MAX_PACK_LINES:
+            body += f" · +{len(packs) - MAX_PACK_LINES} weitere"
+        picked.append(("packs", f"📉 Pack-Bewegung bei {len(packs)} Banner{'n' if len(packs) > 1 else ''}",
+                       body, packs[0][3] if len(packs) == 1 else None, True))
     return picked
 
 
@@ -203,13 +215,6 @@ class PushService:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("INSERT OR REPLACE INTO state (key, value) VALUES ('events', ?)", (json.dumps(state),))
             await db.commit()
-
-    async def watched(self) -> set:
-        """Alle Banner, die irgendein Gerät beobachtet."""
-        ids = set()
-        for _, _, prefs in await self._subscriptions():
-            ids |= {int(b) for b, kinds in (prefs.get("watch") or {}).items() if kinds}
-        return ids
 
     async def deliver(self, messages: List[tuple]):
         """Verteilt Nachrichten an die Geräte, je nach deren Einstellungen."""

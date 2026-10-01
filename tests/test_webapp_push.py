@@ -1,10 +1,10 @@
-from webapp.push import build_events
+from webapp.push import build_events, clean_prefs, recipients
 
 
-def banner(pid, pct=50.0, hits=(), detected=()):
-    return {"id": pid, "title": f"Pack {pid}", "price": 1000, "remaining": 100, "ev_pct": pct,
-            "hits": [{"key": k, "name": f"Karte {k}", "value": 5000} for k in hits],
-            "hit_keys_detected": list(detected)}
+def full(pid, remaining=100, out=(), ship=0, pct=50.0, status="running"):
+    return {"id": pid, "title": f"Pack {pid}", "price": 1000, "remaining": remaining, "total": 500,
+            "ev_pct": pct, "status": status, "ship_cards": ship, "ship_value": ship * 1000,
+            "out": [{"name": n, "value": 5000} for n in out]}
 
 
 def hot(*banners):
@@ -12,60 +12,46 @@ def hot(*banners):
 
 
 def test_first_run_only_remembers():
-    b = banner(1, 150, hits=["a"], detected=["a"])
+    b = full(1, pct=150)
     messages, state = build_events([b], hot(b), {})
     assert messages == []
-    assert state["known"] == [1] and state["alerted"] == [1] and state["detected"] == {"1": ["a"]}
+    assert state["known"] == [1] and state["alerted"] == [1] and "1" in state["banners"]
 
 
-def test_new_banner_value_and_hit_events():
-    old = banner(1, 50, hits=["a", "b"])
-    _, state = build_events([old], hot(old), {})
-    now = banner(1, 120, hits=["a", "b"], detected=["b"])
-    fresh = banner(2, 40)
-    messages, state = build_events([now, fresh], hot(now, fresh), state)
-    kinds = sorted(m[0] for m in messages)
-    assert kinds == ["hit", "new", "value"]
-    hit = next(m for m in messages if m[0] == "hit")
-    assert "Karte b" in hit[2] and hit[3] == 1
-    # nichts Neues -> keine Meldungen
-    again, _ = build_events([now, fresh], hot(now, fresh), state)
-    assert again == []
+def test_banner_events_for_every_banner():
+    _, state = build_events([full(1), full(2)], [], {})
+    now = [full(1, 90, out=["Lugia"], ship=2, pct=120, status="endspurt"), full(2, 50), full(3)]
+    messages, state = build_events(now, [], state)
+    by_banner = {}
+    for m in messages:
+        by_banner.setdefault(m[3], []).append(m[0])
+    assert sorted(by_banner[1]) == ["ev", "hit", "low", "packs", "ship"]
+    assert by_banner[2] == ["packs"] and by_banner[3] == ["new"]   # neuer Banner: nur "neu", sonst erst merken
+    messages, _ = build_events([full(2, 40), full(3)], [], state)
+    assert ("end", 1) in {(m[0], m[3]) for m in messages}
 
 
-def full(pid, remaining=100, out=(), ship=0, pct=50.0, status="running"):
-    return {"id": pid, "title": f"Pack {pid}", "price": 1000, "remaining": remaining, "total": 500,
-            "ev_pct": pct, "status": status, "ship_cards": ship, "ship_value": ship * 1000,
-            "out": [{"name": n, "value": 5000} for n in out], "hits": [], "hit_keys_detected": []}
+def test_prefs_defaults_and_watch_cleanup():
+    prefs = clean_prefs({"value": False, "watch": {"24149": ["hit", "packs", "bogus"], "x": ["hit"]}})
+    assert prefs["watch"] == {"24149": ["hit", "packs"]}
+    assert prefs["value"] is False and prefs["new"] is True and prefs["packs"] is False
 
 
-def test_watched_banner_events():
-    _, state = build_events([full(1), full(2)], [], {}, watched={1})
-    now = [full(1, 90, out=["Lugia"], ship=2, pct=120, status="endspurt"), full(2, 50)]
-    messages, state = build_events(now, [], state, watched={1})
-    kinds = sorted(m[0] for m in messages if m[4])
-    assert kinds == ["ev", "hit", "low", "packs", "ship"]
-    assert all(m[3] == 1 for m in messages if m[4])          # Banner 2 wird nicht beobachtet
-    # Banner verschwindet -> beendet
-    messages, _ = build_events([full(2, 40)], [], state, watched={1})
-    assert [m[0] for m in messages if m[4]] == ["end"]
-
-
-def test_newly_watched_banner_starts_quietly():
-    _, state = build_events([full(1)], [], {}, watched=set())
-    messages, _ = build_events([full(1, 90)], [], state, watched={1})
-    assert [m[0] for m in messages if m[4]] == ["packs"]     # Stand war schon da -> ab jetzt Meldungen
-    _, state = build_events([], [], {"known": []}, watched=set())
-    messages, _ = build_events([full(5, 90)], [], state, watched={5})
-    assert not [m for m in messages if m[4]]                 # neuer Banner: erst merken
-
-
-def test_prefs_and_recipients():
-    from webapp.push import clean_prefs, recipients
-    prefs = clean_prefs({"hit": True, "value": False, "watch": {"24149": ["hit", "packs", "bogus"], "x": ["hit"]}})
-    assert prefs["watch"] == {"24149": ["hit", "packs"]} and prefs["new"] is True
-    messages = [("hit", "allgemein", "", 24149, False), ("hit", "beobachtet", "", 24149, True),
-                ("hit", "anderer", "", 1, False), ("value", "lohnt", "", 1, False),
-                ("packs", "packs", "", 24149, True), ("ship", "versand", "", 24149, True)]
+def test_recipients_general_watch_and_dedupe():
+    messages = [("hit", "Hit 1", "", 1, True), ("hit", "Hit 2", "", 2, True),
+                ("packs", "📉 Banner 1: 100 → 90 Packs", "", 1, True),
+                ("packs", "📉 Banner 2: 50 → 49 Packs", "", 2, True),
+                ("packs", "📉 Banner 3: 20 → 18 Packs", "", 3, True),
+                ("ev", "über 100", "", 1, True), ("value", "lohnt 1", "", 1, False),
+                ("ship", "Versand 2", "", 2, True), ("new", "neu 4", "", 4, False)]
+    # nur beobachten: Banner 1 mit Hit + Packs + über 100 %; allgemein Hit an, Packs/Versand aus, value an
+    prefs = clean_prefs({"hit": True, "value": True, "packs": False, "ship": False, "new": False,
+                         "watch": {"1": ["hit", "packs", "ev"]}})
     got = [m[1] for m in recipients(messages, prefs)]
-    assert got == ["beobachtet", "packs", "anderer"]           # kein Doppel, value aus, ship nicht gewählt
+    assert got == ["Hit 1", "Hit 2", "📉 Banner 1: 100 → 90 Packs", "über 100"]   # value 1 nicht doppelt
+    # allgemein Pack-Bewegung an: übrige Banner zusammengefasst in einem Push
+    prefs = clean_prefs({"packs": True, "hit": False, "value": False, "new": False, "watch": {"1": ["packs"]}})
+    got = recipients(messages, prefs)
+    summary = [m for m in got if m[1].startswith("📉 Pack-Bewegung")]
+    assert len(summary) == 1 and summary[0][2] == "2: 50 → 49 · 3: 20 → 18"
+    assert [m[1] for m in got if m[3] == 1] == ["📉 Banner 1: 100 → 90 Packs"]

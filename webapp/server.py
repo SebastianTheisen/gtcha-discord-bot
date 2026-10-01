@@ -17,7 +17,7 @@ from loguru import logger
 
 from database.db import Database
 from webapp.images import ImageCache, content_type
-from webapp.push import EVENTS, WATCH_EVENTS, PushService, build_events
+from webapp.push import DEFAULTS, EVENTS, WATCH_EVENTS, PushService, build_events
 from webapp.view import BannerView
 
 STATIC = Path(__file__).parent / "static"
@@ -109,7 +109,7 @@ class App:
 
     async def api_push_key(self, request):
         return web.json_response({"key": self.push.public_key(), "events": list(EVENTS),
-                                  "watch_events": list(WATCH_EVENTS)})
+                                  "defaults": DEFAULTS, "watch_events": list(WATCH_EVENTS)})
 
     async def api_push_subscribe(self, request):
         body = await request.json()
@@ -152,10 +152,10 @@ class App:
             try:
                 banners = await self.banners()
                 state = await self.push.load_state()
-                messages, new_state = build_events(banners, self.view.hot(banners), state,
-                                                   await self.push.watched())
-                for _, title, body, _, _ in messages:
-                    logger.info(f"Push: {title} - {body}")
+                messages, new_state = build_events(banners, self.view.hot(banners), state)
+                for kind, title, body, _, _ in messages:
+                    if kind != "packs":   # Pack-Bewegungen kämen jede Minute - nicht ins Log
+                        logger.info(f"Ereignis: {title} - {body}")
                 await self.push.deliver(messages)
                 await self.push.save_state(new_state)
             except Exception as e:
