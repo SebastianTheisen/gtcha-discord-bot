@@ -15,7 +15,7 @@ HIT_ACTION_TYPE = 2       # "Versand nur" (Flugzeug-Symbol auf der Seite)
 EMBEDS_PER_MESSAGE = 10   # Discord erlaubt 10 Embeds pro Nachricht
 MAX_LISTED = 50           # Obergrenze für die Hit-Liste (5 Nachrichten)
 TIERS = ("T1", "T2", "T3")
-MAX_MEDALS = 10           # Medaillen T1-T10 = Platz 1-10 der Hit-Liste
+MAX_MEDALS = 50           # Medaille Tn = Platz n der Hit-Liste
 MAX_SHIPMENT_CARDS = 10   # größere Versand-Sprünge werden nicht exakt zerlegt
 MAX_SHIPMENT_VALUE = 5_000_000
 VALUE_TOLERANCE = 0.05     # Kartenwerte schwanken mit der Zeit
@@ -118,6 +118,34 @@ def is_relevant_hit(unit: Dict, price: Optional[int]) -> bool:
 
 def relevant_units(pool: Dict, price: Optional[int]) -> List[Dict]:
     return [u for u in tracked_units(pool) if is_relevant_hit(u, price)]
+
+
+def resolve_pulled(detected: List[str], unsure: List[Dict], claimed: Set[str]) -> tuple:
+    """Gezogene Karten aus sicheren Erkennungen, Medaillen und offenen ❓-Gruppen.
+
+    Eine Gruppe "n von diesen Karten gezogen" ist erledigt, sobald n ihrer Karten per Medaille oder
+    sicherer Erkennung feststehen. Sonst zählen für die Rechnung Stellvertreter aus der Gruppe.
+    Gibt (alle gezogenen inkl. Stellvertreter, sicher erkannte, offene Gruppen) zurück.
+    """
+    groups = [g for g in unsure if g.get("pulled", 0) > 0]
+    # Ältere Stände haben Stellvertreter (erste Gruppen-Karten) direkt gespeichert: herausrechnen
+    legacy = {k for g in groups for k in g["keys"][:g["pulled"]]}
+    sure = set(detected) - legacy
+    base = sure | set(claimed)
+    # Jede sicher bekannte Karte erledigt höchstens einen Platz in einer Gruppe (kleinste Gruppe zuerst),
+    # denn jede Gruppe steht für einen eigenen Versand
+    unused = set(claimed) - sure
+    stand_ins: Set[str] = set()
+    open_groups = []
+    for g in sorted(groups, key=lambda g: len(g["keys"])):
+        covering = [k for k in g["keys"] if k in unused][:g["pulled"]]
+        unused -= set(covering)
+        missing = g["pulled"] - len(covering)
+        if missing > 0:
+            free = [k for k in g["keys"] if k not in base and k not in stand_ins]
+            stand_ins |= set(free[:missing])
+            open_groups.append(g)
+    return base | stand_ins, sure, open_groups
 
 
 def estimate(pool: Dict, remaining: Optional[int], total_packs: Optional[int],
