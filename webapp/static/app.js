@@ -259,18 +259,27 @@ function hitCard(h) {
   </div>`;
 }
 
-function cardTile(c, price) {
+// Meldbare Exemplare einer Karte (aus der Hit-Liste des Banners), nach Platz
+const unitsOf = (b, card) => (b.hits || []).filter((h) => h.key === card.id || h.key.startsWith(card.id + "#"))
+  .sort((x, y) => x.rank - y.rank);
+
+function cardTile(c, price, units = [], meId = null) {
   const gone = c.pulled >= c.copies;
   const share = c.share.toLocaleString("de-DE", { maximumFractionDigits: c.share < 0.1 ? 3 : c.share < 1 ? 2 : 1 }) + " %";
-  return `<div class="tile ${gone ? "gone" : ""} ${c.unsure && !gone ? "unsure" : ""}">
+  const tiers = units.length ? (units.length === 1 ? units[0].tier : `${units[0].tier}–${units[units.length - 1].tier}`) : "";
+  const mine = meId && units.some((u) => u.medal_user === String(meId));
+  return `<div class="tile ${gone ? "gone" : ""} ${c.unsure && !gone ? "unsure" : ""} ${units.length ? "claimable" : ""}"
+      data-card="${esc(c.id)}">
     <div class="tile-art">
       ${img(c.image, c.name)}
+      ${tiers ? `<span class="tier-badge">${tiers}</span>` : ""}
       ${c.copies > 1 ? `<span class="copies">×${c.copies}</span>` : ""}
       ${c.hit ? `<span class="ship-tag small">Versand nur ✈</span>` : ""}
     </div>
     <div class="tile-base"></div>
     <div class="tile-value ${price && c.value >= price ? "above" : ""}"><span class="coin"></span>${num(c.value)}</div>
-    <div class="tile-meta">${share}${c.pulled && !gone ? ` · ${c.pulled}/${c.copies} gezogen` : ""}</div>
+    <div class="tile-name">${esc(c.name)}</div>
+    <div class="tile-meta">${share}${c.pulled && !gone ? ` · ${c.pulled}/${c.copies} gezogen` : ""}${mine ? " · von dir" : ""}</div>
     ${c.unsure && !gone ? `<div class="tile-meta unsure-note">❓ ${esc(c.unsure)}</div>` : ""}
   </div>`;
 }
@@ -291,7 +300,12 @@ function renderCards(b) {
   const pages = Math.max(1, Math.ceil(b.cards.length / CARDS_PER_PAGE));
   const page = Math.min(state.cardPage[b.id] || 1, pages);
   const shown = b.cards.slice((page - 1) * CARDS_PER_PAGE, page * CARDS_PER_PAGE);
-  box.innerHTML = `<div class="tiles">${shown.map((c) => cardTile(c, b.price)).join("")}</div>${pager(page, pages)}`;
+  const meId = state.me?.user_id || null;
+  box.innerHTML = `<div class="tiles">${shown.map((c) => cardTile(c, b.price, unitsOf(b, c), meId)).join("")}</div>${pager(page, pages)}`;
+  box.querySelectorAll(".tile[data-card]").forEach((el) => el.addEventListener("click", () => {
+    const card = b.cards.find((c) => c.id === el.dataset.card);
+    if (card) claimFlow(b, card).catch((e) => ask("Fehler", esc(e.message), ["OK"]));
+  }));
   box.querySelectorAll("[data-page]").forEach((el) => el.addEventListener("click", () => {
     state.cardPage[b.id] = Number(el.dataset.page);
     renderCards(b);
@@ -312,8 +326,6 @@ async function showBanner(id) {
       <span class="price-pill">${coins(b.price)}</span></div>
     <div class="watch-row"><button class="watch-btn" id="watch-btn">🔔 Beobachten</button>
       <a class="hint" href="#/settings">Pushes einstellen ›</a></div>
-    ${hits.length ? `<h2>🏆 Karten ab Packpreis <small>${open} von ${hits.length} noch drin · zum Melden antippen</small></h2>
-      <div class="rows" id="claims"></div>` : ""}
     <h2>📊 Auswertung <small>ID ${b.id}</small></h2>
     <div class="stats">
       ${b.ev != null ? stat("Ø Rückgabe pro Zug", `<span class="ev ${evClass(b.ev_pct)}">${num(b.ev)} Coins</span>`, (b.ev_pct != null ? pct(b.ev_pct) + " vom Preis" : "") + (b.ev_from_site ? " · aus Zahlen der Seite" : " · geschätzt")) : ""}
@@ -358,7 +370,7 @@ async function showBanner(id) {
     </div>`;
   renderCards(b);
   wireWatchButton(String(b.id)).catch(() => {});
-  renderClaims(b).catch(() => {});
+  me().then(() => renderCards(b)).catch(() => {});
 }
 
 // --- Push ---
@@ -550,44 +562,61 @@ async function authApi(path, body) {
   return data;
 }
 
-async function renderClaims(b) {
-  const box = view.querySelector("#claims");
-  if (!box) return;
+// Kurze Rückfrage (Ja/Nein) als eigenes Fenster
+function ask(title, html, buttons = ["Nein", "Ja"]) {
+  return new Promise((resolve) => {
+    const wrap = document.createElement("div");
+    wrap.className = "modal-wrap";
+    wrap.innerHTML = `<div class="modal" role="dialog" aria-modal="true"><div class="modal-title">${esc(title)}</div>
+      <div class="modal-text">${html}</div><div class="modal-buttons">${buttons.map((label, i) =>
+        `<button class="btn ${i === buttons.length - 1 ? "primary" : ""}" data-i="${i}">${esc(label)}</button>`).join("")}</div></div>`;
+    document.body.appendChild(wrap);
+    wrap.addEventListener("click", (e) => {
+      const i = e.target.dataset?.i;
+      if (i === undefined && e.target !== wrap) return;
+      wrap.remove();
+      resolve(i !== undefined ? buttons[Number(i)] : null);
+    });
+  });
+}
+
+// Tippen auf eine Karte: melden bzw. zurücknehmen (mit Rückfrage), Bot postet es im Discord-Thread
+async function claimFlow(b, card) {
+  const units = unitsOf(b, card);
+  if (!units.length) {
+    await ask(card.name, `${num(card.value)} Coins – unter dem Packpreis, kann nicht gemeldet werden.`, ["OK"]);
+    return;
+  }
   const user = await me();
-  box.innerHTML = (!user ? `<div class="line muted">Zum Melden einmal mit Discord verknüpfen:
-      <a href="#/settings" style="color:var(--blue-dark)">Push → Discord verknüpfen ›</a></div>` : "")
-    + b.hits.map((h) => {
-      const mine = user && h.medal_user === String(user.user_id);
-      const status = h.medal_user ? (mine ? "✅ von dir gemeldet" : "✅ gemeldet")
-        : h.state === "pulled" ? `✅ ${esc(h.note || "gezogen")}` : h.state === "unsure" ? `❓ ${esc(h.note || "")}` : "";
-      const btn = !user ? "" : mine ? `<button class="claim undo" data-tier="${h.tier}" data-action="unclaim">Zurücknehmen</button>`
-        : !h.medal_user ? `<button class="claim" data-tier="${h.tier}" data-action="claim">Ich hab's gezogen</button>` : "";
-      const gone = h.medal_user || h.state === "pulled";
-      return `<div class="line claim-row ${gone ? "done" : ""} ${h.state === "unsure" ? "unsure" : ""}">
-        <span class="claim-thumb">${img(h.image, h.name)}${gone ? `<span class="thumb-check">✓</span>` : ""}</span>
-        <span class="claim-text"><b>${h.tier}</b> ${esc(h.name)}<br>
-          <span class="claim-value">${num(h.value)} Coins</span>${status ? `<br><span class="muted">${status}</span>` : ""}</span>
-        ${btn}</div>`;
-    }).join("");
-  box.querySelectorAll(".claim").forEach((el) => el.addEventListener("click", async () => {
-    const verb = el.dataset.action === "claim" ? `${el.dataset.tier} als von dir gezogen melden?` : `${el.dataset.tier} zurücknehmen?`;
-    if (!confirm(verb + "\nDer Bot postet das im Discord-Thread.")) return;
-    el.disabled = true;
-    el.textContent = "Wird gesendet …";
-    try {
-      const { id } = await authApi("/api/medal", { pack_id: b.id, tier: el.dataset.tier, action: el.dataset.action });
-      for (let i = 0; i < 20; i++) {        // der Bot arbeitet Meldungen alle 5 s ab
-        await new Promise((r) => setTimeout(r, 1500));
-        const r = await authApi(`/api/medal/${id}`);
-        if (r.status === "ok") { await state.current(); return; }
-        if (r.status === "rejected") { alert("Nicht übernommen: " + (r.reason || "")); await state.current(); return; }
-      }
-      alert("Der Bot hat noch nicht geantwortet – die Meldung wird gleich verarbeitet.");
-    } catch (e) {
-      alert("Melden fehlgeschlagen: " + e.message);
-    }
-    await state.current();
-  }));
+  if (!user) {
+    if (await ask("Discord verknüpfen", "Zum Melden einmal mit Discord verknüpfen (Push-Tab).", ["Später", "Verknüpfen"]) === "Verknüpfen")
+      location.hash = "#/settings";
+    return;
+  }
+  const free = units.find((u) => !u.medal_user && u.state !== "pulled");
+  const own = units.find((u) => u.medal_user === String(user.user_id));
+  let unit, action;
+  if (free) {
+    const extra = own ? `<br><span class="muted">${own.tier} hast du schon gemeldet – das wäre ein weiteres Exemplar.</span>` : "";
+    if (await ask("Hit beanspruchen?", `<b>${free.tier}</b> · ${esc(card.name)}<br>${num(card.value)} Coins<br><br>
+        Als von dir gezogen melden? Der Bot postet das im Discord-Thread.${extra}`) !== "Ja") return;
+    unit = free; action = "claim";
+  } else if (own) {
+    if (await ask("Zurücknehmen?", `<b>${own.tier}</b> · ${esc(card.name)} ist als von dir gemeldet.<br><br>
+        Meldung zurücknehmen?`) !== "Ja") return;
+    unit = own; action = "unclaim";
+  } else {
+    await ask(card.name, "Alle Exemplare dieser Karte sind schon gemeldet oder als gezogen erkannt.", ["OK"]);
+    return;
+  }
+  const { id } = await authApi("/api/medal", { pack_id: b.id, tier: unit.tier, action });
+  for (let i = 0; i < 20; i++) {        // der Bot arbeitet Meldungen alle 5 s ab
+    await new Promise((r) => setTimeout(r, 1500));
+    const r = await authApi(`/api/medal/${id}`);
+    if (r.status === "ok") { await state.current(); return; }
+    if (r.status === "rejected") { await ask("Nicht übernommen", esc(r.reason || ""), ["OK"]); await state.current(); return; }
+  }
+  await ask("Gesendet", "Der Bot hat noch nicht geantwortet – die Meldung wird gleich verarbeitet.", ["OK"]);
 }
 
 function linkPanel(user) {
