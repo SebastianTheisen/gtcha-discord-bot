@@ -292,3 +292,11 @@ def test_top_three_count_copies_without_shipping_hits():
     # gemischt: 2x teuerste Karte, dann die nächste
     pool = summarize_cards([card(1, 9000, copies=2), card(2, 5000), card(3, 100, copies=50)])
     assert [u["key"] for u in tracked_units(pool)] == ["1", "1#2", "2"]
+
+
+def test_card_value_changes_between_pools():
+    from utils.card_pool import card_value_changes
+    old = summarize_cards([card(1, 14000, name="A"), card(2, 990, copies=10), card(3, 500)])
+    new = summarize_cards([card(1, 15400, name="A"), card(2, 990, copies=10), card(4, 700)])
+    assert card_value_changes(old, new) == [{"id": "1", "name": "A", "old": 14000, "new": 15400}]
+    assert card_value_changes(None, new) == [] and card_value_changes({"hits": []}, new) == []

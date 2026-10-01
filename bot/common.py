@@ -43,7 +43,7 @@ from utils.banner_info import (
     is_upcoming, jst_timestamp, parse_thread_title, shipping_stats, thread_title, to_int as _int,
 )
 from utils.card_pool import (
-    card_value, estimate, fmt_coins, fmt_pct, out_of_banner_value, TIERS, MAX_LISTED, EMBEDS_PER_MESSAGE, decided_value, detect_jump_pulls,
+    card_value, card_value_changes, estimate, fmt_coins, fmt_pct, out_of_banner_value, TIERS, MAX_LISTED, EMBEDS_PER_MESSAGE, decided_value, detect_jump_pulls,
     is_relevant_hit, match_shipped_hits, pool_minimum, match_shipment_history, prefer_claimed, relevant_units, resolve_pulled, shipment_values, tier_keys,
     tracked_units,
 )

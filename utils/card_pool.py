@@ -488,6 +488,15 @@ def detect_jump_pulls(pool: Dict, jump: int, pulled_keys: Set[str]) -> List[str]
         remaining -= unit["value"]
 
 
+def card_value_changes(old_pool: Optional[Dict], new_pool: Optional[Dict]) -> List[Dict]:
+    """Karten, deren Wert sich zwischen zwei geladenen Pools geändert hat (nur mit vollständiger Kartenliste)."""
+    if not old_pool or not new_pool or not old_pool.get("cards") or not new_pool.get("cards"):
+        return []
+    before = {str(c["id"]): c["value"] for c in old_pool["cards"]}
+    return [{"id": str(c["id"]), "name": c["name"], "old": before[str(c["id"])], "new": c["value"]}
+            for c in new_pool["cards"] if str(c["id"]) in before and before[str(c["id"])] != c["value"]]
+
+
 def card_value(counted: Optional[int]) -> int:
     """Gezählter Versandwert der Seite (ohne Steuer) -> Kartenwert, wie er an den Karten steht."""
     return round((counted or 0) * TAX_FACTOR)
