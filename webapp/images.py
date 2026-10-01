@@ -2,12 +2,14 @@
 
 Die Seite liefert Bilder aus Japan langsam (~2 s pro Bild). Der VPS lädt jedes Bild nur einmal,
 legt es in data/img_cache ab und schickt es mit langer Cache-Dauer ans iPhone.
+Alle Bilder aktiver Banner werden vorgeladen, Bilder beendeter Banner wieder gelöscht.
 Nur Adressen von gtchaxonline.com werden geladen - kein offener Proxy.
 """
 
 import asyncio
 import hashlib
 import os
+import time
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
@@ -17,7 +19,7 @@ from loguru import logger
 
 ALLOWED_HOST = "gtchaxonline.com"
 MAX_BYTES = 8 * 1024 * 1024
-MAX_CACHE_BYTES = 500 * 1024 * 1024
+KEEP_UNUSED_SECONDS = 600   # gerade angesehene Bilder nicht verwaister Banner kurz behalten
 TIMEOUT = aiohttp.ClientTimeout(total=30)
 EXTENSIONS = {".webp", ".png", ".jpg", ".jpeg", ".gif", ".avif"}
 
@@ -90,23 +92,35 @@ class ImageCache:
         tmp.replace(path)
         return path
 
-    async def warm(self, urls):
-        """Lädt fehlende Bilder vorab (nacheinander, damit die Seite nicht belastet wird)."""
+    async def warm(self, urls) -> int:
+        """Lädt alle fehlenden Bilder vorab (höchstens 4 gleichzeitig, siehe _limit)."""
+        missing = list(dict.fromkeys(u for u in urls if u and allowed(u) and not self.cached(u)))
+        if not missing:
+            return 0
+        logger.info(f"Bilder: lade {len(missing)} fehlende vor...")
         loaded = 0
-        for url in urls:
-            if url and allowed(url) and not self.cached(url):
-                if await self.get(url):
-                    loaded += 1
-        if loaded:
-            logger.info(f"Bilder vorgeladen: {loaded}")
-        self.prune()
+        for i in range(0, len(missing), 20):
+            results = await asyncio.gather(*(self.get(u) for u in missing[i:i + 20]))
+            loaded += sum(1 for r in results if r)
+        logger.info(f"Bilder: {loaded} von {len(missing)} geladen")
+        return loaded
 
-    def prune(self):
-        """Hält den Zwischenspeicher unter MAX_CACHE_BYTES (älteste Dateien zuerst weg)."""
-        files = sorted((p for p in self.dir.iterdir() if p.is_file()), key=lambda p: p.stat().st_mtime)
-        total = sum(p.stat().st_size for p in files)
-        for p in files:
-            if total <= MAX_CACHE_BYTES:
-                break
-            total -= p.stat().st_size
-            p.unlink(missing_ok=True)
+    def cleanup(self, keep_urls) -> int:
+        """Löscht Bilder, die zu keinem aktiven Banner mehr gehören."""
+        keep = {cache_name(u) for u in keep_urls if u}
+        now = time.time()
+        removed = 0
+        for path in self.dir.iterdir():
+            if not path.is_file() or path.name in keep:
+                continue
+            if now - path.stat().st_mtime < KEEP_UNUSED_SECONDS:
+                continue
+            path.unlink(missing_ok=True)
+            removed += 1
+        if removed:
+            logger.info(f"Bilder: {removed} von beendeten Bannern gelöscht")
+        return removed
+
+    def stats(self) -> tuple:
+        files = [p for p in self.dir.iterdir() if p.is_file()]
+        return len(files), sum(p.stat().st_size for p in files)

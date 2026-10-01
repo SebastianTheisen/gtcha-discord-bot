@@ -135,6 +135,17 @@ class BannerView:
                            "image": u.get("image"), "state": state, "note": note})
         return result
 
+    async def image_urls(self) -> List[str]:
+        """Alle Bilder der aktiven Banner: Banner zuerst, dann Hits, dann alle übrigen Karten."""
+        rows = (await self.db.get_active_banners()).values()
+        banners, hits, cards = [], [], []
+        for row in rows:
+            banners.append(row.get('image_url'))
+            pool = json.loads(row['card_pool']) if row.get('card_pool') else {}
+            hits += [h.get('image') for h in pool.get('hits') or []] + [c.get('image') for c in pool.get('top') or []]
+            cards += [c.get('image') for c in pool.get('cards') or []]
+        return [u for u in dict.fromkeys(banners + hits + cards) if u]
+
     async def all_banners(self, with_pool: bool = False) -> List[Dict]:
         rows = await self.db.get_active_banners()
         return [await self.summary(row, with_pool=with_pool) for row in rows.values()]

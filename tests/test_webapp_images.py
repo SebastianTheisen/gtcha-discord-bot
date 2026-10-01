@@ -16,3 +16,20 @@ def test_cache_name_is_stable_and_keeps_extension():
     assert a == cache_name("https://gtchaxonline.com/pack/24014/1.webp") and a.endswith(".webp")
     assert cache_name("https://gtchaxonline.com/x?y=../../etc").endswith(".img")
     assert "/" not in cache_name("https://gtchaxonline.com/a/b/c.png")
+
+
+def test_cleanup_keeps_active_and_recent_images(tmp_path):
+    import os
+    import time
+    from webapp.images import ImageCache
+    cache = ImageCache(str(tmp_path))
+    active = "https://gtchaxonline.com/card/1.webp"
+    ended = "https://gtchaxonline.com/card/2.webp"
+    just_viewed = "https://gtchaxonline.com/card/3.webp"
+    old = time.time() - 3600
+    for url in (active, ended, just_viewed):
+        (cache.dir / cache_name(url)).write_bytes(b"x")
+    for url in (active, ended):
+        os.utime(cache.dir / cache_name(url), (old, old))
+    assert cache.cleanup([active]) == 1
+    assert cache.cached(active) and cache.cached(just_viewed) and not cache.cached(ended)

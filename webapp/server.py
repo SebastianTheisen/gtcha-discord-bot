@@ -34,6 +34,7 @@ class App:
         self._data = None
         self._updated = 0
         self._lock = asyncio.Lock()
+        self._syncing = False
 
     async def _compute(self, only_if_missing: bool = False) -> list:
         async with self._lock:
@@ -49,14 +50,30 @@ class App:
         """Alle aktiven Banner - im Hintergrund vorberechnet, Anfragen warten nie auf die Datenbank."""
         return self._data if self._data is not None else await self._compute(only_if_missing=True)
 
+    async def sync_images(self):
+        """Lädt alle Bilder aktiver Banner vorab und löscht die von beendeten Bannern."""
+        try:
+            urls = await self.view.image_urls()
+            if not urls:
+                return   # keine aktiven Banner gelesen - lieber nichts löschen
+            loaded = await self.images.warm(urls)
+            removed = self.images.cleanup(urls)
+            if loaded or removed:
+                count, size = self.images.stats()
+                logger.info(f"Bilder: {count} gespeichert ({size / 1024 / 1024:.0f} MB)")
+        except Exception as e:
+            logger.warning(f"Bilder-Abgleich fehlgeschlagen: {type(e).__name__}: {e}")
+        finally:
+            self._syncing = False
+
     async def refresh_loop(self):
         """Hält die Daten frisch und lädt neue Banner-Bilder vorab."""
         while True:
             try:
-                banners = await self._compute()
-                urls = [b.get("image") for b in banners]
-                urls += [h.get("image") for b in banners for h in (b.get("hits") or [])[:3]]
-                asyncio.create_task(self.images.warm(urls))
+                await self._compute()
+                if not self._syncing:
+                    self._syncing = True
+                    asyncio.create_task(self.sync_images())
             except Exception as e:
                 logger.warning(f"Daten-Aktualisierung fehlgeschlagen: {type(e).__name__}: {e}")
             await asyncio.sleep(REFRESH_SECONDS)
