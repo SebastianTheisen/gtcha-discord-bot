@@ -12,7 +12,8 @@ import aiosqlite
 from database.db import Database
 from utils.banner_info import RANK_ORDER, format_conditions, format_shipping, to_int
 from utils.card_pool import (
-    TAX_FACTOR, estimate, pool_minimum, relevant_units, resolve_pulled, tier_keys, tracked_units,
+    TAX_FACTOR, estimate, explain_batch, fmt_coins, pool_minimum, relevant_units, resolve_pulled, tier_keys,
+    tracked_units,
 )
 from utils.hot_list import min_rank, needs_password, rank_entries
 
@@ -187,9 +188,46 @@ class BannerView:
                           "players": (r[6] or 0) - (r[5] or 0), "total_cards": r[2]}
                          for r in await cur.fetchall()]
         data["history"] = history
-        data["shipments"] = shipments
+        data["shipments"] = await self._explain_shipments(row, data, shipments)
         data.update(await self._card_list(row, data))
         return data
+
+    async def _explain_shipments(self, row: Dict, data: Dict, shipments: List[Dict]) -> List[Dict]:
+        """Jeder Versandschub mit Kartenwert (×1,1) und welche Hits darin stecken - ältester zuerst
+        gerechnet, damit ein schon verschickter Hit später nicht noch einmal zählt."""
+        pool = json.loads(row['card_pool']) if row.get('card_pool') else None
+        if not pool or not pool.get('hits'):
+            for s in shipments:
+                s["value"] = round(max(0, s["coins"]) * TAX_FACTOR)
+                s["explain"] = []
+            return shipments
+        _, _, winners, _, _ = await self._pulled(data.get("thread_id") or 0, row['pack_id'], pool)
+        units = {u["key"]: u for u in tracked_units(pool)}
+        label = lambda k: f"{units[k]['name']} ({fmt_coins(units[k]['value'])} Coins)" if k in units else k
+        sent: set = set()
+        for s in reversed(shipments):
+            res = explain_batch(pool, s["cards"], s["coins"], sent, claimed=set(winners) - sent)
+            sent |= set(res["certain"])
+            s["value"], s["kind"] = res["value"], res["kind"]
+            lines = [{"icon": "✅", "text": label(k)} for k in res["certain"]]
+            for g in res["groups"]:
+                names = " / ".join(dict.fromkeys(units[k]["name"] for k in g["keys"] if k in units))
+                lines.append({"icon": "❓", "text": f"{g['pulled']} von: {names}"})
+            for g in res["maybe"]:
+                names = " / ".join(dict.fromkeys(units[k]["name"] for k in g["keys"] if k in units))
+                lines.append({"icon": "❓", "text": f"vielleicht {names} – oder nur normale Karten"})
+            hits = len(res["certain"]) + sum(g["pulled"] for g in res["groups"])
+            if res["kind"] == "hits" and s["cards"] > hits:
+                rest = s['cards'] - hits
+                lines.append({"icon": "·", "text": f"+ {rest} normale Karte" + ("" if rest == 1 else "n")})
+            elif res["kind"] == "normal":
+                lines.append({"icon": "·", "text": "nur normale Karten"})
+            elif res["kind"] == "too_big":
+                lines.append({"icon": "·", "text": "zu viele Karten auf einmal – nicht zerlegbar"})
+            elif res["kind"] == "unclear":
+                lines.append({"icon": "·", "text": "keine passende Kombination"})
+            s["explain"] = lines
+        return shipments
 
     async def _card_list(self, row: Dict, data: Dict) -> Dict:
         """Alle Karten des Banners mit Exemplaren, Anteil im Pool und wie viele davon schon gezogen sind."""

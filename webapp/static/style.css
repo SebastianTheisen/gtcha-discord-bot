@@ -217,6 +217,12 @@ h2 small { font-size: 13px; color: var(--muted); font-weight: 400; }
 .line { display: flex; justify-content: space-between; gap: 10px; padding: 10px 12px; border-top: 1px solid var(--line); font-size: 14px; }
 .line:first-child { border-top: 0; }
 .muted { color: var(--muted); }
+.batch { border-top: 1px solid var(--line); }
+.batch:first-child { border-top: 0; }
+.batch .line { border-top: 0; padding-bottom: 4px; }
+.batch.has-hit { background: #f1fbf4; }
+.explain { padding: 0 12px 10px; font-size: 13px; display: grid; gap: 2px; }
+.explain .ico { display: inline-block; width: 20px; }
 .notice { margin: 10px 10px 0; background: #fff8e6; border-left: 3px solid var(--gold); padding: 10px 12px; border-radius: 8px; font-size: 14px; }
 
 /* Alle Karten: 4er-Raster wie auf der Seite, Wert darunter */

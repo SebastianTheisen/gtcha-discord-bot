@@ -297,10 +297,14 @@ async function showBanner(id) {
       <div class="hits">${hits.map(hitCard).join("")}</div>` : ""}
     <h2>📉 Pack-Verlauf</h2>
     ${chart(b.history)}
-    <h2>📦 Versandschübe <small>Werte ohne 10 % Steuer</small></h2>
+    <h2>📦 Versandschübe <small>Kartenwert = gezählter Wert × 1,1 (Steuer)</small></h2>
     ${b.shipments.length ? `<div class="rows">${b.shipments.map((s) => `
-      <div class="line"><span class="muted">${time(s.t)}</span>
-      <span>+${num(s.cards)} Karten · +${num(s.coins)} Coins${s.players ? ` · +${num(s.players)} Spieler` : ""}</span></div>`).join("")}</div>`
+      <div class="batch ${s.kind === "hits" ? "has-hit" : ""}">
+        <div class="line"><span class="muted">${time(s.t)}</span>
+          <span><b>+${num(s.cards)}</b> ${s.cards === 1 ? "Karte" : "Karten"} · <b>${num(s.value)}</b> Coins${s.players ? ` · +${num(s.players)} Spieler` : ""}</span></div>
+        ${s.explain.length ? `<div class="explain">${s.explain.map((l) =>
+          `<div><span class="ico">${esc(l.icon)}</span>${esc(l.text)}</div>`).join("")}</div>` : ""}
+      </div>`).join("")}</div>`
       : `<div class="rows"><div class="line muted">Noch keine Versandschübe aufgezeichnet</div></div>`}
     <div class="buybar">
       <div class="big">${coins(b.price)}</div>
