@@ -41,13 +41,12 @@ class ThreadsMixin:
                         if not category:
                             continue
 
-                        # Thread-Titel parsen: "ID: 15257 / Kosten: 1111 / Anzahl: 10 / Gesamt: 500"
-                        match = re.match(r'ID:\s*(\d+)', thread_name)
-                        if not match:
+                        title_info = parse_thread_title(thread_name)
+                        if not title_info["pack_id"]:
                             logger.debug(f"Thread-Titel passt nicht: {thread_name}")
                             continue
 
-                        pack_id = int(match.group(1))
+                        pack_id = title_info["pack_id"]
 
                         # Prüfen ob schon in DB
                         existing_thread = await self.db.get_thread_by_banner_id(pack_id)
@@ -90,16 +89,12 @@ class ThreadsMixin:
                         existing_banner = await self.db.get_banner(pack_id)
                         if not existing_banner:
                             # Banner-Daten aus Thread-Titel extrahieren
-                            price_match = re.search(r'Kosten:\s*(\d+)', thread_name)
-                            entries_match = re.search(r'Anzahl:\s*(\d+)', thread_name)
-                            total_match = re.search(r'Gesamt:\s*(\d+)', thread_name)
-
                             banner = RecoveredBanner(
                                 pack_id=pack_id,
                                 category=category,
-                                price_coins=int(price_match.group(1)) if price_match else None,
-                                entries_per_day=int(entries_match.group(1)) if entries_match else None,
-                                total_packs=int(total_match.group(1)) if total_match else None,
+                                price_coins=title_info["price"],
+                                entries_per_day=title_info["entries"],
+                                total_packs=title_info["total"],
                                 current_packs=None,  # Unbekannt bei Wiederherstellung - kein falsches Update
                             )
 
@@ -269,13 +264,8 @@ class ThreadsMixin:
             logger.warning(f"Channel {channel.name} ist kein Forum!")
             return
 
-        # Thread-Titel Format
-        price = banner.price_coins or 0
-        entries = banner.entries_per_day if banner.entries_per_day else "unbegrenzt"
-        total = banner.total_packs or 0
-        title = f"ID: {banner.pack_id} / Kosten: {price} Coins / Anzahl Pulls: {entries} / Pulls Gesamt: {total}"
-        if len(title) > 100:
-            title = title[:97] + "..."
+        title = thread_title(banner.pack_id, banner.price_coins, banner.total_packs, banner.entries_per_day,
+                             "upcoming" if starts_at else "running", starts_at)
 
         # Embed erstellen mit Helper-Funktion
         embed = self._build_banner_embed(banner, starts_at=starts_at)
@@ -319,48 +309,50 @@ class ThreadsMixin:
 
     async def _update_thread_title(self, banner):
         """Aktualisiert den Thread-Titel wenn sich Banner-Daten geändert haben."""
+        await self._sync_thread_title(self._get_banner_value(banner, 'pack_id'))
+
+    async def _thread_status(self, row: dict, thread_data: dict) -> str:
+        """upcoming / hits_out / endspurt / running für den Thread-Titel."""
+        if row.get('starts_at') and not row.get('start_announced'):
+            return "upcoming"
+        stats = await self._pool_stats(row, thread_data)
+        if stats:
+            if stats['tracked_hits'] and stats['hits_total'] and not stats['hits_open']:
+                return "hits_out"
+            if not stats['tracked_hits'] and not stats['open_tiers']:
+                return "hits_out"
+        if thread_data.get('endspurt_sent'):
+            return "endspurt"
+        return "running"
+
+    async def _sync_thread_title(self, pack_id: int):
+        """Benennt den Thread um, wenn Status, Preis, Packs oder Limit nicht mehr zum Titel passen."""
         try:
-            thread_data = await self.db.get_thread_by_banner_id(banner.pack_id)
-            if not thread_data:
-                logger.debug(f"Kein Thread für Titel-Update {banner.pack_id}")
+            row = await self.db.get_banner(pack_id)
+            thread_data = await self.db.get_thread_by_banner_id(pack_id)
+            if not row or not thread_data or thread_data.get('is_expired'):
                 return
-
-            thread_id = thread_data.get('thread_id')
-            if not thread_id:
+            status = await self._thread_status(row, thread_data)
+            title = thread_title(pack_id, row.get('price_coins'), row.get('total_packs'),
+                                 row.get('entries_per_day'), status, row.get('starts_at'))
+            thread_id = int(thread_data['thread_id'])
+            if thread_data.get('title') == title:
                 return
-
-            # Thread holen
-            thread = self.get_channel(int(thread_id))
-            if not thread:
-                try:
-                    thread = await self.fetch_channel(int(thread_id))
-                except discord.NotFound:
-                    logger.debug(f"Thread {thread_id} nicht gefunden")
-                    return
-                except Exception:
-                    return
-
+            thread = self.get_channel(thread_id) or await self.fetch_channel(thread_id)
             if not isinstance(thread, discord.Thread):
                 return
-
-            # Neuen Titel generieren
-            price = banner.price_coins or 0
-            entries = banner.entries_per_day if banner.entries_per_day else "unbegrenzt"
-            total = banner.total_packs or 0
-            new_title = f"ID: {banner.pack_id} / Kosten: {price} Coins / Anzahl Pulls: {entries} / Pulls Gesamt: {total}"
-            if len(new_title) > 100:
-                new_title = new_title[:97] + "..."
-
-            # Nur updaten wenn sich Titel geändert hat
-            if thread.name != new_title:
+            if thread.name != title:
+                if thread.archived:
+                    await discord_rate_limiter.acquire("thread_edit")
+                    await thread.edit(archived=False)
                 await discord_rate_limiter.acquire("thread_edit")
-                await thread.edit(name=new_title)
-                logger.info(f"Thread-Titel aktualisiert: {new_title}")
-
-        except discord.HTTPException as e:
-            logger.debug(f"Discord-Fehler bei Titel-Update: {e}")
+                await thread.edit(name=title)
+                logger.info(f"Thread-Titel: {title}")
+            await self.db.set_thread_title(thread_id, title)
+        except discord.NotFound:
+            pass
         except Exception as e:
-            logger.debug(f"Fehler bei Titel-Update für {banner.pack_id}: {e}")
+            logger.debug(f"Fehler bei Titel-Update für {pack_id}: {e}")
 
     async def _update_thread_embed(self, banner, initial_pool: bool = False):
         """Aktualisiert das Embed im Thread mit aktuellen Daten (z.B. Countdown, Ø Rückgabe)."""

@@ -39,7 +39,7 @@ from utils.cache import banner_cache
 from utils.maintenance import backup_database, new_tor_identity, start_watchdog, touch_heartbeat
 from utils.banner_info import (
     banner_conditions, category_for, chance_at_least_one, format_conditions, format_shipping,
-    is_upcoming, jst_timestamp, shipping_stats, to_int as _int,
+    is_upcoming, jst_timestamp, parse_thread_title, shipping_stats, thread_title, to_int as _int,
 )
 from utils.card_pool import (
     estimate, fmt_coins, fmt_pct, TIERS, MAX_LISTED, EMBEDS_PER_MESSAGE, decided_value, detect_jump_pulls,

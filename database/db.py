@@ -137,6 +137,7 @@ class Database:
                                ('banners', 'conditions TEXT'),
                                ('banners', 'site_stats TEXT'),
                                ('discord_threads', 'hit_list_sig TEXT'),
+                               ('discord_threads', 'title TEXT'),
                                ('banners', 'starts_at INTEGER'),
                                ('banners', 'start_announced INTEGER DEFAULT 0'),
                                ('discord_threads', 'top5_message_id INTEGER'),
@@ -304,6 +305,11 @@ class Database:
             await db.execute("UPDATE banners SET conditions = ? WHERE pack_id = ?", (new, pack_id))
             await db.commit()
         return True
+
+    async def set_thread_title(self, thread_id: int, title: str) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE discord_threads SET title = ? WHERE thread_id = ?", (title, thread_id))
+            await db.commit()
 
     async def set_start(self, pack_id: int, starts_at: Optional[int], announced: bool) -> None:
         async with aiosqlite.connect(self.db_path) as db:
