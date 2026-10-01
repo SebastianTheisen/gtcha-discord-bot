@@ -310,6 +310,8 @@ async function showBanner(id) {
     ${flags(b)}
     <div class="hero">${img(b.image, b.title)}${b.status !== "running" ? `<span class="status ${b.status}">${icon} ${label}</span>` : ""}
       <span class="price-pill">${coins(b.price)}</span></div>
+    <div class="watch-row"><button class="watch-btn" id="watch-btn">🔔 Beobachten</button>
+      <a class="hint" href="#/settings">Pushes einstellen ›</a></div>
     ${hits.length ? `<div class="ribbon">Was du gewinnen kannst</div>${podium(hits.slice(0, 3))}` : ""}
     <h2>📊 Auswertung <small>ID ${b.id}</small></h2>
     <div class="stats">
@@ -354,6 +356,7 @@ async function showBanner(id) {
       ${b.end ? `<div class="until">${esc(untilText(b))}</div>` : ""}
     </div>`;
   renderCards(b);
+  wireWatchButton(String(b.id)).catch(() => {});
 }
 
 // --- Push ---
@@ -372,20 +375,51 @@ function b64ToBytes(b64) {
 }
 
 const EVENT_LABELS = {
-  value: ["💰 Lohnt sich", "Ein Banner steigt neu über 100 % Ø Rückgabe"],
-  hit: ["📦 Hit verschickt", "Ein Hit wurde erkannt"],
+  value: ["💰 Lohnt sich", "Irgendein Banner steigt neu über 100 % Ø Rückgabe"],
+  hit: ["📦 Hit verschickt", "Bei irgendeinem Banner wurde ein Hit-Versand erkannt"],
   new: ["🆕 Neuer Banner", "Ein neuer Banner ist online"],
 };
+const WATCH_LABELS = {
+  hit: "🎯 Hit raus", packs: "📉 Packs weniger", ship: "📦 Versand",
+  ev: "💰 Über 100 %", low: "⚡ Endspurt", end: "🏁 Beendet",
+};
+// Vorauswahl beim Beobachten: alles außer "Packs weniger" (das kann sehr oft kommen)
+const WATCH_DEFAULT = ["hit", "ship", "ev", "low", "end"];
 
-async function showSettings() {
+async function pushState() {
   const supported = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
   const sub = supported ? await currentSubscription() : null;
   const prefs = sub ? (await api("/api/push/prefs", post({ endpoint: sub.endpoint }))).prefs : {};
+  prefs.watch = prefs.watch || {};
+  return { supported, sub, prefs };
+}
+
+async function savePrefs(sub, prefs) {
+  await api("/api/push/subscribe", post({ subscription: sub.toJSON(), prefs }));
+}
+
+function watchCard(id, kinds, banner) {
+  const title = banner ? `${num(banner.price)} Coins · ${esc(banner.category || "")}` : "nicht mehr online";
+  return `<div class="watch" data-watch="${id}">
+    <div class="watch-head"><a href="#/banner/${id}"><b>ID ${id}</b> <span class="muted">${title}</span></a>
+      <button class="icon-btn" data-remove="${id}" aria-label="Nicht mehr beobachten">✕</button></div>
+    <div class="chipset">${Object.entries(WATCH_LABELS).map(([k, label]) =>
+      `<button class="pick ${kinds.includes(k) ? "on" : ""}" data-kind="${k}">${label}</button>`).join("")}</div>
+  </div>`;
+}
+
+async function showSettings() {
+  const { supported, sub, prefs } = await pushState();
+  const { banners } = sub ? await api("/api/banners") : { banners: [] };
+  const byId = Object.fromEntries(banners.map((b) => [b.id, b]));
+  const watched = Object.keys(prefs.watch);
+  const options = banners.filter((b) => !prefs.watch[b.id]).sort((a, b) => b.id - a.id);
   view.innerHTML = `
     <div class="section-title">🔔 Push-Benachrichtigungen</div>
     ${!isStandalone() ? `<div class="notice" style="margin-bottom:12px">Auf dem iPhone gehen Pushes nur, wenn die App installiert ist:
       in Safari auf <b>Teilen</b> → <b>Zum Home-Bildschirm</b>, dann die App vom Home-Bildschirm öffnen.</div>` : ""}
     <div class="panel">
+      <div class="hint"><b>Für alle Banner</b></div>
       ${Object.entries(EVENT_LABELS).map(([k, [label, hint]]) => `
         <label class="toggle"><span>${label}<br><span class="hint">${hint}</span></span>
         <input type="checkbox" data-event="${k}" ${prefs[k] !== false ? "checked" : ""}></label>`).join("")}
@@ -395,18 +429,32 @@ async function showSettings() {
               : `<button class="btn primary" id="on">Pushes einschalten</button>`}
       <div class="hint" id="msg"></div>
     </div>
+    ${sub ? `<h2>👀 Banner beobachten <small>${watched.length} beobachtet</small></h2>
+      <div class="panel">
+        <div class="add-watch">
+          <select id="watch-add" aria-label="Banner wählen">
+            <option value="">Banner wählen …</option>
+            ${options.map((b) => `<option value="${b.id}">${b.id} · ${num(b.price)} Coins · ${esc(b.category || "")}</option>`).join("")}
+          </select>
+          <button class="btn primary" id="watch-add-btn">Hinzufügen</button>
+        </div>
+        <div class="hint">Pro Banner beliebig viele Ereignisse antippen. Gleiche Meldungen kommen nur einmal.</div>
+        ${watched.length ? watched.sort((a, b) => b - a).map((id) => watchCard(id, prefs.watch[id], byId[id])).join("")
+          : `<div class="hint">Noch kein Banner beobachtet. Auch auf jeder Banner-Seite über „🔔 Beobachten“.</div>`}
+      </div>` : ""}
     <h2>ℹ️ Über diese App</h2>
     <div class="panel"><div class="hint">Private, inoffizielle App mit den Daten deines GTCHA-Discord-Bots.
       Kein Angebot von GTCHA. Gezogen wird immer auf der offiziellen Seite.</div></div>`;
   const msg = view.querySelector("#msg");
-  const prefsNow = () => Object.fromEntries([...view.querySelectorAll("[data-event]")].map((i) => [i.dataset.event, i.checked]));
+  const readToggles = () => view.querySelectorAll("[data-event]").forEach((i) => { prefs[i.dataset.event] = i.checked; });
   view.querySelector("#on")?.addEventListener("click", async () => {
     try {
       if ((await Notification.requestPermission()) !== "granted") { msg.textContent = "Benachrichtigungen wurden nicht erlaubt."; return; }
       const { key } = await api("/api/push/key");
       const reg = await navigator.serviceWorker.ready;
       const s = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(key) });
-      await api("/api/push/subscribe", post({ subscription: s.toJSON(), prefs: prefsNow() }));
+      readToggles();
+      await savePrefs(s, prefs);
       showSettings();
     } catch (e) { msg.textContent = "Einschalten fehlgeschlagen: " + e.message; }
   });
@@ -420,8 +468,48 @@ async function showSettings() {
     msg.textContent = "Test-Push gesendet.";
   });
   view.querySelectorAll("[data-event]").forEach((el) => el.addEventListener("change", async () => {
-    if (sub) await api("/api/push/subscribe", post({ subscription: sub.toJSON(), prefs: prefsNow() }));
+    readToggles();
+    if (sub) await savePrefs(sub, prefs);
   }));
+  view.querySelector("#watch-add-btn")?.addEventListener("click", async () => {
+    const id = view.querySelector("#watch-add").value;
+    if (!id) return;
+    prefs.watch[id] = [...WATCH_DEFAULT];
+    await savePrefs(sub, prefs);
+    showSettings();
+  });
+  view.querySelectorAll("[data-remove]").forEach((el) => el.addEventListener("click", async () => {
+    delete prefs.watch[el.dataset.remove];
+    await savePrefs(sub, prefs);
+    showSettings();
+  }));
+  view.querySelectorAll(".watch .pick").forEach((el) => el.addEventListener("click", async () => {
+    const id = el.closest("[data-watch]").dataset.watch;
+    const kinds = new Set(prefs.watch[id]);
+    kinds.has(el.dataset.kind) ? kinds.delete(el.dataset.kind) : kinds.add(el.dataset.kind);
+    prefs.watch[id] = Object.keys(WATCH_LABELS).filter((k) => kinds.has(k));
+    el.classList.toggle("on");
+    await savePrefs(sub, prefs);
+  }));
+}
+
+// Knopf auf der Banner-Seite: beobachten an/aus (Ereignisse im Push-Tab anpassbar)
+async function wireWatchButton(id) {
+  const btn = view.querySelector("#watch-btn");
+  if (!btn) return;
+  const { sub, prefs } = await pushState();
+  const paint = () => {
+    const on = !!prefs.watch[id];
+    btn.textContent = on ? "🔔 Beobachtet ✓" : "🔔 Beobachten";
+    btn.classList.toggle("on", on);
+  };
+  paint();
+  btn.addEventListener("click", async () => {
+    if (!sub) { location.hash = "#/settings"; return; }
+    if (prefs.watch[id]) delete prefs.watch[id]; else prefs.watch[id] = [...WATCH_DEFAULT];
+    await savePrefs(sub, prefs);
+    paint();
+  });
 }
 
 function post(body) {
