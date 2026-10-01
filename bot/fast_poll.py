@@ -20,7 +20,8 @@ class FastPollMixin:
         task = getattr(self, '_fast_poll_task', None)
         if task and not task.done():
             return  # on_ready kommt bei jedem Reconnect erneut
-        self._pack_list_client = PackListClient(BASE_URL, SCRAPER_PROXY)
+        self._pack_list_client = PackListClient(
+            BASE_URL, SCRAPER_PROXY, fresh_browser=os.getenv("FAST_POLL_FRESH_BROWSER", "true").lower() == "true")
         self._fast_poll_task = asyncio.create_task(self._fast_poll_loop())
         logger.info(f"Schneller Abfrager: pack/list alle {FAST_POLL_SECONDS} Sekunden")
 

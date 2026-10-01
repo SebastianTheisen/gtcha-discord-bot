@@ -1,7 +1,7 @@
-"""Beobachtet die Zähler eines Banners und protokolliert jede Änderung mit Uhrzeit.
+"""Beobachtet die Zähler eines Banners und protokolliert jede Abfrage mit Uhrzeit.
 
-Jede Abfrage: neue Tor-Route, frischer Browser-Kontext ohne Cookies (neue Sitzung), dann
-pack/list und pack/detail. Läuft unabhängig vom Bot, auch wenn dessen Thread gelöscht ist.
+Jede Abfrage: neue Tor-Route, komplett neuer Browser ohne Cookies (neue Sitzung), dann pack/list.
+Daneben steht der Stand in der Bot-Datenbank. Läuft unabhängig vom Bot.
 
 Start im Hintergrund (läuft bis zum Container-Neustart oder bis Ctrl+C beim Vordergrund-Start):
     docker exec -d gtcha-discord-bot python /app/tools/watch_banner.py 24147
@@ -12,8 +12,8 @@ Beenden:
 """
 
 import asyncio
-import json
 import os
+import sqlite3
 import sys
 from datetime import datetime
 
@@ -36,7 +36,8 @@ def log(path: str, text: str):
 async def main():
     pid = int(sys.argv[1])
     path = f"/app/data/watch_{pid}.log"
-    client = PackListClient("https://gtchaxonline.com", os.getenv("SCRAPER_PROXY"))
+    client = PackListClient("https://gtchaxonline.com", os.getenv("SCRAPER_PROXY"), fresh_browser=True)
+    db = sqlite3.connect("/app/data/gtcha_bot.db")
     last = None
     log(path, f"Beobachte Banner {pid} alle {INTERVAL} s")
     try:
@@ -44,15 +45,19 @@ async def main():
             try:
                 await new_tor_identity()
                 item = (await client.fetch()).get(pid)
+                row = db.execute("SELECT current_packs FROM banners WHERE pack_id = ?", (pid,)).fetchone()
+                bot = f"Bot-DB: {row[0]}" if row else "Bot-DB: -"
                 if item is None:
-                    log(path, "Banner nicht mehr in pack/list")
+                    log(path, f"Banner nicht in pack/list | {bot}")
                 else:
                     now = {k: item.get(k) for k in FIELDS}
-                    if now != last:
-                        changes = ", ".join(f"{k}: {last.get(k) if last else '-'} -> {v}"
-                                            for k, v in now.items() if not last or last.get(k) != v)
+                    short = (f"Packs {now['pack_count']} · versandt {now['total_sendcount']} Karten / "
+                             f"{now['total_sendprice']} Coins · umgewandelt {now['total_kangen']} | {bot}")
+                    if last is not None and now != last:
+                        changes = ", ".join(f"{k}: {last.get(k)} -> {v}" for k, v in now.items() if last.get(k) != v)
                         log(path, f"ÄNDERUNG {changes}")
-                        last = now
+                    log(path, short)
+                    last = now
             except Exception as e:
                 log(path, f"Fehler: {type(e).__name__}: {e}")
             await asyncio.sleep(INTERVAL)
