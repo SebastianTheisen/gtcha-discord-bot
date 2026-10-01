@@ -81,6 +81,7 @@ function row(b, rank) {
           <span class="price-pill">${coins(b.price)}</span>
         </div>
         <div class="panel-side">
+          <div class="pid">ID ${b.id}</div>
           <div class="ranks">${(b.ranks || []).map((r) => `<span class="rank ${esc(r)}"></span>`).join("")}</div>
           ${openLink(b)}
           <div class="remaining">Verbleibend: <b>${num(b.remaining)} / ${num(b.total)}</b></div>
@@ -101,26 +102,65 @@ function wireRows() {
 }
 
 // --- Seiten ---
+// Suche: Banner-ID (Teil reicht) oder Titel; sucht über alle Kategorien
+function matches(b, q) {
+  const digits = q.replace(/\D/g, "");
+  return (digits && String(b.id).includes(digits)) || (b.title || "").toLowerCase().includes(q.toLowerCase());
+}
+
 async function showList() {
   const { banners, updated } = await api("/api/banners");
+  state.listData = { banners, updated };
+  // Grundgerüst nur einmal bauen, damit das Suchfeld beim Aktualisieren den Fokus behält
+  if (!view.querySelector("#search")) {
+    view.innerHTML = `
+      <div class="tabs">${CATEGORIES.map(([key, label]) =>
+        `<button class="tab ${key === "Bonus" ? "bonus" : ""}" data-cat="${esc(key)}">${esc(label)}</button>`).join("")}</div>
+      <form class="search" id="search-form" role="search">
+        <input id="search" type="search" inputmode="numeric" autocomplete="off" placeholder="🔍 Banner-ID suchen, z. B. 24149">
+      </form>
+      <div class="toolbar">
+        <span class="count" id="count"></span>
+        <select id="sort" aria-label="Sortierung">${Object.entries(SORTS).map(([k, [label]]) =>
+          `<option value="${k}">${label}</option>`).join("")}</select>
+      </div>
+      <div id="results"></div>`;
+    view.querySelectorAll(".tab").forEach((el) => el.addEventListener("click", () => {
+      state.category = el.dataset.cat; save("category", state.category); drawList();
+    }));
+    view.querySelector("#sort").addEventListener("change", (e) => {
+      state.sort = e.target.value; save("sort", state.sort); drawList();
+    });
+    const input = view.querySelector("#search");
+    input.value = state.query || "";
+    input.addEventListener("input", () => { state.query = input.value.trim(); drawList(); });
+    // Enter: genau ein Treffer -> öffnen; volle ID, die nicht (mehr) aktiv ist -> trotzdem versuchen
+    view.querySelector("#search-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      input.blur();
+      const hits = state.listData.banners.filter((b) => matches(b, state.query || ""));
+      const digits = (state.query || "").replace(/\D/g, "");
+      if (hits.length === 1) location.hash = `#/banner/${hits[0].id}`;
+      else if (digits.length >= 4) location.hash = `#/banner/${digits}`;
+    });
+  }
+  view.querySelector("#sort").value = state.sort;
+  drawList();
+}
+
+function drawList() {
+  const { banners, updated } = state.listData;
+  const q = state.query || "";
   const sort = SORTS[state.sort] || SORTS.ev;
-  const shown = banners.filter((b) => state.category === "Alle" || b.category === state.category).sort(sort[1]);
-  view.innerHTML = `
-    <div class="tabs">${CATEGORIES.map(([key, label]) =>
-      `<button class="tab ${key === "Bonus" ? "bonus" : ""} ${key === state.category ? "active" : ""}" data-cat="${esc(key)}">${esc(label)}</button>`).join("")}</div>
-    <div class="toolbar">
-      <span class="count">${shown.length} Banner</span>
-      <select id="sort" aria-label="Sortierung">${Object.entries(SORTS).map(([k, [label]]) =>
-        `<option value="${k}" ${k === state.sort ? "selected" : ""}>${label}</option>`).join("")}</select>
-    </div>
-    ${shown.length ? `<div class="list">${shown.map((b) => row(b)).join("")}</div>` : `<div class="empty">Keine Banner</div>`}
+  const shown = banners
+    .filter((b) => (q ? matches(b, q) : state.category === "Alle" || b.category === state.category))
+    .sort(sort[1]);
+  view.querySelectorAll(".tab").forEach((el) => el.classList.toggle("active", !q && el.dataset.cat === state.category));
+  view.querySelector("#count").textContent = q ? `${shown.length} Treffer für „${q}“` : `${shown.length} Banner`;
+  view.querySelector("#results").innerHTML = `
+    ${shown.length ? `<div class="list">${shown.map((b) => row(b)).join("")}</div>`
+      : `<div class="empty">${q ? "Kein aktiver Banner gefunden – mit Enter die ID direkt öffnen" : "Keine Banner"}</div>`}
     <div class="updated">Stand ${time(updated)}</div>`;
-  view.querySelectorAll(".tab").forEach((el) => el.addEventListener("click", () => {
-    state.category = el.dataset.cat; save("category", state.category); showList();
-  }));
-  view.querySelector("#sort").addEventListener("change", (e) => {
-    state.sort = e.target.value; save("sort", state.sort); showList();
-  });
   wireRows();
 }
 
@@ -349,7 +389,9 @@ async function route() {
     await render();
     window.scrollTo({ top: 0 });
   } catch (e) {
-    view.innerHTML = `<div class="empty">Daten nicht erreichbar (${esc(e.message)})</div>`;
+    view.innerHTML = e.message === "404"
+      ? `<div class="empty">Banner nicht gefunden.<br><a class="back" href="#/">‹ Zur Übersicht</a></div>`
+      : `<div class="empty">Daten nicht erreichbar (${esc(e.message)})</div>`;
   }
   if (tab !== "settings") state.timer = setInterval(() => render().catch(() => {}), REFRESH_MS);
 }
