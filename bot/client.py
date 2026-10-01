@@ -36,7 +36,7 @@ from utils.notifications import (
 from utils.rate_limiter import discord_rate_limiter
 from utils.memory_monitor import memory_monitor
 from utils.cache import banner_cache
-from utils.card_pool import estimate, fmt_coins, fmt_pct, TIERS
+from utils.card_pool import estimate, fmt_coins, fmt_pct, TIERS, decided_value, detect_tier_pulls
 
 
 # Fehlende Kartenpools, die pro Scrape geladen werden (Nachrüsten bestehender Threads)
@@ -658,6 +658,9 @@ class GTCHABot(commands.Bot):
                         await self.db.save_card_pool(pid, pool)
                         await self._refresh_pool_views(pid, initial_pool=True)
 
+                # === HIT-ERKENNUNG über die Rückgabe-Zähler aus pack/list ===
+                await self._detect_pulled_hits(getattr(scraper, '_api_pack_data', {}) or {})
+
                 # Hole alle bekannten Banner aus der DB
                 db_banner_ids = set(await self.db.get_all_active_banner_ids())
 
@@ -1195,8 +1198,14 @@ class GTCHABot(commands.Bot):
         pool = await self.db.get_card_pool(get('pack_id'))
         if not pool:
             return None
-        claimed = await self.db.get_medal_status(int(thread_data['thread_id']))
+        claimed, _ = await self._claimed_tiers(int(thread_data['thread_id']), get('pack_id'))
         return estimate(pool, get('current_packs'), get('total_packs'), claimed, get('price_coins'))
+
+    async def _claimed_tiers(self, thread_id: int, pack_id: int) -> tuple:
+        """T1-T3 als gezogen: per Medaille oder automatisch über die Rückgabe-Zähler erkannt."""
+        medals = await self.db.get_medal_status(int(thread_id))
+        _, detected = await self.db.get_pull_tracking(pack_id)
+        return {t: bool(medals.get(t)) or t in detected for t in TIERS}, detected
 
     async def _check_value_alert(self, thread: discord.Thread, thread_data: dict, stats: dict, banner,
                                  silent: bool = False):
@@ -1221,7 +1230,64 @@ class GTCHABot(commands.Bot):
             # Hysterese: erst deutlich unter 100 % zurücksetzen, damit es nicht hin und her springt
             await self.db.set_value_alert_sent(thread.id, False)
 
-    def _build_top5_embeds(self, pool: dict, claimed: dict) -> list:
+    async def _detect_pulled_hits(self, api_items: dict):
+        """Erkennt umgewandelte/verschickte T1-T3 am Anstieg von total_kangen + total_sendprice."""
+        for pid, item in api_items.items():
+            try:
+                value = decided_value(item)
+                if value is None:
+                    continue
+                pool = await self.db.get_card_pool(pid)
+                if not pool or not pool.get('top'):
+                    continue
+                thread_data = await self.db.get_thread_by_banner_id(pid)
+                if not thread_data or thread_data.get('is_expired'):
+                    continue
+
+                previous, detected = await self.db.get_pull_tracking(pid)
+                # Erste Messung: nur Ausgangswert merken. Frühere Umwandlungen lassen sich aus dem
+                # Gesamtstand nicht zuverlässig zuordnen (Simulation: Mehrheit übersehen, Fehlalarme).
+                if previous is None or value <= previous:
+                    await self.db.set_pull_tracking(pid, value, detected)
+                    continue
+
+                found = detect_tier_pulls(pool, value - previous, detected)
+                await self.db.set_pull_tracking(pid, value, detected + found)
+                if not found:
+                    continue
+
+                logger.info(f"[HIT] {pid}: Anstieg {value - previous:,} Coins -> erkannt {found}")
+                medals = await self.db.get_medal_status(int(thread_data['thread_id']))
+                announce = [t for t in found if not medals.get(t)]
+                if announce:
+                    await self._announce_detected_hits(int(thread_data['thread_id']), pool, announce)
+                await self._refresh_pool_views(pid)
+                await self._update_probability_message(int(thread_data['thread_id']), pid)
+            except Exception as e:
+                logger.warning(f"[HIT] Fehler bei Banner {pid}: {e}")
+
+    async def _announce_detected_hits(self, thread_id: int, pool: dict, tiers: list):
+        thread = self.get_channel(thread_id) or await self.fetch_channel(thread_id)
+        if not isinstance(thread, discord.Thread):
+            return
+        if thread.archived:
+            await discord_rate_limiter.acquire("thread_edit")
+            await thread.edit(archived=False)
+        icons = {"T1": "🥇", "T2": "🥈", "T3": "🥉"}
+        lines = []
+        for tier in tiers:
+            card = pool['top'][TIERS.index(tier)]
+            card_text = f"{icons[tier]} {card['name']} ({fmt_coins(card['value'])} Coins)"
+            if tier == "T1":
+                lines.append(f"🔥 **{tier} gezogen:** {card_text}")
+            else:
+                lines.append(f"🔥 **Großer Hit gezogen**, vermutlich {tier}: {card_text}")
+        lines.append("*Automatisch erkannt: die Karte wurde gerade in Coins umgewandelt oder verschickt.*")
+        mention = "@everyone " if MENTION_ON_PACK_UPDATE else ""
+        await discord_rate_limiter.acquire("message_send")
+        await thread.send(mention + "\n".join(lines))
+
+    def _build_top5_embeds(self, pool: dict, claimed: dict, detected: list = ()) -> list:
         embeds = []
         rank_icons = {0: "🥇", 1: "🥈", 2: "🥉"}
         for i, card in enumerate(pool.get('top', [])):
@@ -1229,7 +1295,7 @@ class GTCHABot(commands.Bot):
             pulled = bool(tier and claimed.get(tier))
             description = f"**{fmt_coins(card['value'])} Coins**"
             if pulled:
-                description += " · ✅ gezogen"
+                description += " · ✅ gezogen" + (" (erkannt)" if tier in detected else "")
             embed = discord.Embed(
                 title=f"{rank_icons.get(i, f'{i + 1}.')} {card['name']}"[:256],
                 description=description,
@@ -1258,8 +1324,8 @@ class GTCHABot(commands.Bot):
             if not isinstance(thread, discord.Thread):
                 return
 
-            claimed = await self.db.get_medal_status(thread_id)
-            embeds = self._build_top5_embeds(pool, claimed)
+            claimed, detected = await self._claimed_tiers(thread_id, pack_id)
+            embeds = self._build_top5_embeds(pool, claimed, detected)
             if not embeds:
                 return
             content = "🏆 **Top 5 Karten** (Coin-Wert)"
@@ -1365,6 +1431,10 @@ class GTCHABot(commands.Bot):
                                 logger.debug(f"Medaille {tier} für Thread {thread_id_int} in DB nachgetragen")
                         # Status neu laden
                         medal_status = await self.db.get_medal_status(thread_id_int)
+
+            # Automatisch erkannte Hits (Rückgabe-Zähler) zählen wie vergebene Medaillen
+            _, detected = await self.db.get_pull_tracking(banner_id)
+            medal_status = {t: bool(medal_status.get(t)) or t in detected for t in TIERS}
 
             # Anzahl vergebener Medaillen zählen
             claimed_count = sum(1 for claimed in medal_status.values() if claimed)

@@ -122,6 +122,8 @@ class Database:
 
             # Migration: Kartenpool (JSON) pro Banner, Top-5-Nachricht und Lohnt-sich-Hinweis pro Thread
             for table, col in [('banners', 'card_pool TEXT'),
+                               ('banners', 'decided_value INTEGER'),
+                               ('banners', 'detected_tiers TEXT'),
                                ('discord_threads', 'top5_message_id INTEGER'),
                                ('discord_threads', 'value_alert_sent INTEGER DEFAULT 0')]:
                 try:
@@ -215,6 +217,22 @@ class Database:
             cursor = await db.execute("SELECT card_pool FROM banners WHERE pack_id = ?", (pack_id,))
             row = await cursor.fetchone()
         return json.loads(row[0]) if row and row[0] else None
+
+    async def get_pull_tracking(self, pack_id: int) -> tuple:
+        """(zuletzt gesehener entschiedener Wert oder None, Liste erkannter Tiers)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT decided_value, detected_tiers FROM banners WHERE pack_id = ?", (pack_id,))
+            row = await cursor.fetchone()
+        if not row:
+            return None, []
+        return row[0], [t for t in (row[1] or "").split(",") if t]
+
+    async def set_pull_tracking(self, pack_id: int, decided_value: int, detected: List[str]) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE banners SET decided_value = ?, detected_tiers = ? WHERE pack_id = ?",
+                             (decided_value, ",".join(detected), pack_id))
+            await db.commit()
 
     async def set_top5_message_id(self, thread_id: int, message_id: int) -> None:
         async with aiosqlite.connect(self.db_path) as db:

@@ -80,6 +80,35 @@ def estimate(pool: Dict, remaining: Optional[int], total_packs: Optional[int],
     }
 
 
+def decided_value(item: Dict) -> Optional[int]:
+    """Coin-Wert aller gezogenen Karten, die umgewandelt oder verschickt wurden (aus pack/list)."""
+    try:
+        return int(float(item.get("total_kangen") or 0)) + int(float(item.get("total_sendprice") or 0))
+    except (TypeError, ValueError):
+        return None
+
+
+def detect_tier_pulls(pool: Dict, jump: int, detected: List[str]) -> List[str]:
+    """Erkennt T1-T3 an einem Anstieg des entschiedenen Werts zwischen zwei Scrapes.
+
+    Die Seite zählt den Coin-Wert einer Karte erst, wenn der Gewinner sie umwandelt oder
+    verschicken lässt. Ein Anstieg um mindestens den Wert einer offenen T1-T3 enthält mit hoher
+    Wahrscheinlichkeit diese Karte; es wird jeweils die größte passende Karte genommen.
+    Simuliert mit der Kartenliste von 24114: T1 praktisch immer richtig, T2/T3 können bei großen
+    Sammel-Umwandlungen verwechselt werden.
+    """
+    tiers = list(zip(TIERS, (c["value"] for c in pool.get("top", [])[:len(TIERS)])))
+    found: List[str] = []
+    remaining = jump
+    while True:
+        fitting = [(t, v) for t, v in tiers if t not in detected and t not in found and 0 < v <= remaining]
+        if not fitting:
+            return found
+        tier, value = max(fitting, key=lambda x: x[1])
+        found.append(tier)
+        remaining -= value
+
+
 def fmt_coins(value: float) -> str:
     return f"{round(value):,}".replace(",", ".")
 
