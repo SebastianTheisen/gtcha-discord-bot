@@ -38,3 +38,28 @@ def test_out_of_banner_uses_site_values():
     old = {"decided_value": 1_800_000, "current_packs": 315, "total_packs": 1200, "site_stats": site}
     assert BannerView._out_of_banner(old, pool)["converted"] == 1_800_000 - 633_293
     assert BannerView._out_of_banner({"site_stats": site}, pool)["out_total"] is None
+
+
+def test_my_medals_lists_claimed_cards(tmp_path, monkeypatch):
+    import asyncio
+    import aiosqlite
+    monkeypatch.setenv("DISCORD_TOKEN", "x")
+    from database.db import Database
+    from utils.card_pool import summarize_cards
+
+    async def run():
+        db = Database(str(tmp_path / "b.db"))
+        await db.init()
+        pool = summarize_cards([{"id": 1, "name": "Glurak", "buy_point": 36740, "duplication": 1, "action_type": 2},
+                                {"id": 2, "name": "Normal", "buy_point": 300, "duplication": 99, "action_type": 0}])
+        async with aiosqlite.connect(db.db_path) as conn:
+            await conn.execute("INSERT INTO banners (pack_id, is_active, price_coins, card_pool) VALUES (8, 1, 1000, ?)",
+                               (json.dumps(pool),))
+            await conn.execute("INSERT INTO discord_threads (banner_id, thread_id) VALUES (8, 800)")
+            await conn.commit()
+        await db.save_medal(800, "T1", 42)
+        await db.save_medal(800, "T2", 99)
+        medals = await BannerView(db).my_medals("42")
+        assert [(m["banner_id"], m["tier"], m["name"], m["value"]) for m in medals] == [(8, "T1", "Glurak", 36740)]
+
+    asyncio.run(run())
