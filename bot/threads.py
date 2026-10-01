@@ -210,7 +210,10 @@ class ThreadsMixin:
             embed.add_field(name="Best Hit", value=get('best_hit'), inline=False)
 
         if get('sale_end_date'):
-            countdown = format_end_date_countdown(get('sale_end_date'))
+            # Discord-Zeitstempel: Datum in der Zeitzone des Lesers plus Countdown; sonst Text der Seite
+            end_ts = sale_end_timestamp(get('sale_end_date'))
+            countdown = (f"<t:{end_ts}:f> (<t:{end_ts}:R>)" if end_ts
+                         else format_end_date_countdown(get('sale_end_date')))
             embed.add_field(name="Ende", value=countdown, inline=True)
 
         if stats:

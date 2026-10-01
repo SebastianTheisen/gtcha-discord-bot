@@ -39,6 +39,7 @@ from utils.cache import banner_cache
 from utils.maintenance import backup_database, new_tor_identity, start_watchdog, touch_heartbeat
 from utils.banner_info import (
     banner_conditions, category_for, chance_at_least_one, format_conditions, format_shipping,
+    sale_end_timestamp,
     is_upcoming, jst_timestamp, parse_thread_title, shipping_stats, thread_title, to_int as _int,
 )
 from utils.card_pool import (
@@ -49,7 +50,7 @@ from utils.card_pool import (
 
 
 # Erhöhen, wenn der Startbeitrag neue Felder bekommt: alle Threads werden dann einmal aktualisiert
-EMBED_VERSION = 7
+EMBED_VERSION = 8
 # Endspurt-Alarm, sobald höchstens so viel Prozent der Packs übrig sind und noch Hits drin sind
 ENDSPURT_PERCENT = float(os.getenv("ENDSPURT_PERCENT") or "10")
 # Zeitraum für das Abverkaufs-Tempo
