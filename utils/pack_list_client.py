@@ -1,9 +1,9 @@
 """Schneller Abruf von pack/list über einen dauerhaft offenen Browser (über Tor).
 
 Eine einfache HTTP-Anfrage (curl) bekam von der Seite veraltete Pack-Zahlen, auch mit frischer
-Sitzung; der Browser bekommt nachweislich aktuelle. Deshalb macht dieser Abruf dasselbe wie der
-normale Scrape (scraper.fetch_pack_list): neuer Browser-Kontext = neue Sitzung, dann pack/list.
-Nur der Browser selbst bleibt offen, damit eine Abfrage wenige Sekunden statt ~10 dauert.
+Sitzung; der Browser beim normalen Scrape bekommt nachweislich aktuelle. Deshalb macht dieser Abruf
+dasselbe: neuer Browser-Kontext (neue Sitzung) über Tor, dann pack/list. Mit fresh_browser=True
+(Standard) wird dafür jedes Mal auch ein komplett neuer Browser gestartet, wie beim Scrape.
 """
 
 import random
@@ -27,9 +27,10 @@ GEO_HEADERS = {  # wie beim normalen Scrape
 
 
 class PackListClient:
-    def __init__(self, base_url: str, proxy: Optional[str]):
+    def __init__(self, base_url: str, proxy: Optional[str], fresh_browser: bool = True):
         self.base_url = base_url.rstrip("/")
         self.proxy = proxy
+        self.fresh_browser = fresh_browser
         self._playwright = None
         self._browser = None
         self._started = 0.0
@@ -80,3 +81,5 @@ class PackListClient:
                 await context.close()
             except Exception:
                 pass
+            if self.fresh_browser:
+                await self.close()
