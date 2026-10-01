@@ -44,7 +44,7 @@ class HitsMixin:
         shipped_keys = set((await self.db.get_pull_tracking(pid))["pulled"])
         site = json.loads(row['site_stats']) if row.get('site_stats') else {}
         out_value = out_of_banner_value(pool, row.get('converted'), _int(site.get('coins')),
-                                        set(winners) - shipped_keys)
+                                        set(winners) - shipped_keys, shipped_keys)
         return estimate(pool, get('current_packs'), get('total_packs'), pulled, get('price_coins'), out_value)
 
     async def _pulled_cards(self, thread_id: int, pack_id: int, pool: dict) -> tuple:

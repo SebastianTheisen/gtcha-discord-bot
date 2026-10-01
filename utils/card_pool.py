@@ -177,17 +177,28 @@ def prefer_claimed(match: Dict, expected: Set[str]) -> Dict:
 
 
 def out_of_banner_value(pool: Dict, converted: Optional[int], shipped_counted: Optional[int],
-                        held_keys: Set[str] = frozenset()) -> Optional[int]:
+                        held_keys: Set[str] = frozenset(), shipped_keys: Set[str] = frozenset()) -> Optional[int]:
     """Kartenwert, der schon aus dem Banner raus ist (None = keine Zahlen der Seite).
 
     umgewandelt (total_kangen) zählt die Seite mit vollem Kartenwert (bestätigt an 24060: 55.575 Züge,
-    Verhältnis 1,001), verschickt (total_sendprice) ohne 10 % Steuer -> ×1,1. Dazu gezogene Hits, die
-    per Medaille gemeldet, aber noch nicht verschickt sind (held_keys).
+    Verhältnis 1,001), verschickt (total_sendprice) ohne 10 % Steuer -> ×1,1.
+    Per Medaille gemeldete Hits (held_keys) zählen nur zusätzlich, wenn sie nicht schon im
+    verschickten Wert stecken können: Hit für Hit (teuerster zuerst) wird geprüft, ob er in den
+    Versandwert passt, der noch keinem Hit sicher zugeordnet ist (24149: alle 3 Medaillen-Hits waren
+    verschickt und wurden sonst doppelt gezählt). Passt er nicht hinein, liegt er noch beim Spieler.
     """
     if converted is None:
         return None
     units = {u["key"]: u["value"] for u in tracked_units(pool)}
-    return converted + card_value(shipped_counted) + sum(units.get(k, 0) for k in held_keys)
+    shipped = card_value(shipped_counted)
+    room = max(0, shipped - sum(units.get(k, 0) for k in shipped_keys))
+    extra = 0
+    for value in sorted((units.get(k, 0) for k in set(held_keys) - set(shipped_keys)), reverse=True):
+        if value <= room:
+            room -= value          # kann im Versand stecken
+        else:
+            extra += value         # noch nicht verschickt
+    return converted + shipped + extra
 
 
 def estimate(pool: Dict, remaining: Optional[int], total_packs: Optional[int],
