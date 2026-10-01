@@ -154,7 +154,7 @@ class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, Hits
         self._start_fast_poll()
 
         self._startup_tasks = asyncio.gather(
-            self._sync_medals_from_discord(),
+            self._migrate_then_sync_medals(),
             self._cleanup_duplicate_probability_messages(),
             self._refresh_all_embeds_once(),
             return_exceptions=True,
