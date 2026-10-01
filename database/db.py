@@ -418,6 +418,19 @@ class Database:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 
+    async def get_banner_states(self) -> Dict[int, bool]:
+        """pack_id -> aktiv? für alle Banner, die der Bot kennt."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("SELECT pack_id, is_active FROM banners")
+            return {row[0]: bool(row[1]) for row in await cursor.fetchall()}
+
+    async def get_active_banners(self) -> Dict[int, Dict]:
+        """Alle aktiven Banner als pack_id -> Zeile."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM banners WHERE is_active = 1")
+            return {row["pack_id"]: dict(row) for row in await cursor.fetchall()}
+
     async def get_all_active_banner_ids(self) -> List[int]:
         """Gibt alle aktiven Banner-IDs zurück."""
         async with aiosqlite.connect(self.db_path) as db:
@@ -463,8 +476,8 @@ class Database:
             )
             await db.commit()
 
-    async def batch_increment_not_found_count(self, pack_ids: List[int]) -> List[int]:
-        """Erhöht not_found_count für alle Banner um 1 und gibt IDs mit count >= 20 zurück."""
+    async def batch_increment_not_found_count(self, pack_ids: List[int], threshold: int = 20) -> List[int]:
+        """Erhöht not_found_count für alle Banner um 1 und gibt IDs mit count >= threshold zurück."""
         if not pack_ids:
             return []
         async with aiosqlite.connect(self.db_path) as db:
@@ -474,10 +487,9 @@ class Database:
                 pack_ids
             )
             await db.commit()
-            # Finde Banner die jetzt >= 20 haben
             cursor = await db.execute(
-                f"SELECT pack_id FROM banners WHERE pack_id IN ({placeholders}) AND not_found_count >= 20",
-                pack_ids
+                f"SELECT pack_id FROM banners WHERE pack_id IN ({placeholders}) AND not_found_count >= ?",
+                [*pack_ids, threshold]
             )
             rows = await cursor.fetchall()
             return [row[0] for row in rows]

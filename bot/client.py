@@ -28,11 +28,12 @@ from config import (
     DAILY_RESTART_TIME
 )
 from scraper.gtcha_scraper import GTCHAScraper
+from scraper.models import ScrapedBanner
 from database.db import Database
 from utils.notifications import (
-    set_bot_client, notify_scrape_error, notify_low_banner_count,
+    set_bot_client, notify_scrape_error,
     notify_all_retries_failed, notify_critical_error,
-    notify_scrape_success, notify_bot_started
+    notify_scrape_success, notify_bot_started, send_notification
 )
 from utils.rate_limiter import discord_rate_limiter
 from utils.memory_monitor import memory_monitor
@@ -45,6 +46,19 @@ from utils.card_pool import (
 
 # Fehlende Kartenpools, die pro Scrape geladen werden (Nachrüsten bestehender Threads)
 POOL_FETCH_PER_SCRAPE = 8
+# Normale Scrapes laufen nur über pack/list; Tabs werden höchstens so oft komplett durchgeklickt
+FULL_SCRAPE_EVERY_MINUTES = 15
+# Thread löschen, wenn ein Banner so oft hintereinander fehlt oder ausverkauft ist
+NOT_FOUND_DELETE_AFTER = 2
+# Meldung im Admin-Kanal nach so vielen fehlerhaften Scrapes in Folge
+SCRAPE_PROBLEM_ALERT_AFTER = 3
+
+
+def _int(value) -> int:
+    try:
+        return int(float(value or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def format_end_date_countdown(sale_end_date: str) -> str:
@@ -113,6 +127,10 @@ class GTCHABot(commands.Bot):
         self.scheduler = AsyncIOScheduler()
         self._scraper: Optional[GTCHAScraper] = None
         self._scrape_lock = asyncio.Lock()  # Verhindert parallele Scrape-Läufe
+        self._last_full_scrape: Optional[datetime] = None
+        self._not_in_tabs: set = set()  # Banner aus pack/list, die beim Tab-Scrape nicht auftauchten
+        self._scrape_problems = 0
+        self._problem_alerted = False
 
     async def setup_hook(self):
         """Setup beim Start."""
@@ -531,11 +549,40 @@ class GTCHABot(commands.Bot):
         try:
             async with GTCHAScraper(BASE_URL) as scraper:
                 self._scraper = scraper
-                banners = await scraper.scrape_all_banners()
+                try:
+                    api_items = await scraper.fetch_pack_list()
+                except Exception as e:
+                    logger.warning(f"[API] pack/list fehlgeschlagen: {e}")
+                    api_items = {}
+
+                full_reason = await self._full_scrape_reason(api_items)
+                if full_reason:
+                    logger.info(f"Voller Scrape mit Tabs: {full_reason}")
+                    banners = await scraper.scrape_all_banners()
+                    if not scraper._api_pack_data and api_items:
+                        scraper._api_pack_data = dict(api_items)
+                    if banners and api_items:
+                        self._last_full_scrape = datetime.now()
+                        # Pack-Zahlen immer aus pack/list (eine Quelle, kein Balken-Rückfall)
+                        for b in banners:
+                            if b.pack_id in api_items:
+                                b.current_packs = _int(api_items[b.pack_id].get('pack_count'))
+                        found = {b.pack_id for b in banners}
+                        states = await self.db.get_banner_states()
+                        self._not_in_tabs = {pid for pid in self._new_banner_candidates(api_items, states)
+                                             if pid not in found}
+                else:
+                    banners = await self._banners_from_api(api_items)
+                    logger.info(f"Schneller Scrape über die API: {len(banners)} bekannte Banner")
 
                 if not banners:
                     logger.warning("Keine Banner gefunden!")
+                    await self._report_scrape_problem("Keine Banner gefunden (API und Tabs leer)")
                     return
+                if api_items:
+                    await self._report_scrape_ok()
+                else:
+                    await self._report_scrape_problem("pack/list über Tor lieferte keine Daten (Tab-Scrape lief)")
 
                 # Verarbeite Banner
                 new_count = 0
@@ -604,8 +651,14 @@ class GTCHABot(commands.Bot):
                         logger.warning(f"   {error_count} Banner mit Fehlern")
 
                 # === NICHT-GEFUNDEN-TRACKING ===
-                # Sammle alle gefundenen Banner-IDs (inkl. der mit 0 Packs)
-                found_banner_ids = {b.pack_id for b in banners}
+                # "Gefunden" = laut Seite noch Packs übrig. Ausverkaufte (0 Packs) und verschwundene
+                # Banner zählen hoch und werden nach NOT_FOUND_DELETE_AFTER Scrapes gelöscht.
+                api_items = getattr(scraper, '_api_pack_data', {}) or api_items
+                if api_items:
+                    found_banner_ids = {pid for pid, it in api_items.items() if _int(it.get('pack_count')) > 0}
+                else:
+                    found_banner_ids = {b.pack_id for b in banners if (b.current_packs or 0) > 0}
+                scraped_ids = {b.pack_id for b in banners}
 
                 # === API-ONLY PACK-UPDATES ===
                 # Für DB-Banner die nicht im DOM-Scrape auftauchten (z.B. Banner die auf keinem
@@ -618,7 +671,7 @@ class GTCHABot(commands.Bot):
                     api_only_count = 0
                     for db_b in db_banners_all:
                         pid = db_b['pack_id']
-                        if pid in found_banner_ids:
+                        if pid in scraped_ids:
                             continue  # Schon normal verarbeitet
                         api_item = api_pack_data.get(pid)
                         if not api_item:
@@ -668,17 +721,16 @@ class GTCHABot(commands.Bot):
                 # Hole alle bekannten Banner aus der DB
                 db_banner_ids = set(await self.db.get_all_active_banner_ids())
 
-                # SCHUTZ: Nur tracken wenn der Scrape fast alle Banner gefunden hat, die die
-                # Seite laut API anbietet. Verhindert Massen-Löschung bei fehlgeschlagenem Scrape.
-                api_banner_count = len(getattr(scraper, '_api_pack_data', {}) or {})
-                MIN_BANNERS_FOR_TRACKING = max(30, int(api_banner_count * 0.8))
+                # SCHUTZ: Nur tracken, wenn die Daten vollständig wirken (API-Liste mit genug Bannern
+                # bzw. ein voller Tab-Scrape). Verhindert Massen-Löschung bei fehlgeschlagenem Scrape.
+                MIN_BANNERS_FOR_TRACKING = 10
                 expired_count = 0
+                tracking_base = len(api_items)
 
-                if len(found_banner_ids) < MIN_BANNERS_FOR_TRACKING:
-                    logger.warning(f"⚠️ Nur {len(found_banner_ids)} Banner gefunden - Not-Found-Tracking übersprungen!")
-                    logger.warning("   Mögliche Ursache: Website-Problem oder Scrape-Fehler")
-                    # Webhook-Benachrichtigung
-                    await notify_low_banner_count(len(found_banner_ids), MIN_BANNERS_FOR_TRACKING)
+                if not api_items or tracking_base < MIN_BANNERS_FOR_TRACKING:
+                    # Ohne vollständige API-Liste wird nichts gelöscht (ein fehlender Tab reicht sonst)
+                    logger.warning(f"⚠️ Keine verlässliche Banner-Liste ({tracking_base} Banner) - "
+                                   f"Not-Found-Tracking übersprungen")
                 else:
                     # Für gefundene Banner: Zähler zurücksetzen (Batch-Update statt N Einzelqueries)
                     found_in_db = list(found_banner_ids & db_banner_ids)
@@ -689,12 +741,12 @@ class GTCHABot(commands.Bot):
                     not_found_ids = list(db_banner_ids - found_banner_ids)
                     if not_found_ids:
                         logger.debug(f"{len(not_found_ids)} Banner nicht gefunden - erhöhe Zähler")
-                        # Batch-Increment gibt IDs mit count >= 20 zurück
-                        expired_ids = await self.db.batch_increment_not_found_count(not_found_ids)
+                        expired_ids = await self.db.batch_increment_not_found_count(
+                            not_found_ids, threshold=NOT_FOUND_DELETE_AFTER)
 
-                        # Banner mit 20x nicht gefunden löschen
                         for pack_id in expired_ids:
-                            logger.info(f"Banner {pack_id} 20x nicht gefunden - lösche Thread")
+                            logger.info(f"Banner {pack_id} {NOT_FOUND_DELETE_AFTER}x nicht gefunden oder "
+                                        f"ausverkauft - lösche Thread")
                             deleted = await self._delete_banner_thread(pack_id)
                             if deleted:
                                 expired_count += 1
@@ -716,8 +768,73 @@ class GTCHABot(commands.Bot):
 
         except Exception as e:
             logger.error(f"Scrape-Fehler: {e}")
+            await self._report_scrape_problem(f"Scrape-Fehler: {e}")
         finally:
             self._scraper = None
+
+    async def _report_scrape_problem(self, reason: str):
+        """Zählt Probleme in Folge; ab SCRAPE_PROBLEM_ALERT_AFTER einmalig Meldung im Admin-Kanal."""
+        self._scrape_problems += 1
+        logger.warning(f"[ÜBERWACHUNG] Problem {self._scrape_problems}x in Folge: {reason}")
+        if self._scrape_problems == SCRAPE_PROBLEM_ALERT_AFTER:
+            self._problem_alerted = True
+            await notify_critical_error(
+                f"Der Bot hat seit {self._scrape_problems} Scrapes in Folge Probleme.\n"
+                f"Letzter Grund: {reason}\n\n"
+                f"Prüfen: `docker logs --tail 50 gtcha-tor` und `docker logs --tail 50 gtcha-discord-bot`"
+            )
+
+    async def _report_scrape_ok(self):
+        if self._problem_alerted:
+            await send_notification(
+                title="Scrape läuft wieder",
+                description=f"Nach {self._scrape_problems} fehlerhaften Scrapes kommen wieder Daten.",
+                color=0x2ECC71,
+            )
+        self._scrape_problems = 0
+        self._problem_alerted = False
+
+    @staticmethod
+    def _new_banner_candidates(api_items: dict, states: dict) -> set:
+        """Banner mit Packs, die schon laufen und dem Bot unbekannt oder inaktiv sind."""
+        return {pid for pid, it in api_items.items()
+                if _int(it.get('pack_count')) > 0 and not it.get('is_before') and not states.get(pid)}
+
+    async def _full_scrape_reason(self, api_items: dict) -> Optional[str]:
+        """Grund für einen vollen Tab-Scrape, sonst None (dann reicht die API)."""
+        if not api_items:
+            return "API-Liste leer"
+        if self._last_full_scrape is None:
+            return "erster Scrape seit Start"
+        if datetime.now() - self._last_full_scrape >= timedelta(minutes=FULL_SCRAPE_EVERY_MINUTES):
+            return f"regelmäßig alle {FULL_SCRAPE_EVERY_MINUTES} Min"
+        new = self._new_banner_candidates(api_items, await self.db.get_banner_states()) - self._not_in_tabs
+        if new:
+            return f"neue Banner {sorted(new)}"
+        return None
+
+    async def _banners_from_api(self, api_items: dict) -> list:
+        """Bekannte aktive Banner mit aktuellen Pack-Zahlen aus pack/list (Rest aus der DB)."""
+        rows = await self.db.get_active_banners()
+        banners = []
+        for pid, item in api_items.items():
+            row = rows.get(pid)
+            if not row:
+                continue
+            banners.append(ScrapedBanner(
+                pack_id=pid,
+                category=row['category'],
+                title=row.get('title'),
+                best_hit=row.get('best_hit'),
+                price_coins=_int(item.get('point')) or row.get('price_coins'),
+                current_packs=_int(item.get('pack_count')),
+                total_packs=_int(item.get('total_pack_count')) or row.get('total_packs'),
+                entries_per_day=row.get('entries_per_day'),
+                sale_end_date=row.get('sale_end_date'),
+                image_url=row.get('image_url'),
+                detail_page_url=row.get('detail_page_url'),
+            ))
+        return banners
 
     async def _scrape_with_timeout(self):
         """Wrapper für scrape_and_post mit konfigurierbarem Timeout und Retry-Logik."""
@@ -742,6 +859,7 @@ class GTCHABot(commands.Bot):
 
                 except asyncio.TimeoutError:
                     logger.error(f"TIMEOUT: Scrape-Job nach {timeout_seconds}s abgebrochen! (Versuch {attempt + 1}/{max_retries + 1})")
+                    await self._report_scrape_problem(f"Zeitüberschreitung nach {timeout_seconds}s")
                     # Webhook-Benachrichtigung
                     await notify_scrape_error(
                         "Timeout",

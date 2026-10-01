@@ -24,6 +24,11 @@ from utils.card_pool import summarize_cards
 
 JST = timezone(timedelta(hours=9))
 
+FETCH_PACK_LIST_JS = """async () => {
+    const r = await fetch('/api/user/pack/list', {headers: {Accept: 'application/json'}});
+    try { return await r.json(); } catch (e) { return null; }
+}"""
+
 # Lädt Seite 1 der Kartenliste, dann alle weiteren Seiten gleichzeitig, und gibt alle Karten zurück.
 FETCH_CARD_LIST_JS = """async (pid) => {
     const get = async (n) => {
@@ -381,6 +386,28 @@ class GTCHAScraper:
                 logger.warning(f"[PROXY-API] curl Fehler: {err} - Fallback auf direkte Pack-Zahlen")
         except Exception as e:
             logger.warning(f"[PROXY-API] Fehler: {e} - Fallback auf direkte Pack-Zahlen")
+
+    async def fetch_pack_list(self) -> Dict[int, Dict]:
+        """Alle Banner mit Pack-Zahlen in einer Anfrage (pack/list) über die Browser-Sitzung (Tor).
+
+        Ersetzt bei normalen Scrapes das Durchklicken der Tabs. Leeres Ergebnis = Fehler.
+        """
+        page = await self._context.new_page()
+        try:
+            for url in (f"{self.base_url}/api/user/point", self.base_url):
+                # Erst ein leichtes Dokument der Seite (setzt die Sitzung), notfalls die Startseite
+                await page.goto(url, wait_until="domcontentloaded", timeout=90000)
+                data = await page.evaluate(FETCH_PACK_LIST_JS)
+                items = (data or {}).get("list") if isinstance(data, dict) else None
+                if items:
+                    result = {int(it["id"]): it for it in items if it.get("id")}
+                    self._api_pack_data = dict(result)
+                    logger.info(f"[API] pack/list: {len(result)} Banner")
+                    return result
+            logger.warning("[API] pack/list lieferte keine Banner")
+            return {}
+        finally:
+            await page.close()
 
     async def fetch_card_pools(self, pack_ids: List[int]) -> Dict[int, Dict]:
         """Holt die komplette Kartenliste (alle Seiten) je Banner über die Browser-Sitzung (Tor)."""
