@@ -1,62 +1,82 @@
-"""Schneller Abruf von pack/list ohne Browser: curl über den Tor-SOCKS-Proxy mit Sitzungs-Cookie.
+"""Schneller Abruf von pack/list über einen dauerhaft offenen Browser (über Tor).
 
-Die API antwortet nur mit Daten, wenn die Sitzung der Seite (Cookie) mitgeschickt wird, und sie
-liefert pack/list pro Sitzung zwischengespeichert: mit einer alten Sitzung kommen veraltete
-Pack-Zahlen. Deshalb wird für jeden Abruf eine neue Sitzung geholt (über die kleine Adresse
-api/user/point, notfalls über die Startseite).
+Eine einfache HTTP-Anfrage (curl) bekam von der Seite veraltete Pack-Zahlen, auch mit frischer
+Sitzung; der Browser bekommt nachweislich aktuelle. Deshalb macht dieser Abruf dasselbe wie der
+normale Scrape (scraper.fetch_pack_list): neuer Browser-Kontext = neue Sitzung, dann pack/list.
+Nur der Browser selbst bleibt offen, damit eine Abfrage wenige Sekunden statt ~10 dauert.
 """
 
-import asyncio
-import json
-import os
-import tempfile
+import random
 import time
 from typing import Dict, Optional
 
 from loguru import logger
+from playwright.async_api import async_playwright
 
-USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-              "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+from scraper.gtcha_scraper import FETCH_PACK_LIST_JS, USER_AGENTS
+
+BROWSER_MAX_AGE = 60 * 60  # Browser stündlich neu starten (Speicher)
+GEO_HEADERS = {  # wie beim normalen Scrape
+    "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
+    "X-Forwarded-For": "217.237.150.100",
+    "X-Real-IP": "217.237.150.100",
+    "CF-Connecting-IP": "217.237.150.100",
+    "X-Country": "DE",
+    "X-Country-Code": "DE",
+}
 
 
 class PackListClient:
     def __init__(self, base_url: str, proxy: Optional[str]):
         self.base_url = base_url.rstrip("/")
-        # socks5h: Namensauflösung ebenfalls über Tor
-        self.proxy = proxy.replace("socks5://", "socks5h://") if proxy else None
-        self.cookie_file = os.path.join(tempfile.gettempdir(), "gtcha_pack_list_cookies.txt")
+        self.proxy = proxy
+        self._playwright = None
+        self._browser = None
+        self._started = 0.0
 
-    async def _curl(self, url: str, extra: list, timeout: int = 20) -> str:
-        cmd = ["curl", "-sS", "--max-time", str(timeout), "-A", USER_AGENT,
-               "-H", "Accept-Language: de-DE,de;q=0.9", "-b", self.cookie_file, "-c", self.cookie_file]
-        if self.proxy:
-            cmd += ["--proxy", self.proxy]
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, *extra, url, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout + 5)
-        if proc.returncode != 0:
-            raise RuntimeError(stderr.decode(errors="replace").strip()[:150] or f"curl {proc.returncode}")
-        return stdout.decode(errors="replace")
+    async def _ensure_browser(self):
+        if self._browser and self._browser.is_connected() and time.time() - self._started < BROWSER_MAX_AGE:
+            return
+        await self.close()
+        self._playwright = await async_playwright().start()
+        self._browser = await self._playwright.chromium.launch(
+            headless=True,
+            args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
+                  '--blink-settings=imagesEnabled=false'],
+        )
+        self._started = time.time()
+        logger.debug("[SCHNELL] Browser gestartet")
 
-    async def _new_session(self, full_page: bool = False):
+    async def close(self):
         try:
-            os.remove(self.cookie_file)
-        except FileNotFoundError:
+            if self._browser:
+                await self._browser.close()
+            if self._playwright:
+                await self._playwright.stop()
+        except Exception:
             pass
-        url = self.base_url + "/" if full_page else f"{self.base_url}/api/user/point"
-        await self._curl(url, ["-o", os.devnull])
+        self._browser = self._playwright = None
 
     async def fetch(self) -> Dict[int, dict]:
         """Alle Banner aus pack/list (leer bei Fehler)."""
-        for attempt in (1, 2):
-            await self._new_session(full_page=attempt == 2)
-            body = await self._curl(f"{self.base_url}/api/user/pack/list?_={int(time.time())}",
-                                    ["-H", "Accept: application/json"])
+        await self._ensure_browser()
+        context = await self._browser.new_context(
+            user_agent=random.choice(USER_AGENTS),
+            extra_http_headers=GEO_HEADERS,
+            proxy={"server": self.proxy} if self.proxy else None,
+        )
+        try:
+            page = await context.new_page()
+            await page.goto(f"{self.base_url}/api/user/point", wait_until="domcontentloaded", timeout=30000)
+            data = await page.evaluate(FETCH_PACK_LIST_JS)
+            items = (data or {}).get("list") if isinstance(data, dict) else None
+            return {int(it["id"]): it for it in items or [] if it.get("id")}
+        except Exception:
+            # z.B. abgestürzter Browser: beim nächsten Abruf neu starten
+            await self.close()
+            raise
+        finally:
             try:
-                items = json.loads(body).get("list") or []
-            except (ValueError, AttributeError):
-                items = []
-            if items:
-                return {int(it["id"]): it for it in items if it.get("id")}
-            logger.debug(f"[SCHNELL] pack/list leer (Versuch {attempt})")
-        return {}
+                await context.close()
+            except Exception:
+                pass
