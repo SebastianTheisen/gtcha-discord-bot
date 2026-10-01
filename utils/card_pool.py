@@ -458,6 +458,11 @@ def detect_jump_pulls(pool: Dict, jump: int, pulled_keys: Set[str]) -> List[str]
         remaining -= unit["value"]
 
 
+def card_value(counted: Optional[int]) -> int:
+    """Gezählter Versandwert der Seite (ohne Steuer) -> Kartenwert, wie er an den Karten steht."""
+    return round((counted or 0) * TAX_FACTOR)
+
+
 def fmt_coins(value: float) -> str:
     return f"{round(value):,}".replace(",", ".")
 

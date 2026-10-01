@@ -40,7 +40,7 @@ def test_format_conditions_without_data():
 def test_format_shipping():
     from utils.banner_info import format_shipping, shipping_stats
     item = {"total_sendcount": 5, "total_sendprice": 702050, "total_sendpeople": 1}
-    assert format_shipping(json.dumps(shipping_stats(item))) == "5 Karten · 702.050 Coins · 1 Spieler"
+    assert format_shipping(json.dumps(shipping_stats(item))) == "5 Karten · 772.255 Coins · 1 Spieler"
     assert format_shipping(json.dumps(shipping_stats({}))) == "Noch nichts verschickt"
     assert format_shipping(None) is None
 

@@ -5,7 +5,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from utils.card_pool import fmt_coins
+from utils.card_pool import card_value, fmt_coins
 
 
 def to_int(value) -> int:
@@ -72,7 +72,7 @@ def shipping_stats(item: dict) -> dict:
 
 
 def format_shipping(raw: Optional[str]) -> Optional[str]:
-    """'5 Karten · 702.050 Coins · 1 Spieler' (None, solange keine Daten da sind)."""
+    """'5 Karten · 772.255 Coins · 1 Spieler' (Kartenwert; None, solange keine Daten da sind)."""
     if not raw:
         return None
     st = json.loads(raw)
@@ -80,7 +80,7 @@ def format_shipping(raw: Optional[str]) -> Optional[str]:
         return "Noch nichts verschickt"
     cards = "1 Karte" if st["cards"] == 1 else f"{fmt_coins(st['cards'])} Karten"
     players = "1 Spieler" if st.get("players") == 1 else f"{fmt_coins(st.get('players') or 0)} Spieler"
-    return f"{cards} · {fmt_coins(st['coins'])} Coins · {players}"
+    return f"{cards} · {fmt_coins(card_value(st['coins']))} Coins · {players}"
 
 
 JST = timezone(timedelta(hours=9))

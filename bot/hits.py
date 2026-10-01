@@ -150,11 +150,13 @@ class HitsMixin:
                     elif batches is None or prev_count is None:
                         batches = await self.db.rebuild_ship_batches(pid, count, ship_value)
                         first_look, changed = True, True
-                        reason = f"bisher {count} Karten / {ship_value:,} Coins in {len(batches)} Schüben verschickt"
+                        reason = (f"bisher {count} Karten / {fmt_coins(card_value(ship_value))} Coins Kartenwert "
+                                  f"in {len(batches)} Schüben verschickt")
                     elif count > prev_count and ship_value > prev_value:
                         batches = batches + [[count - prev_count, ship_value - prev_value]]
                         changed = True
-                        reason = f"{count - prev_count} Karte(n) / {ship_value - prev_value:,} Coins verschickt"
+                        reason = (f"{count - prev_count} Karte(n) / {fmt_coins(card_value(ship_value - prev_value))} "
+                                  f"Coins Kartenwert verschickt")
                     if not changed:
                         await self.db.set_pull_tracking(pid, value, ships[0], ships[1], pulled, unsure)
                         continue

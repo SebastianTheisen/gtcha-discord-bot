@@ -91,10 +91,20 @@ function row(b, rank) {
             ${hitsText(b) ? `<span class="pill">${hitsText(b)}${b.unsure ? " ❓" : ""}</span>` : ""}
           </div>
           ${shipLine(b)}
+          ${outLine(b)}
           ${b.end ? `<div class="until">${esc(untilText(b.end))}</div>` : ""}
         </div>
       </div>
     </div>`;
+}
+
+// "✅ Raus: Lugia Kristall, Pikachu Promo" - Hits, die sicher raus sind (wie in der Hit-Liste)
+function outLine(b) {
+  const out = b.out || [];
+  if (!out.length && !b.out_unsure) return "";
+  const names = out.slice(0, 2).map((h) => esc(h.name)).join(", ") + (out.length > 2 ? ` +${out.length - 2}` : "");
+  return `<div class="out">${out.length ? `✅ Raus: <b>${names}</b>` : ""}${b.out_unsure
+    ? `${out.length ? " · " : ""}❓ ${b.out_unsure} unklar` : ""}</div>`;
 }
 
 // "📦 18 verschickt · 103.070 Coins" (Kartenwert der verschickten Karten)

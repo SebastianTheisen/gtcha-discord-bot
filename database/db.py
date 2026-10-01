@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 
 from loguru import logger
 from config import DATABASE_PATH
+from utils.card_pool import card_value, fmt_coins
 
 
 class Database:
@@ -357,9 +358,10 @@ class Database:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """, (pack_id, old.get("cards"), stats.get("cards"), old.get("coins"), stats.get("coins"),
                       old.get("players"), stats.get("players"), datetime.now().isoformat()))
-                delta = f"{(stats.get('coins') or 0) - (old.get('coins') or 0):,}".replace(",", ".")
+                counted = (stats.get('coins') or 0) - (old.get('coins') or 0)
                 logger.info(f"[VERSAND] {pack_id}: {old.get('cards')} -> {stats.get('cards')} Karten "
-                            f"(+{delta} Coins, {old.get('players')} -> {stats.get('players')} Spieler)")
+                            f"(+{fmt_coins(card_value(counted))} Coins Kartenwert, gezählt {fmt_coins(counted)}, "
+                            f"{old.get('players')} -> {stats.get('players')} Spieler)")
             await db.commit()
         return True
 
