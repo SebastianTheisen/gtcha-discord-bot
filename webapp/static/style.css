@@ -244,6 +244,8 @@ h2 small { font-size: 13px; color: var(--muted); font-weight: 400; }
 .tile-value .coin { width: 13px; height: 13px; }
 .tile-value.above { color: #b07800; }
 .tile-meta { font-size: 11px; color: var(--muted); text-align: center; }
+.tile.unsure .tile-art { outline: 3px solid var(--warn); outline-offset: 2px; border-radius: 6px; }
+.unsure-note { color: #b36a00; font-weight: 600; }
 .tile.gone .tile-art img { filter: grayscale(1) brightness(.6); }
 .tile.gone .tile-art::after {
   content: "GEZOGEN"; position: absolute; inset: 0; display: grid; place-items: center;

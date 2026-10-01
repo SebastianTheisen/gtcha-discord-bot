@@ -273,7 +273,8 @@ function hitCard(h) {
 
 function cardTile(c, price) {
   const gone = c.pulled >= c.copies;
-  return `<div class="tile ${gone ? "gone" : ""}">
+  const share = c.share.toLocaleString("de-DE", { maximumFractionDigits: c.share < 0.1 ? 3 : c.share < 1 ? 2 : 1 }) + " %";
+  return `<div class="tile ${gone ? "gone" : ""} ${c.unsure && !gone ? "unsure" : ""}">
     <div class="tile-art">
       ${img(c.image, c.name)}
       ${c.copies > 1 ? `<span class="copies">×${c.copies}</span>` : ""}
@@ -281,7 +282,8 @@ function cardTile(c, price) {
     </div>
     <div class="tile-base"></div>
     <div class="tile-value ${price && c.value >= price ? "above" : ""}"><span class="coin"></span>${num(c.value)}</div>
-    <div class="tile-meta">${pct(c.share)}${c.pulled && !gone ? ` · ${c.pulled}/${c.copies} gezogen` : ""}</div>
+    <div class="tile-meta">${share}${c.pulled && !gone ? ` · ${c.pulled}/${c.copies} gezogen` : ""}</div>
+    ${c.unsure && !gone ? `<div class="tile-meta unsure-note">❓ ${esc(c.unsure)}</div>` : ""}
   </div>`;
 }
 

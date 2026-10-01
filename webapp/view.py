@@ -296,14 +296,20 @@ class BannerView:
         pool = json.loads(row['card_pool']) if row.get('card_pool') else None
         if not pool or not pool.get('cards') or not pool.get('total_count'):
             return {"cards": [], "share_above_price": None}
-        pulled, *_ = await self._pulled(data.get("thread_id") or 0, row['pack_id'], pool)
+        # Nur sicher Gezogenes abhaken (Medaille oder eindeutig erkannter Versand). Stellvertreter aus
+        # ❓-Gruppen zählen nur für die Rechnung - im Raster steht dort "❓ x von n raus".
+        _, sure, winners, open_groups, _ = await self._pulled(data.get("thread_id") or 0, row['pack_id'], pool)
+        certain = set(sure) | set(winners)
         total, price = pool['total_count'], data.get("price") or 0
+        of_card = lambda keys, cid: [k for k in keys if k == cid or k.startswith(cid + "#")]
         cards = []
         for c in pool['cards']:
             cid = str(c.get("id"))
-            gone = sum(1 for k in pulled if k == cid or k.startswith(cid + "#"))
+            gone = len(of_card(certain, cid))
+            groups = [g for g in open_groups if of_card(g["keys"], cid)]
+            unsure = (f"{groups[0]['pulled']} von {len(groups[0]['keys'])} raus" if groups else None)
             cards.append({"name": c["name"], "value": c["value"], "copies": c["copies"], "image": c.get("image"),
-                          "hit": bool(c.get("hit")), "pulled": min(gone, c["copies"]),
-                          "share": round(c["copies"] / total * 100, 2)})
+                          "hit": bool(c.get("hit")), "pulled": min(gone, c["copies"]), "unsure": unsure,
+                          "share": round(c["copies"] / total * 100, 3)})
         above = sum(c["copies"] for c in pool['cards'] if price and c["value"] >= price)
         return {"cards": cards, "share_above_price": round(above / total * 100, 1) if price else None}
