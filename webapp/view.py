@@ -127,24 +127,32 @@ class BannerView:
 
     @staticmethod
     def _out_of_banner(row: Dict, pool: Optional[Dict]) -> Dict:
-        """Coins, die schon aus dem Banner raus sind (Werte der Seite) und was rechnerisch noch drin ist.
+        """Was schon aus dem Banner raus ist (Werte der Seite) und was rechnerisch noch drin ist.
 
-        decided_value = total_kangen + total_sendprice (umgewandelt + verschickt, so von der Seite).
+        umgewandelt = total_kangen (eigene Spalte); ältere Stände: decided_value - verschickt.
+        Eine Anzahl umgewandelter Karten liefert die Seite nicht - nur eine Obergrenze ist bekannt:
+        gezogene Packs minus verschickte Karten (darin auch Karten, die noch niemand abgeholt hat).
         Für "noch drin" wird der Versand auf Kartenwert (×1,1) gerechnet, die Umwandlung wie geliefert.
         """
+        empty = {"converted": None, "converted_max_cards": None, "out_total": None,
+                 "left_value": None, "left_per_pack": None}
         st = json.loads(row['site_stats']) if row.get('site_stats') else {}
-        decided = row.get('decided_value')
-        if decided is None or not st:
-            return {"converted": None, "out_total": None, "left_value": None, "left_per_pack": None}
         shipped = to_int(st.get("coins"))
-        converted = max(0, to_int(decided) - shipped)
+        if row.get('converted') is not None:
+            converted = to_int(row['converted'])
+        elif row.get('decided_value') is not None and st:
+            converted = max(0, to_int(row['decided_value']) - shipped)
+        else:
+            return empty
+        remaining, total = to_int(row.get('current_packs')), to_int(row.get('total_packs'))
+        drawn = max(0, total - remaining) if total else None
+        max_cards = max(0, drawn - to_int(st.get("cards"))) if drawn is not None else None
         left = per_pack = None
         if pool and pool.get('total_value'):
             left = max(0, to_int(pool['total_value']) - converted - card_value(shipped))
-            remaining = to_int(row.get('current_packs'))
             per_pack = round(left / remaining) if remaining > 0 else None
-        return {"converted": converted, "out_total": converted + shipped, "left_value": left,
-                "left_per_pack": per_pack}
+        return {"converted": converted, "converted_max_cards": max_cards, "out_total": converted + shipped,
+                "left_value": left, "left_per_pack": per_pack}
 
     @staticmethod
     def _rank_info(conditions: Optional[str]) -> Dict:

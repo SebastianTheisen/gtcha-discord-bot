@@ -364,6 +364,9 @@ class ScrapingMixin:
             if _int(item.get('point')) > 0:
                 changed = await self.db.update_price(pid, _int(item.get('point'))) or changed
             changed = await self.db.update_site_stats(pid, shipping_stats(item)) or changed
+            # Umgewandelte Coins nur speichern (Verlauf), Startbeitrag deshalb nicht neu bearbeiten
+            if item.get('total_kangen') is not None:
+                await self.db.update_converted(pid, _int(item.get('total_kangen')))
             if changed:
                 row = await self.db.get_banner(pid)
                 if row and row.get('is_active'):

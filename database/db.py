@@ -70,6 +70,13 @@ class Database:
                     changed_at TEXT
                 );
 
+                CREATE TABLE IF NOT EXISTS convert_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    banner_id INTEGER,
+                    old_coins INTEGER, new_coins INTEGER,
+                    changed_at TEXT
+                );
+
                 CREATE TABLE IF NOT EXISTS bot_meta (
                     key TEXT PRIMARY KEY,
                     value TEXT
@@ -153,7 +160,8 @@ class Database:
                                ('banners', 'starts_at INTEGER'),
                                ('banners', 'start_announced INTEGER DEFAULT 0'),
                                ('discord_threads', 'top5_message_id INTEGER'),
-                               ('discord_threads', 'value_alert_sent INTEGER DEFAULT 0')]:
+                               ('discord_threads', 'value_alert_sent INTEGER DEFAULT 0'),
+                               ('banners', 'converted INTEGER')]:
                 try:
                     await db.execute(f"ALTER TABLE {table} ADD COLUMN {col}")
                     await db.commit()
@@ -364,6 +372,24 @@ class Database:
                             f"{old.get('players')} -> {stats.get('players')} Spieler)")
             await db.commit()
         return True
+
+    async def update_converted(self, pack_id: int, coins: int) -> Optional[int]:
+        """Speichert den Coin-Wert aller umgewandelten Karten (total_kangen) und merkt jede Änderung.
+
+        Gibt den Anstieg zurück (None = unverändert oder Banner unbekannt).
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("SELECT converted FROM banners WHERE pack_id = ?", (pack_id,))
+            row = await cursor.fetchone()
+            if not row or row[0] == coins:
+                return None
+            await db.execute("UPDATE banners SET converted = ? WHERE pack_id = ?", (coins, pack_id))
+            if row[0] is not None:
+                await db.execute(
+                    "INSERT INTO convert_history (banner_id, old_coins, new_coins, changed_at) VALUES (?, ?, ?, ?)",
+                    (pack_id, row[0], coins, datetime.now().isoformat()))
+            await db.commit()
+        return coins - (row[0] or 0)
 
     async def update_conditions(self, pack_id: int, conditions: Dict) -> bool:
         """Speichert die Kaufbedingungen; True, wenn sie sich geändert haben."""
@@ -653,11 +679,12 @@ class Database:
                 )
             """, old_ids)
 
-            # Pack-History löschen
+            # Pack-History und Umwandlungs-Verlauf löschen
             await db.execute(
                 f"DELETE FROM pack_history WHERE banner_id IN ({placeholders})",
                 old_ids
             )
+            await db.execute(f"DELETE FROM convert_history WHERE banner_id IN ({placeholders})", old_ids)
 
             # Threads löschen
             await db.execute(

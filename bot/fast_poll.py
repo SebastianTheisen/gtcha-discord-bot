@@ -64,6 +64,11 @@ class FastPollMixin:
         if not items:
             logger.debug("[SCHNELL] pack/list ohne Daten")
             return False
+        if not getattr(self, '_fields_logged', False):
+            # Einmal pro Start: welche Felder liefert pack/list? (z.B. ob es eine Anzahl umgewandelter Karten gibt)
+            sample = next(iter(items.values()), {})
+            logger.info(f"[API] pack/list-Felder: {', '.join(sorted(sample))}")
+            self._fields_logged = True
         await self._create_banners_from_api(items)
         await self._announce_started_banners(items)
 
