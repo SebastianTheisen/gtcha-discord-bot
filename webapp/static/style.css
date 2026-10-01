@@ -267,6 +267,7 @@ h2 small { font-size: 13px; color: var(--muted); font-weight: 400; }
 .modal-title { font-weight: 800; font-size: 17px; margin-bottom: 8px; color: var(--navy); }
 .modal-text { font-size: 15px; line-height: 1.4; }
 .modal-buttons { display: grid; grid-auto-flow: column; gap: 10px; margin-top: 16px; }
+.modal-buttons:has(> :nth-child(3)) { grid-auto-flow: row; }
 
 /* Gezogen melden */
 .claim-row { align-items: center; justify-content: flex-start; }

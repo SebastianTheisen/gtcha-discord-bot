@@ -596,10 +596,17 @@ async function claimFlow(b, card) {
   const free = units.find((u) => !u.medal_user && u.state !== "pulled");
   const own = units.find((u) => u.medal_user === String(user.user_id));
   let unit, action;
-  if (free) {
-    const extra = own ? `<br><span class="muted">${own.tier} hast du schon gemeldet – das wäre ein weiteres Exemplar.</span>` : "";
+  if (free && own) {
+    // eigenes Exemplar gemeldet und noch eins frei: zurücknehmen oder ein weiteres melden
+    const choice = await ask("Was möchtest du tun?", `${esc(card.name)} · ${num(card.value)} Coins<br><br>
+        <b>${own.tier}</b> hast du gemeldet. <b>${free.tier}</b> ist noch frei.`,
+      ["Abbrechen", `${own.tier} zurücknehmen`, `${free.tier} melden`]);
+    if (choice === `${own.tier} zurücknehmen`) { unit = own; action = "unclaim"; }
+    else if (choice === `${free.tier} melden`) { unit = free; action = "claim"; }
+    else return;
+  } else if (free) {
     if (await ask("Hit beanspruchen?", `<b>${free.tier}</b> · ${esc(card.name)}<br>${num(card.value)} Coins<br><br>
-        Als von dir gezogen melden? Der Bot postet das im Discord-Thread.${extra}`) !== "Ja") return;
+        Als von dir gezogen melden? Der Bot postet das im Discord-Thread.`) !== "Ja") return;
     unit = free; action = "claim";
   } else if (own) {
     if (await ask("Zurücknehmen?", `<b>${own.tier}</b> · ${esc(card.name)} ist als von dir gemeldet.<br><br>
