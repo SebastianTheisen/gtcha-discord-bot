@@ -35,19 +35,20 @@ class HitsMixin:
         pool = await self.db.get_card_pool(get('pack_id'))
         if not pool:
             return None
-        pulled, _, _ = await self._pulled_cards(int(thread_data['thread_id']), get('pack_id'), pool)
+        pulled, _, _, _ = await self._pulled_cards(int(thread_data['thread_id']), get('pack_id'), pool)
         return estimate(pool, get('current_packs'), get('total_packs'), pulled, get('price_coins'))
 
     async def _pulled_cards(self, thread_id: int, pack_id: int, pool: dict) -> tuple:
-        """(alle als gezogen bekannten Karten-Schlüssel, davon nur automatisch erkannte, Gewinner).
+        """(gezogene Karten inkl. Stellvertreter, nur automatisch erkannte, Gewinner, offene ❓-Gruppen).
 
         Medaille Tn zählt für Platz n der Hit-Liste; Gewinner = Schlüssel -> Discord-User-ID.
         """
         medals = await self.db.get_medals(int(thread_id))
-        detected = set((await self.db.get_pull_tracking(pack_id))["pulled"])
+        state = await self.db.get_pull_tracking(pack_id)
         keys = tier_keys(pool)
         winners = {keys[t]: user for t, user in medals.items() if t in keys}
-        return detected | set(winners), detected - set(winners), winners
+        pulled, sure, open_groups = resolve_pulled(state["pulled"], state["unsure"], set(winners))
+        return pulled, sure - set(winners), winners, open_groups
 
     async def _claimed_tiers(self, thread_id: int, pack_id: int) -> dict:
         """T1-T3 als gezogen (Medaille oder automatisch erkannt) für die 🎯-Nachricht."""
@@ -55,7 +56,8 @@ class HitsMixin:
         pool = await self.db.get_card_pool(pack_id)
         if not pool:
             return {t: t in medals for t in TIERS}
-        detected = set((await self.db.get_pull_tracking(pack_id))["pulled"])
+        state = await self.db.get_pull_tracking(pack_id)
+        _, detected, _ = resolve_pulled(state["pulled"], state["unsure"], set())
         keys = tier_keys(pool)
         return {t: t in medals or keys.get(t) in detected for t in TIERS}
 
@@ -128,6 +130,10 @@ class HitsMixin:
 
                 state = await self.db.get_pull_tracking(pid)
                 pulled, unsure = list(state["pulled"]), list(state["unsure"])
+                # Für den Abgleich zählen auch Medaillen und Stellvertreter offener Gruppen als gezogen
+                medals = await self.db.get_medals(int(thread_data['thread_id']))
+                claimed = {k for t, k in tier_keys(pool).items() if t in medals}
+                known, _, _ = resolve_pulled(pulled, unsure, claimed)
                 ships = shipment_values(item) or (None, None)
                 value = decided_value(item)
                 match = {"certain": [], "groups": [], "maybe": []}
@@ -140,19 +146,17 @@ class HitsMixin:
                         pass
                     elif prev_count is None:
                         # Erste Messung: bisherige Sendungen nur auswerten, soweit es eindeutig ist
-                        match = match_shipped_hits(pool, count, ship_value, set(pulled))
+                        match = match_shipped_hits(pool, count, ship_value, known)
                         first_look, reason = True, f"bisher {count} Karten / {ship_value:,} Coins verschickt"
                     elif count > prev_count and ship_value > prev_value:
-                        match = match_shipped_hits(pool, count - prev_count, ship_value - prev_value, set(pulled))
+                        match = match_shipped_hits(pool, count - prev_count, ship_value - prev_value, known)
                         reason = f"{count - prev_count} Karte(n) / {ship_value - prev_value:,} Coins verschickt"
                 elif value is not None and state["decided_value"] is not None and value > state["decided_value"]:
-                    match["certain"] = detect_jump_pulls(pool, value - state["decided_value"], set(pulled))
+                    match["certain"] = detect_jump_pulls(pool, value - state["decided_value"], known)
                     reason = f"Anstieg {value - state['decided_value']:,} Coins"
 
-                # Bei wertgleichen Hits zählt für die Rechnung ein Stellvertreter als gezogen
-                stand_ins = [g["keys"][i] for g in match["groups"] for i in range(g["pulled"])]
                 await self.db.set_pull_tracking(pid, value, ships[0], ships[1],
-                                                pulled + match["certain"] + stand_ins,
+                                                pulled + match["certain"],
                                                 unsure + match["groups"] + match["maybe"])
                 if not (match["certain"] or match["groups"] or match["maybe"]):
                     continue
@@ -299,9 +303,9 @@ class HitsMixin:
             if not isinstance(thread, discord.Thread):
                 return
 
-            pulled, detected, winners = await self._pulled_cards(thread_id, pack_id, pool)
-            unsure = (await self.db.get_pull_tracking(pack_id))["unsure"]
-            messages = self._build_hit_messages(pool, pulled, detected, unsure, winners,
+            pulled, detected, winners, open_groups = await self._pulled_cards(thread_id, pack_id, pool)
+            maybe = [g for g in (await self.db.get_pull_tracking(pack_id))["unsure"] if g.get("pulled", 0) == 0]
+            messages = self._build_hit_messages(pool, pulled, detected, open_groups + maybe, winners,
                                                 price=_int(banner.get('price_coins')) or None)
             if not messages:
                 return

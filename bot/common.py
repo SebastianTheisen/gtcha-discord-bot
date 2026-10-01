@@ -43,7 +43,7 @@ from utils.banner_info import (
 )
 from utils.card_pool import (
     estimate, fmt_coins, fmt_pct, TIERS, MAX_LISTED, EMBEDS_PER_MESSAGE, decided_value, detect_jump_pulls,
-    is_relevant_hit, match_shipped_hits, pool_minimum, relevant_units, shipment_values, tier_keys,
+    is_relevant_hit, match_shipped_hits, pool_minimum, relevant_units, resolve_pulled, shipment_values, tier_keys,
     tracked_units,
 )
 
@@ -73,6 +73,7 @@ SCRAPE_PROBLEM_ALERT_AFTER = 3
 MEDAL_EMOJIS = {"T1": "🥇", "T2": "🥈", "T3": "🥉", "T4": "4️⃣", "T5": "5️⃣", "T6": "6️⃣",
                 "T7": "7️⃣", "T8": "8️⃣", "T9": "9️⃣", "T10": "🔟"}
 EMOJI_TO_MEDAL = {emoji: tier for tier, emoji in MEDAL_EMOJIS.items()}
+MEDAL_EMOJI_DEFAULT = "🏅"  # ab T11 (keine eigene Ziffer; Gewinner steht in der Hit-Liste)
 
 
 

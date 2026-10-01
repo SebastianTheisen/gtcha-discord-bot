@@ -19,17 +19,17 @@ class MedalsMixin:
         # Suche nach T1, T2 oder T3 im Text (case insensitive)
         # Matcht: "T1", "t1 + 4b", "t1+4b", "T2 test", etc.
         content = message.content.strip().upper()
-        tier_match = re.search(r'\b(T(?:10|[1-9]))\b', content)
+        tier_match = re.search(r'\bT([1-9]\d?)\b', content)
         if not tier_match:
             return
 
-        tier = tier_match.group(1)  # "T1" bis "T10"
+        tier = f"T{int(tier_match.group(1))}"  # "T1" bis "T50"
         logger.debug(f"T-Nachricht erkannt: {tier} von {message.author.name} in Thread {message.channel.id}")
 
         try:
             user_id = message.author.id
             thread_id = message.channel.id
-            emoji = MEDAL_EMOJIS[tier]
+            emoji = MEDAL_EMOJIS.get(tier, MEDAL_EMOJI_DEFAULT)
 
             # Prüfe ob Thread im Hot-Banner Channel ist
             is_hot_banner = (message.channel.parent_id == HOT_BANNER_CHANNEL_ID)

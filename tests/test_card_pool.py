@@ -98,11 +98,21 @@ def test_estimate_drops_when_top_hit_is_pulled():
     assert without_top["hits_open"] == 4 and without_top["open_tiers"] == ["T2", "T3"]
 
 
-def test_tier_keys_follow_hit_list_order_up_to_ten():
+def test_tier_keys_follow_hit_list_order():
     pool = summarize_cards([card(i, 1000 * (20 - i), hit=True) for i in range(1, 14)] + [card(99, 10, copies=50)])
     keys = tier_keys(pool)
-    assert list(keys) == [f"T{i}" for i in range(1, 11)]
-    assert keys["T1"] == "1" and keys["T10"] == "10"
+    assert list(keys) == [f"T{i}" for i in range(1, 14)]
+    assert keys["T1"] == "1" and keys["T13"] == "13"
+
+
+def test_medal_resolves_exactly_one_group():
+    from utils.card_pool import resolve_pulled
+    groups = [{"keys": ["a", "b", "c"], "pulled": 1}, {"keys": ["b", "c"], "pulled": 1}]
+    pulled, sure, open_groups = resolve_pulled([], groups, {"b"})
+    assert open_groups == [groups[0]]          # Medaille b erledigt nur die kleinere Gruppe
+    assert len(pulled) == 2                    # b + ein Stellvertreter für die offene Gruppe
+    pulled, _, open_groups = resolve_pulled([], groups, {"b", "a"})
+    assert open_groups == [] and pulled == {"a", "b"}
 
 
 def test_jump_detection_for_banners_without_shipping_hits():
