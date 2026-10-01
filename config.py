@@ -108,9 +108,8 @@ SCRAPE_TIMEOUT_SECONDS = int(os.getenv("SCRAPE_TIMEOUT_SECONDS") or "180")
 MENTION_ON_NEW_THREAD = os.getenv("MENTION_ON_NEW_THREAD", "true").lower() == "true"
 MENTION_ON_PACK_UPDATE = os.getenv("MENTION_ON_PACK_UPDATE", "true").lower() == "true"
 
-# Hot-Banner Channel (Forum) - Top 10 Banner mit höchster Hit-Chance
-# Wird alle 30 Minuten aktualisiert, exkludiert nur Bonus-Kategorie
-# Unbegrenzte Pulls werden mit einfacher Wahrscheinlichkeit (hits/packs) berechnet
+# Hot-Banner Channel (Forum)
+# Rangliste der Top 10 nach Ø Rückgabe, nach jedem Scrape abgeglichen (ohne Bonus/Gratis/Passwort)
 HOT_BANNER_CHANNEL_ID = int(os.getenv("HOT_BANNER_CHANNEL_ID") or "0")
 # Hot-Banner Feature aktivieren/deaktivieren (true/false)
 HOT_BANNER_ENABLED = os.getenv("HOT_BANNER_ENABLED", "false").lower() == "true"

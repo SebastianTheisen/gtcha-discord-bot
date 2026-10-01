@@ -82,19 +82,8 @@ class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, Hits
         start_watchdog(max_silence_seconds=20 * 60, startup_grace_seconds=20 * 60)
         logger.info(f"Scheduler: Alle {SCRAPE_INTERVAL_MINUTES} Min um xx:xx:20")
 
-        # Hot-Banner Job (alle 30 Min um xx:00:20 und xx:30:20)
         if HOT_BANNER_CHANNEL_ID and HOT_BANNER_ENABLED:
-            self.scheduler.add_job(
-                self._update_hot_banners,
-                'cron',
-                minute='0,30',  # Um :00 und :30
-                second=20,      # 20 Sekunden nach der Minute
-                id='hot_banner_job',
-                replace_existing=True,
-                coalesce=True,
-                max_instances=1,
-            )
-            logger.info("Hot-Banner Scheduler: Alle 30 Min um xx:00:20 und xx:30:20")
+            logger.info("Hot-Banner: Rangliste wird nach jedem Scrape abgeglichen")
 
         # Archiv-Bereinigung: Alle 30 Min alte archivierte Daten löschen
         self.scheduler.add_job(

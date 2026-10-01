@@ -201,6 +201,9 @@ class ScrapingMixin:
                 for pid in await self.db.get_active_banners():
                     await self._sync_thread_title(pid)
 
+                # === HOT-BANNER-Rangliste (nur bei Änderung bearbeitet) ===
+                await self._update_hot_banners()
+
                 # === KAUFBEDINGUNGEN und VERSAND-ZAHLEN aus pack/list ===
                 await self._apply_site_data(getattr(scraper, '_api_pack_data', {}) or {})
 
