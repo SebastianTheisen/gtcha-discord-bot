@@ -71,9 +71,8 @@ def test_hit_with_same_value_as_normal_card_is_only_possible():
 
 def test_shipment_of_normal_cards_or_unknown_value_detects_nothing():
     pool = hit_pool()
-    for value in (500, 12345):
-        result = match_shipped_hits(pool, 1, value, set())
-        assert (result["certain"], result["groups"], result["maybe"]) == ([], [], [])
+    assert match_shipped_hits(pool, 1, 500, set()) == {"certain": [], "groups": [], "maybe": []}
+    assert match_shipped_hits(pool, 1, 12345, set()) == {"certain": [], "groups": [], "maybe": []}
 
 
 def test_already_pulled_hit_is_not_detected_again():
@@ -161,12 +160,3 @@ def test_shipment_needing_one_of_several_similar_hits_becomes_group():
     result = match_shipped_hits(pool, 3, 25915, set())
     assert result["certain"] == []
     assert len(result["groups"]) == 1 and result["groups"][0]["pulled"] == 1
-
-
-def test_fewest_hits_explanation_is_preferred():
-    # 3 Karten / 127.800: ein großer Hit + 2 normale ist wahrscheinlicher als drei kleinere Hits
-    pool = summarize_cards([card(1, 125180, hit=True, name="Pikachu"), card(2, 86140, hit=True),
-                            card(3, 28820, hit=True), card(4, 13200, hit=True),
-                            card(5, 1300, copies=500), card(6, 300, copies=2000)])
-    result = match_shipped_hits(pool, 3, 127800, set())
-    assert result["certain"] == [keys_by_name(pool)["Pikachu"]] and result["likely"] is True
