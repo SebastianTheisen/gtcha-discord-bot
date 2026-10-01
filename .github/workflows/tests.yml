@@ -13,8 +13,8 @@ jobs:
         with:
           python-version: "3.11"
       - name: Abhängigkeiten installieren
-        run: pip install -r requirements-dev.txt loguru
+        run: pip install -r requirements-dev.txt loguru aiosqlite
       - name: Tests
         run: python -m pytest -q tests
       - name: Syntax aller Module prüfen
-        run: python -m compileall -q bot database scraper utils tools main.py config.py
+        run: python -m compileall -q bot database scraper utils tools webapp main.py config.py

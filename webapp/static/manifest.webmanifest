@@ -1,0 +1,15 @@
+{
+  "name": "GTCHA Tracker",
+  "short_name": "GTCHA Tracker",
+  "description": "Private, inoffizielle Übersicht der GTCHA-Banner mit Ø Rückgabe, Hits und Versand.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b1020",
+  "theme_color": "#0b1020",
+  "lang": "de",
+  "icons": [
+    { "src": "/static/icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

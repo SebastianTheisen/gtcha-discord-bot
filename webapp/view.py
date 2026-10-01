@@ -1,0 +1,160 @@
+"""Daten für die Web-App: liest die Bot-Datenbank und rechnet wie der Bot (Ø Rückgabe, Hits, Status).
+
+Nur lesend - die App schreibt nie in die Datenbank des Bots.
+"""
+
+import json
+from datetime import datetime, timezone
+from typing import Dict, List, Optional
+
+import aiosqlite
+
+from database.db import Database
+from utils.banner_info import format_conditions, format_shipping, to_int
+from utils.card_pool import (
+    estimate, pool_minimum, relevant_units, resolve_pulled, tier_keys, tracked_units,
+)
+from utils.hot_list import min_rank, needs_password, rank_entries
+
+BASE_URL = "https://gtchaxonline.com"
+PACK_HISTORY_LIMIT = 400
+
+
+def epoch(iso: Optional[str]) -> Optional[int]:
+    """Zeitstempel der Bot-DB (naive UTC-Zeit des Containers) -> Unix-Zeit."""
+    if not iso:
+        return None
+    try:
+        return int(datetime.fromisoformat(str(iso)).replace(tzinfo=timezone.utc).timestamp())
+    except ValueError:
+        return None
+
+
+def buy_url(row: Dict) -> str:
+    return row.get('detail_page_url') or f"{BASE_URL}/pack-detail?packId={row['pack_id']}"
+
+
+class BannerView:
+    def __init__(self, db: Database):
+        self.db = db
+
+    async def _pulled(self, thread_id: int, pack_id: int, pool: Dict) -> tuple:
+        """Wie der Bot: (gezogen inkl. Stellvertreter, sicher erkannt, Medaillen-Gewinner, offene Gruppen, unsicher)."""
+        medals = await self.db.get_medals(thread_id) if thread_id else {}
+        state = await self.db.get_pull_tracking(pack_id)
+        keys = tier_keys(pool)
+        winners = {keys[t]: user for t, user in medals.items() if t in keys}
+        pulled, sure, open_groups = resolve_pulled(state["pulled"], state["unsure"], set(winners))
+        return pulled, sure - set(winners), winners, open_groups, state["unsure"]
+
+    @staticmethod
+    def _status(row: Dict, thread: Dict, stats: Optional[Dict], pool: Optional[Dict],
+                sure: set, winners: Dict) -> str:
+        if row.get('starts_at') and not row.get('start_announced'):
+            return "upcoming"
+        if stats:
+            if stats['tracked_hits'] and stats['hits_total'] and not stats['hits_open']:
+                price = to_int(row.get('price_coins')) or None
+                if all(u['key'] in sure or u['key'] in winners for u in relevant_units(pool, price)):
+                    return "hits_out"
+            elif not stats['tracked_hits'] and not stats['open_tiers']:
+                return "hits_out"
+        if thread.get('endspurt_sent'):
+            return "endspurt"
+        return "running"
+
+    async def summary(self, row: Dict, with_pool: bool = False) -> Dict:
+        pid = row['pack_id']
+        thread = await self.db.get_thread_by_banner_id(pid) or {}
+        thread_id = int(thread['thread_id']) if thread.get('thread_id') and not thread.get('is_expired') else 0
+        price, remaining, total = (to_int(row.get(k)) for k in ('price_coins', 'current_packs', 'total_packs'))
+        pool = json.loads(row['card_pool']) if row.get('card_pool') else None
+        stats, sure, winners, open_groups, unsure, pulled = None, set(), {}, [], [], set()
+        if pool and pool.get('total_count'):
+            pulled, sure, winners, open_groups, unsure = await self._pulled(thread_id, pid, pool)
+            stats = estimate(pool, row.get('current_packs'), row.get('total_packs'), pulled, price or None)
+        else:
+            pool = None
+        low = pool_minimum(pool) if pool else None
+        data = {
+            "id": pid, "title": row.get('title') or f"Pack {pid}", "category": row.get('category'),
+            "price": price, "remaining": remaining, "total": total,
+            "per_day": row.get('entries_per_day'), "image": row.get('image_url'), "buy_url": buy_url(row),
+            "end": row.get('sale_end_date'), "starts_at": row.get('starts_at'),
+            "status": self._status(row, thread, stats, pool, sure, winners),
+            "ev": round(stats['ev']) if stats else None,
+            "ev_pct": round(stats['ev_pct'], 1) if stats and stats.get('ev_pct') is not None else None,
+            "hits_open": (stats['hits_open'] if stats['tracked_hits'] else len(stats['open_tiers'])) if stats else None,
+            "hits_total": (stats['hits_total'] if stats['tracked_hits'] else 3) if stats else None,
+            "tracked_hits": bool(stats and stats['tracked_hits']),
+            "cost_to_hit": round(stats['cost_to_hit']) if stats and stats.get('cost_to_hit') else None,
+            "unsure": bool(open_groups),
+            "min_value": low['value'] if low else None,
+            "pool_value": to_int(pool.get('total_value')) if pool else None,
+            "all_packs_cost": price * total if price and total else None,
+            "conditions": format_conditions(row.get('conditions')),
+            "rank": min_rank(row.get('conditions')), "password": needs_password(row.get('conditions')),
+            "shipped": format_shipping(row.get('site_stats')),
+            "thread_id": thread_id or None,
+        }
+        if with_pool:
+            data["hits"] = self._hit_list(pool, pulled, sure, winners, unsure, price) if pool else []
+            data["hit_keys_detected"] = sorted(sure)
+        return data
+
+    @staticmethod
+    def _hit_list(pool: Dict, pulled: set, sure: set, winners: Dict, unsure: List[Dict], price: int) -> List[Dict]:
+        """Hit-Liste wie im Discord-Thread, mit Status je Karte."""
+        units = relevant_units(pool, price or None) if pool.get('hits') else tracked_units(pool)
+        if pool.get('hits') and not units:
+            units = tracked_units(pool)[:5]
+        result = []
+        for rank, u in enumerate(units[:50], 1):
+            key = u["key"]
+            state, note = "open", None
+            if key in winners:
+                state, note = "pulled", "gezogen (Medaille)"
+            elif any(key in g["keys"] and g["pulled"] > 0 and not set(g["keys"]) <= pulled for g in unsure):
+                g = next(g for g in unsure if key in g["keys"] and g["pulled"] > 0)
+                state, note = "unsure", f"{g['pulled']} von {len(g['keys'])} ähnlich teuren gezogen"
+            elif key in pulled:
+                state, note = "pulled", "gezogen (erkannt)" if key in sure else "gezogen"
+            elif any(key in g["keys"] and g["pulled"] == 0 for g in unsure):
+                state, note = "maybe", "möglicherweise gezogen"
+            result.append({"rank": rank, "key": key, "name": u["name"], "value": u["value"],
+                           "image": u.get("image"), "state": state, "note": note})
+        return result
+
+    async def all_banners(self, with_pool: bool = False) -> List[Dict]:
+        rows = await self.db.get_active_banners()
+        return [await self.summary(row, with_pool=with_pool) for row in rows.values()]
+
+    @staticmethod
+    def hot(banners: List[Dict]) -> List[Dict]:
+        """Top 10 wie im Hot-Banner-Kanal: ziehbar, nach Ø Rückgabe."""
+        candidates = [
+            {**b, "pack_id": b["id"], "pct": b["ev_pct"]} for b in banners
+            if b["category"] != "Bonus" and b["price"] > 0 and b["remaining"] > 0 and not b["password"]
+            and b["status"] not in ("upcoming", "hits_out") and b["ev_pct"] is not None
+        ]
+        return rank_entries(candidates)
+
+    async def detail(self, pack_id: int) -> Optional[Dict]:
+        row = await self.db.get_banner(pack_id)
+        if not row:
+            return None
+        data = await self.summary(row, with_pool=True)
+        async with aiosqlite.connect(self.db.db_path) as conn:
+            cur = await conn.execute(
+                "SELECT changed_at, new_count FROM pack_history WHERE banner_id = ? ORDER BY id DESC LIMIT ?",
+                (pack_id, PACK_HISTORY_LIMIT))
+            history = [{"t": epoch(t), "packs": n} for t, n in reversed(await cur.fetchall())]
+            cur = await conn.execute(
+                "SELECT changed_at, old_cards, new_cards, old_coins, new_coins, old_players, new_players "
+                "FROM shipment_history WHERE banner_id = ? ORDER BY id DESC LIMIT 100", (pack_id,))
+            shipments = [{"t": epoch(r[0]), "cards": (r[2] or 0) - (r[1] or 0), "coins": (r[4] or 0) - (r[3] or 0),
+                          "players": (r[6] or 0) - (r[5] or 0), "total_cards": r[2]}
+                         for r in await cur.fetchall()]
+        data["history"] = history
+        data["shipments"] = shipments
+        return data
