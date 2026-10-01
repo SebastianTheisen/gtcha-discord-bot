@@ -198,6 +198,16 @@ async function showHot() {
   wireRows();
 }
 
+// Was alle Restpacks zusammen kosten und wie viel rechnerisch dabei rauskommt (aktualisiert sich mit den Packs)
+function restCost(b) {
+  if (!b.price || !b.remaining) return "";
+  const cost = b.price * b.remaining;
+  const diff = (b.left_value || 0) - cost;
+  const cls = diff >= 0 ? "good" : "bad";
+  return `<br>Alle ${num(b.remaining)} Restpacks kosten <b>${num(cost)} Coins</b>`
+    + `<br><span class="ev ${cls}">${diff >= 0 ? "+" : "−"}${num(Math.abs(diff))} Coins ${diff >= 0 ? "mehr zurück" : "weniger zurück"}</span>`;
+}
+
 function stat(label, value, sub = "") {
   return `<div class="stat"><div class="label">${label}</div><div class="value">${value}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
 }
@@ -307,7 +317,8 @@ async function showBanner(id) {
          🪙 umgewandelt: ${num(b.converted)} Coins${b.converted_max_cards != null ? ` · höchstens ${num(b.converted_max_cards)} Karten` : ""}<br>
          <i>Werte wie von der Seite geliefert</i>`) : ""}
       ${b.left_value != null ? stat("Noch im Banner (rechnerisch)", `${num(b.left_value)} Coins`,
-        b.left_per_pack != null ? `Ø ${num(b.left_per_pack)} pro Restpack${b.price ? ` (${pct(b.left_per_pack / b.price * 100)} vom Preis)` : ""}` : "") : ""}
+        (b.left_per_pack != null ? `Ø ${num(b.left_per_pack)} pro Restpack${b.price ? ` (${pct(b.left_per_pack / b.price * 100)} vom Preis)` : ""}` : "")
+        + restCost(b)) : ""}
       ${b.ship_cards != null && b.out_total == null ? stat("Verschickt", b.ship_cards ? `${num(b.ship_cards)} Karten` : "Noch nichts",
         b.ship_cards ? `${num(b.ship_value)} Coins Kartenwert · ${num(b.ship_players)} Spieler` : "") : ""}
       ${b.per_day ? stat("Pro Tag", `${b.per_day}×`) : ""}
