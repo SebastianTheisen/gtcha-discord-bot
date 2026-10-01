@@ -81,6 +81,7 @@ function row(b, rank) {
       ${flags(b)}
       <div class="row-card ${b.status === "hits_out" ? "done" : ""}" data-href="#/banner/${b.id}">
         <div class="media">
+          ${safeUrl(b.image) ? `<img class="media-bg" src="${esc(imgSrc(b.image))}" data-orig="${esc(b.image)}" alt="" aria-hidden="true">` : ""}
           ${img(b.image, b.title)}
           ${b.status !== "running" ? `<span class="status ${b.status}">${icon} ${label}</span>` : ""}
           <span class="price-pill">${coins(b.price)}</span>
@@ -300,6 +301,10 @@ async function showBanner(id) {
       ${b.hits_open != null ? stat("Hits noch drin", hitsText(b) + (b.unsure ? " ❓" : ""), b.cost_to_hit ? `Ø ${num(b.cost_to_hit)} Coins bis Hit` : "") : ""}
       ${b.min_value != null ? stat("Mindestens zurück", num(b.min_value) + " Coins", b.price ? pct(b.min_value / b.price * 100) + " vom Preis" : "") : ""}
       ${b.pool_value ? stat("Alle Karten", num(b.pool_value) + " Coins", b.all_packs_cost ? `Alle Packs: ${num(b.all_packs_cost)} (${pct(b.pool_value / b.all_packs_cost * 100)})` : "") : ""}
+      ${b.out_total != null ? stat("Aus dem Banner raus", `${num(b.out_total)} Coins`,
+        `umgewandelt ${num(b.converted)} · verschickt ${num(b.ship_counted)} (Werte der Seite)`) : ""}
+      ${b.left_value != null ? stat("Noch im Banner (rechnerisch)", `${num(b.left_value)} Coins`,
+        b.left_per_pack != null ? `Ø ${num(b.left_per_pack)} pro Restpack${b.price ? ` (${pct(b.left_per_pack / b.price * 100)} vom Preis)` : ""}` : "") : ""}
       ${b.ship_cards != null ? stat("Verschickt", b.ship_cards ? `${num(b.ship_cards)} Karten` : "Noch nichts",
         b.ship_cards ? `${num(b.ship_value)} Coins Kartenwert · ${num(b.ship_players)} Spieler` : "") : ""}
       ${b.per_day ? stat("Pro Tag", `${b.per_day}×`) : ""}

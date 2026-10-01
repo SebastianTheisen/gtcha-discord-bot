@@ -98,6 +98,7 @@ class BannerView:
             **self._rank_info(row.get('conditions')),
             "shipped": format_shipping(row.get('site_stats')),
             **self._shipping(row.get('site_stats')),
+            **self._out_of_banner(row, pool),
             "thread_id": thread_id or None,
             **self._out(pool, sure, winners, open_groups),
         }
@@ -120,9 +121,30 @@ class BannerView:
         """Verschickte Karten; Coins als Kartenwert (die Seite zählt ohne 10 % Steuer)."""
         st = json.loads(raw) if raw else None
         if not st:
-            return {"ship_cards": None, "ship_value": None, "ship_players": None}
+            return {"ship_cards": None, "ship_value": None, "ship_counted": None, "ship_players": None}
         return {"ship_cards": to_int(st.get("cards")), "ship_value": card_value(to_int(st.get("coins"))),
-                "ship_players": to_int(st.get("players"))}
+                "ship_counted": to_int(st.get("coins")), "ship_players": to_int(st.get("players"))}
+
+    @staticmethod
+    def _out_of_banner(row: Dict, pool: Optional[Dict]) -> Dict:
+        """Coins, die schon aus dem Banner raus sind (Werte der Seite) und was rechnerisch noch drin ist.
+
+        decided_value = total_kangen + total_sendprice (umgewandelt + verschickt, so von der Seite).
+        Für "noch drin" wird der Versand auf Kartenwert (×1,1) gerechnet, die Umwandlung wie geliefert.
+        """
+        st = json.loads(row['site_stats']) if row.get('site_stats') else {}
+        decided = row.get('decided_value')
+        if decided is None or not st:
+            return {"converted": None, "out_total": None, "left_value": None, "left_per_pack": None}
+        shipped = to_int(st.get("coins"))
+        converted = max(0, to_int(decided) - shipped)
+        left = per_pack = None
+        if pool and pool.get('total_value'):
+            left = max(0, to_int(pool['total_value']) - converted - card_value(shipped))
+            remaining = to_int(row.get('current_packs'))
+            per_pack = round(left / remaining) if remaining > 0 else None
+        return {"converted": converted, "out_total": converted + shipped, "left_value": left,
+                "left_per_pack": per_pack}
 
     @staticmethod
     def _rank_info(conditions: Optional[str]) -> Dict:
