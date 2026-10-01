@@ -12,9 +12,10 @@ from bot.threads import ThreadsMixin
 from bot.hits import HitsMixin
 from bot.medals import MedalsMixin
 from bot.hot_banner import HotBannerMixin
+from bot.fast_poll import FastPollMixin
 
 
-class GTCHABot(ScrapingMixin, MonitoringMixin, ThreadsMixin, HitsMixin, MedalsMixin, HotBannerMixin, commands.Bot):
+class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, HitsMixin, MedalsMixin, HotBannerMixin, commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
@@ -32,6 +33,7 @@ class GTCHABot(ScrapingMixin, MonitoringMixin, ThreadsMixin, HitsMixin, MedalsMi
         self._last_full_scrape: Optional[datetime] = None
         self._scrape_problems = 0
         self._problem_alerted = False
+        self._main_scrape_running = False
         self._rises_ignored = 0
         self._last_pool_alert: Optional[datetime] = None
 
@@ -148,6 +150,7 @@ class GTCHABot(ScrapingMixin, MonitoringMixin, ThreadsMixin, HitsMixin, MedalsMi
         # Erster Scrape sofort - über Scheduler triggern statt direkt aufrufen,
         # das vermeidet Konflikte mit dem regulären Scheduler-Job
         self.scheduler.modify_job('scrape_job', next_run_time=datetime.now())
+        self._start_fast_poll()
 
         self._startup_tasks = asyncio.gather(
             self._sync_medals_from_discord(),

@@ -194,15 +194,7 @@ class ScrapingMixin:
                     await self._sync_thread_title(pid)
 
                 # === KAUFBEDINGUNGEN und VERSAND-ZAHLEN aus pack/list ===
-                for pid, item in (getattr(scraper, '_api_pack_data', {}) or {}).items():
-                    changed = await self.db.update_conditions(pid, banner_conditions(item))
-                    if _int(item.get('point')) > 0:
-                        changed = await self.db.update_price(pid, _int(item.get('point'))) or changed
-                    changed = await self.db.update_site_stats(pid, shipping_stats(item)) or changed
-                    if changed:
-                        row = await self.db.get_banner(pid)
-                        if row and row.get('is_active'):
-                            await self._update_thread_embed(row)
+                await self._apply_site_data(getattr(scraper, '_api_pack_data', {}) or {})
 
                 # Hole alle bekannten Banner aus der DB
                 db_banner_ids = set(await self.db.get_all_active_banner_ids())
@@ -354,13 +346,32 @@ class ScrapingMixin:
             ))
         return banners
 
+    async def _apply_site_data(self, api_items: dict):
+        """Preis, Kaufbedingungen und Versand-Zahlen aus pack/list übernehmen; Startbeitrag bei Änderung."""
+        for pid, item in api_items.items():
+            changed = await self.db.update_conditions(pid, banner_conditions(item))
+            if _int(item.get('point')) > 0:
+                changed = await self.db.update_price(pid, _int(item.get('point'))) or changed
+            changed = await self.db.update_site_stats(pid, shipping_stats(item)) or changed
+            if changed:
+                row = await self.db.get_banner(pid)
+                if row and row.get('is_active'):
+                    await self._update_thread_embed(row)
+
     async def _scrape_with_timeout(self):
         """Wrapper für scrape_and_post mit konfigurierbarem Timeout und Retry-Logik."""
-        # Verhindert parallele Scrape-Läufe (z.B. Scheduler + /refresh gleichzeitig)
-        if self._scrape_lock.locked():
+        # Verhindert doppelte Scrapes (Scheduler + /refresh); auf den schnellen Abfrager wird gewartet
+        if self._main_scrape_running:
             logger.warning("Scrape läuft bereits - überspringe diesen Aufruf")
             return
 
+        self._main_scrape_running = True
+        try:
+            await self._scrape_with_timeout_locked()
+        finally:
+            self._main_scrape_running = False
+
+    async def _scrape_with_timeout_locked(self):
         async with self._scrape_lock:
             timeout_seconds = SCRAPE_TIMEOUT_SECONDS
             max_retries = 2
