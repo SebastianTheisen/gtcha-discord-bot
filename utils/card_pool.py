@@ -88,11 +88,13 @@ def pool_minimum(pool: Dict) -> Optional[Dict]:
 
 
 def medal_units(pool: Dict) -> List[Dict]:
-    """Alle Einheiten, die per Medaille (T1-T50) gemeldet werden können, teuerste zuerst.
+    """Alle Einheiten, die per Medaille (T1-T50) gemeldet werden können; "tier" = Medaille.
 
-    Mit Versand-Hits: alle Versand-Hits. Ohne: alle Karten aus der vollständigen Kartenliste (ältere
-    Pools kennen nur die Top-Karten). Jedes Exemplar ist eine Einheit (Karten-ID, ab dem zweiten
-    Exemplar mit Nummer; das erste behält die ID, damit gespeicherte Züge passen).
+    Mit Versand-Hits: zuerst alle Versand-Hits (nach Wert, wie bisher T1, T2, ...), danach die
+    normalen Karten nach Wert. So bleiben die Plätze der Hits gleich, auch wenn eine normale Karte
+    teurer ist als ein Hit. Ohne Versand-Hits: alle Karten nach Wert (ältere Pools kennen nur die
+    Top-Karten). Jedes Exemplar ist eine Einheit; bei normalen Karten behält das erste Exemplar die
+    Karten-ID als Schlüssel, damit gespeicherte Züge passen.
     """
     units = []
     if pool.get("hits"):
@@ -101,38 +103,40 @@ def medal_units(pool: Dict) -> List[Dict]:
             for n in range(copies):
                 key = c.get("id") or c["name"]
                 units.append({**c, "key": f"{key}#{n + 1}" if copies > 1 else str(key), "shipping_only": True})
-        return units
-    for c in pool.get("cards") or pool.get("top", []):
+        normal = [c for c in pool.get("cards") or [] if not c.get("hit")]
+    else:
+        normal = pool.get("cards") or pool.get("top", [])
+    for c in normal:
         key = str(c.get("id") or c["name"])
         for n in range(int(c.get("copies") or 1)):
             if len(units) >= MAX_MEDALS:
-                return units
+                break
             card = {k: v for k, v in c.items() if k != "copies"}
             units.append({**card, "key": key if n == 0 else f"{key}#{n + 1}", "shipping_only": False})
-    return units
+    return [{**u, "tier": f"T{i}"} for i, u in enumerate(units[:MAX_MEDALS], 1)]
 
 
 def tracked_units(pool: Dict) -> List[Dict]:
     """Karten, die einzeln verfolgt werden: alle Versand-Hits, sonst die drei wertvollsten Karten
     (mit Exemplaren: gibt es die teuerste Karte 3x, sind das T1, T2 und T3). Einheit 1-3 = T1-T3."""
     units = medal_units(pool)
-    return units if pool.get("hits") else units[:len(TIERS)]
+    if pool.get("hits"):
+        return [u for u in units if u["shipping_only"]]
+    return units[:len(TIERS)]
 
 
 def claimable_units(pool: Dict, price: Optional[int]) -> List[Dict]:
-    """Was man als gezogen melden kann: Einheiten ab Packpreis, höchstens T50 (Platz = Medaille).
-
-    Ohne Versand-Hits und ohne Packpreis (z.B. Gratis-Banner) wie bisher nur die drei teuersten.
-    """
+    """Was man als gezogen melden kann: alle Einheiten ab Packpreis (Versand-Hits und normale
+    Karten), Platz = "tier". Ohne Versand-Hits und ohne Packpreis (Gratis-Banner) nur T1-T3."""
     units = medal_units(pool)
     if not pool.get("hits") and not price:
         return units[:len(TIERS)]
-    return [u for u in units if not price or u["value"] >= price][:MAX_MEDALS]
+    return [u for u in units if not price or u["value"] >= price]
 
 
 def tier_keys(pool: Dict) -> Dict[str, str]:
     """Zuordnung T1-T50 -> Schlüssel (Platz in der Hit-Liste, nach Wert)."""
-    return {f"T{i}": unit["key"] for i, unit in enumerate(medal_units(pool)[:MAX_MEDALS], 1)}
+    return {unit["tier"]: unit["key"] for unit in medal_units(pool)}
 
 
 def is_relevant_hit(unit: Dict, price: Optional[int]) -> bool:

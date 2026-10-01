@@ -144,11 +144,16 @@ class MedalsMixin:
             listed = claimable_units(pool, price)
             if not pool.get('hits'):
                 listed = max(listed, tracked_units(pool), key=len)   # wie bisher mindestens T1-T3
-            available = max(1, min(len(tier_keys(pool)), len(listed)))
-        else:
-            available = len(TIERS)
-        if int(tier[1:]) > available:
-            return (f"❌ Diesen Banner gibt es nur mit T1–T{available}. "
+            tiers = [u["tier"] for u in listed]
+            if tier in tiers:
+                return None
+            if not tiers:
+                return "❌ Bei diesem Banner gibt es keine Karten ab Packpreis zum Melden."
+            highest = max(int(t[1:]) for t in tiers)
+            return (f"❌ Bei diesem Banner kann man T1–T{highest} melden (Karten ab Packpreis). "
+                    f"Die Nummer entspricht dem Platz in der Hit-Liste.")
+        if int(tier[1:]) > len(TIERS):
+            return (f"❌ Diesen Banner gibt es nur mit T1–T{len(TIERS)}. "
                     f"Die Nummer entspricht dem Platz in der Hit-Liste.")
         return None
 
