@@ -264,3 +264,17 @@ def test_explain_batch_kinds():
     # Hit mit gleichem Wert wie eine normale Karte: nur "vielleicht"
     maybe = explain_batch(hit_pool(), 1, net(3000), set())
     assert maybe["kind"] == "maybe" and maybe["maybe"][0]["keys"] == [keys_by_name(hit_pool())["Klein"]]
+
+
+def test_average_return_from_site_numbers():
+    from utils.card_pool import out_of_banner_value
+    pool = _glurak_pool()
+    keys = keys_by_name(pool)
+    # umgewandelt voll, verschickt ohne Steuer (x1,1), Lugia per Medaille gezogen aber noch nicht verschickt
+    out = out_of_banner_value(pool, 50_000, 16_100, {keys["Lugia"]})
+    assert out == 50_000 + 17_710 + 35_420
+    stats = estimate(pool, 100, pool["total_count"], {keys["Lugia"]}, 1000, out)
+    assert stats["data_based"] and round(stats["ev"]) == round((pool["total_value"] - out) / 100)
+    assert out_of_banner_value(pool, None, 16_100) is None
+    # mehr raus als im Pool (z.B. neuer Pool): zurück zur Schätzung
+    assert estimate(pool, 100, pool["total_count"], set(), 1000, pool["total_value"] * 2)["data_based"] is False

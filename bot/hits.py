@@ -30,13 +30,22 @@ class HitsMixin:
         return text
 
     async def _pool_stats(self, banner, thread_data: dict) -> Optional[dict]:
-        """Ø Rückgabe und Hit-Chance aus Kartenpool, Rest-Packs, Medaillen und erkannten Hits."""
+        """Ø Rückgabe und Hit-Chance aus Kartenpool, Rest-Packs, Medaillen und erkannten Hits.
+
+        Die Ø Rückgabe kommt aus den Zahlen der Seite (umgewandelt + verschickt), sobald sie da sind.
+        """
         get = lambda key: self._get_banner_value(banner, key)
-        pool = await self.db.get_card_pool(get('pack_id'))
+        pid = get('pack_id')
+        pool = await self.db.get_card_pool(pid)
         if not pool:
             return None
-        pulled, _, _, _ = await self._pulled_cards(int(thread_data['thread_id']), get('pack_id'), pool)
-        return estimate(pool, get('current_packs'), get('total_packs'), pulled, get('price_coins'))
+        pulled, _, winners, _ = await self._pulled_cards(int(thread_data['thread_id']), pid, pool)
+        row = await self.db.get_banner(pid) or {}
+        shipped_keys = set((await self.db.get_pull_tracking(pid))["pulled"])
+        site = json.loads(row['site_stats']) if row.get('site_stats') else {}
+        out_value = out_of_banner_value(pool, row.get('converted'), _int(site.get('coins')),
+                                        set(winners) - shipped_keys)
+        return estimate(pool, get('current_packs'), get('total_packs'), pulled, get('price_coins'), out_value)
 
     async def _pulled_cards(self, thread_id: int, pack_id: int, pool: dict) -> tuple:
         """(gezogene Karten inkl. Stellvertreter, nur automatisch erkannte, Gewinner, offene ❓-Gruppen).

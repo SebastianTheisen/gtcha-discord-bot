@@ -167,12 +167,28 @@ def prefer_claimed(match: Dict, expected: Set[str]) -> Dict:
     return match
 
 
-def estimate(pool: Dict, remaining: Optional[int], total_packs: Optional[int],
-             pulled_keys: Set[str], price: Optional[int]) -> Optional[Dict]:
-    """Geschätzte Ø-Rückgabe pro Zug und Hit-Chance für die verbleibenden Packs.
+def out_of_banner_value(pool: Dict, converted: Optional[int], shipped_counted: Optional[int],
+                        held_keys: Set[str] = frozenset()) -> Optional[int]:
+    """Kartenwert, der schon aus dem Banner raus ist (None = keine Zahlen der Seite).
 
-    Verfolgte Einheiten gelten als noch drin, solange sie nicht als gezogen bekannt sind
-    (Versand erkannt oder Medaille). Alle übrigen Züge zählen als Durchschnittszüge aus dem Rest.
+    umgewandelt (total_kangen) zählt die Seite mit vollem Kartenwert (bestätigt an 24060: 55.575 Züge,
+    Verhältnis 1,001), verschickt (total_sendprice) ohne 10 % Steuer -> ×1,1. Dazu gezogene Hits, die
+    per Medaille gemeldet, aber noch nicht verschickt sind (held_keys).
+    """
+    if converted is None:
+        return None
+    units = {u["key"]: u["value"] for u in tracked_units(pool)}
+    return converted + card_value(shipped_counted) + sum(units.get(k, 0) for k in held_keys)
+
+
+def estimate(pool: Dict, remaining: Optional[int], total_packs: Optional[int],
+             pulled_keys: Set[str], price: Optional[int], out_value: Optional[int] = None) -> Optional[Dict]:
+    """Ø-Rückgabe pro Zug und Hit-Chance für die verbleibenden Packs.
+
+    Mit out_value (Kartenwert, der laut Seite schon umgewandelt/verschickt ist, siehe
+    out_of_banner_value) wird die Ø-Rückgabe aus echten Zahlen berechnet: (Poolwert - raus) / Restpacks.
+    Ohne diese Zahlen Schätzung: verfolgte Einheiten gelten als noch drin, solange sie nicht als
+    gezogen bekannt sind; alle übrigen Züge zählen als Durchschnittszüge aus dem Rest.
     """
     n_pool = pool.get("total_count") or 0
     if n_pool <= 0:
@@ -202,6 +218,10 @@ def estimate(pool: Dict, remaining: Optional[int], total_packs: Optional[int],
         rest_hits = hits_total - sum(1 for u in units if u.get("hit", u["shipping_only"]))
         hits_left = (sum(1 for u in open_units if u.get("hit", u["shipping_only"]))
                      + max(0, rest_hits) * rest_left_share)
+    # Echte Zahlen der Seite, wenn plausibel (mehr raus als im Pool deutet auf einen neuen Pool hin)
+    data_based = out_value is not None and out_value <= pool["total_value"] * 1.02
+    if data_based:
+        value_left = max(0, pool["total_value"] - out_value)
     ev = value_left / remaining
     keys = tier_keys(pool)
     hits_open_now = len(relevant_open) if pool.get("hits") else hits_left
@@ -211,6 +231,7 @@ def estimate(pool: Dict, remaining: Optional[int], total_packs: Optional[int],
         "ev": ev,
         "ev_pct": ev / price * 100 if price else None,
         "estimated": pulled > 0,
+        "data_based": data_based,
         "hits_total": hits_total,
         "hits_open": len(relevant_open) if pool.get("hits") else sum(
             1 for u in open_units if u.get("hit", u["shipping_only"])),
