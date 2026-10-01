@@ -140,7 +140,6 @@ def estimate(pool: Dict, remaining: Optional[int], total_packs: Optional[int],
 
     rest_count = n_pool - len(units)
     rest_value = pool["total_value"] - sum(u["value"] for u in units)
-    rest_hits = pool.get("hits_total", 0) - sum(1 for u in units if u.get("hit", u["shipping_only"]))
     pulled = max(0, min(total, n_pool) - remaining)
     unknown_pulls = max(0, min(pulled - known_pulled, rest_count))
     rest_left_share = (rest_count - unknown_pulls) / rest_count if rest_count > 0 else 0.0
@@ -156,7 +155,10 @@ def estimate(pool: Dict, remaining: Optional[int], total_packs: Optional[int],
                      + max(0, rest_hits) * rest_left_share)
     ev = value_left / remaining
     keys = tier_keys(pool)
+    hits_open_now = len(relevant_open) if pool.get("hits") else hits_left
     return {
+        # Erwartete Züge bis zum ersten Hit (ohne Zurücklegen): (N + 1) / (h + 1)
+        "cost_to_hit": price * (remaining + 1) / (hits_open_now + 1) if price and hits_open_now >= 1 else None,
         "ev": ev,
         "ev_pct": ev / price * 100 if price else None,
         "estimated": pulled > 0,

@@ -125,3 +125,11 @@ def test_hits_below_pack_price_do_not_count():
     assert stats["hits_total"] == 4          # 3.000er-Hit liegt unter dem Packpreis
     assert [u["name"] for u in stats["open_units"]] == ["Top", "Zweiter", "Gleich A", "Gleich B"]
     assert estimate(pool, 100, 100, set(), None)["hits_total"] == 5
+
+
+def test_cost_to_next_hit():
+    pool = hit_pool()
+    stats = estimate(pool, 99, 100, set(), 1000)
+    # 5 offene Hits, 99 Packs: (99 + 1) / (5 + 1) Züge à 1.000 Coins
+    assert round(stats["cost_to_hit"]) == round(1000 * 100 / 6)
+    assert estimate(pool, 99, 100, set(), None)["cost_to_hit"] is None

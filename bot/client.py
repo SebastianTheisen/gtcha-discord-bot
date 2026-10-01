@@ -51,7 +51,7 @@ from utils.card_pool import (
 
 
 # Erhöhen, wenn der Startbeitrag neue Felder bekommt: alle Threads werden dann einmal aktualisiert
-EMBED_VERSION = 2
+EMBED_VERSION = 3
 # Endspurt-Alarm, sobald höchstens so viel Prozent der Packs übrig sind und noch Hits drin sind
 ENDSPURT_PERCENT = float(os.getenv("ENDSPURT_PERCENT") or "10")
 # Zeitraum für das Abverkaufs-Tempo
@@ -1035,6 +1035,8 @@ class GTCHABot(commands.Bot):
                 hits_text = f"{stats['hits_open']} von {stats['hits_total']} noch drin · T1–T3: {open_tiers}"
             else:
                 hits_text = f"Top 3 noch drin: {open_tiers}"
+            if stats.get('cost_to_hit'):
+                hits_text += f"\nØ Kosten bis zum nächsten Hit: ca. {fmt_coins(stats['cost_to_hit'])} Coins"
             embed.add_field(name="Hits", value=hits_text, inline=False)
 
         if minimum:
