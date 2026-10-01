@@ -123,7 +123,6 @@ class Database:
             # Migration: Kartenpool (JSON) pro Banner, Top-5-Nachricht und Lohnt-sich-Hinweis pro Thread
             for table, col in [('banners', 'card_pool TEXT'),
                                ('banners', 'decided_value INTEGER'),
-                               ('banners', 'detected_tiers TEXT'),
                                ('banners', 'ship_count INTEGER'),
                                ('banners', 'ship_value INTEGER'),
                                ('banners', 'pulled_cards TEXT'),
@@ -394,28 +393,6 @@ class Database:
             row = await cursor.fetchone()
             return dict(row) if row else None
 
-    async def get_medal_status(self, thread_id: int) -> Dict[str, bool]:
-        """Gibt den Status der Medaillen für einen Thread zurück.
-
-        Returns:
-            Dict mit 'T1', 'T2', 'T3' als Keys und True/False als Werte
-            (True = vergeben, False = verfügbar)
-        """
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                "SELECT t1_claimed, t2_claimed, t3_claimed FROM discord_threads WHERE thread_id = ?",
-                (thread_id,)
-            )
-            row = await cursor.fetchone()
-            if row:
-                return {
-                    'T1': bool(row['t1_claimed']),
-                    'T2': bool(row['t2_claimed']),
-                    'T3': bool(row['t3_claimed'])
-                }
-            return {'T1': False, 'T2': False, 'T3': False}
-
     async def delete_thread(self, banner_id: int) -> None:
         async with aiosqlite.connect(self.db_path) as db:
             # Erst Medals löschen die zu diesem Thread gehören
@@ -481,30 +458,6 @@ class Database:
             )
             rows = await cursor.fetchall()
             return [row[0] for row in rows]
-
-    async def increment_not_found_count(self, pack_id: int) -> int:
-        """Erhöht not_found_count um 1 und gibt den neuen Wert zurück."""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "UPDATE banners SET not_found_count = not_found_count + 1 WHERE pack_id = ?",
-                (pack_id,)
-            )
-            await db.commit()
-
-            cursor = await db.execute(
-                "SELECT not_found_count FROM banners WHERE pack_id = ?", (pack_id,)
-            )
-            row = await cursor.fetchone()
-            return row[0] if row else 0
-
-    async def reset_not_found_count(self, pack_id: int) -> None:
-        """Setzt not_found_count auf 0 zurück."""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "UPDATE banners SET not_found_count = 0 WHERE pack_id = ?",
-                (pack_id,)
-            )
-            await db.commit()
 
     async def batch_reset_not_found_count(self, pack_ids: List[int]) -> None:
         """Setzt not_found_count für alle angegebenen Banner auf 0 (Batch-Update)."""
@@ -592,17 +545,6 @@ class Database:
             await db.commit()
             return len(old_ids)
 
-    async def get_expired_banners(self, threshold: int = 2) -> List[Dict]:
-        """Gibt Banner zurück die >= threshold mal nicht gefunden wurden."""
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                "SELECT * FROM banners WHERE not_found_count >= ? AND is_active = 1",
-                (threshold,)
-            )
-            rows = await cursor.fetchall()
-            return [dict(row) for row in rows]
-
     async def mark_banner_inactive(self, pack_id: int) -> None:
         """Markiert einen Banner als inaktiv (statt löschen)."""
         now = datetime.now().isoformat()
@@ -621,26 +563,6 @@ class Database:
                 (banner_id,)
             )
             await db.commit()
-
-    async def get_medal_count(self, thread_id: int) -> int:
-        """Gibt die Anzahl der bereits vergebenen Medaillen für einen Thread zurück."""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT COUNT(*) FROM medals WHERE thread_id = ?",
-                (thread_id,)
-            )
-            row = await cursor.fetchone()
-            return row[0] if row else 0
-
-    async def get_medals_for_thread(self, thread_id: int) -> List[str]:
-        """Gibt Liste der vergebenen Medaillen-Tiers für einen Thread zurück."""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT tier FROM medals WHERE thread_id = ?",
-                (thread_id,)
-            )
-            rows = await cursor.fetchall()
-            return [row[0] for row in rows]
 
     async def update_probability_message_id(self, thread_id: int, message_id: int) -> None:
         """Speichert die Message-ID der Wahrscheinlichkeits-Nachricht."""

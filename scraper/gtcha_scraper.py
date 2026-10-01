@@ -341,52 +341,6 @@ class GTCHAScraper:
                 pass
             logger.debug("Heartbeat gestoppt")
 
-    async def _fetch_pack_counts_via_proxy(self):
-        """Holt Pack-Zahlen über den konfigurierten Proxy via curl subprocess.
-
-        curl ist der zuverlässigste SOCKS5-Client — Python HTTP-Bibliotheken
-        haben Kompatibilitätsprobleme mit WARP's SOCKS5-Implementierung.
-        """
-        if not SCRAPER_PROXY:
-            return
-
-        import json as _json
-        proxy_addr = SCRAPER_PROXY.replace('socks5://', '')
-        url = f"{self.base_url}/api/user/pack/list?_={int(time.time())}"
-        logger.info(f"[PROXY-API] Hole Pack-Zahlen via curl+Proxy ({proxy_addr})...")
-
-        cmd = [
-            'curl', '--socks5', proxy_addr,
-            url,
-            '-s', '--max-time', '25',
-            '-H', 'Accept-Language: de-DE,de;q=0.9,en;q=0.8',
-            '-H', 'Accept: application/json',
-            '-H', 'Cache-Control: no-cache',
-            '-H', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        ]
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-            if proc.returncode == 0 and stdout:
-                data = _json.loads(stdout)
-                items = data.get('list', [])
-                updated = 0
-                for item in items:
-                    pid = item.get('id')
-                    if pid:
-                        self._api_pack_data[int(pid)] = item
-                        updated += 1
-                logger.info(f"[PROXY-API] {updated} Pack-Zahlen via curl+Proxy geladen")
-            else:
-                err = stderr.decode()[:200] if stderr else f"returncode={proc.returncode}"
-                logger.warning(f"[PROXY-API] curl Fehler: {err} - Fallback auf direkte Pack-Zahlen")
-        except Exception as e:
-            logger.warning(f"[PROXY-API] Fehler: {e} - Fallback auf direkte Pack-Zahlen")
-
     async def fetch_pack_list(self) -> Dict[int, Dict]:
         """Alle Banner mit Pack-Zahlen in einer Anfrage (pack/list) über die Browser-Sitzung (Tor).
 
@@ -946,54 +900,6 @@ class GTCHAScraper:
         except Exception as e:
             logger.debug(f"   Parse Fehler für {pack_id}: {e}")
             return None
-
-    async def scrape_banner_details(self, pack_id: int) -> Tuple[Optional[str], Optional[bytes]]:
-        """Holt den Best Hit (erste Karte) von der Detail-Seite."""
-        detail_url = f"{self.base_url}/pack-detail?packId={pack_id}"
-
-        try:
-            logger.debug(f"   Lade Detail-Seite: {detail_url}")
-            await self._page.goto(detail_url, wait_until="domcontentloaded", timeout=90000)
-            await self._random_delay(2.0, 4.0)
-
-            # Suche nach der ersten Karte (Rang 1)
-            # Die erste .card-container hat rank-icon-1
-            # Name ist in .card-info .name .text
-
-            # Methode 1: Erste Karte mit rank-icon-1
-            first_card = await self._page.query_selector('.card-container:has(.rank-icon-1)')
-            if first_card:
-                name_el = await first_card.query_selector('.name .text, .name span')
-                if name_el:
-                    text = await name_el.inner_text()
-                    if text and len(text.strip()) > 2:
-                        logger.debug(f"   Best Hit: {text.strip()}")
-                        return text.strip(), None
-
-            # Methode 2: Erste .card-container
-            first_card = await self._page.query_selector('.card-container')
-            if first_card:
-                name_el = await first_card.query_selector('.name .text, .name span, .name')
-                if name_el:
-                    text = await name_el.inner_text()
-                    if text and len(text.strip()) > 2:
-                        logger.debug(f"   Best Hit: {text.strip()}")
-                        return text.strip(), None
-
-            # Methode 3: Direkt .name .text suchen
-            name_el = await self._page.query_selector('.card-info .name .text, .name .text')
-            if name_el:
-                text = await name_el.inner_text()
-                if text and len(text.strip()) > 2:
-                    logger.debug(f"   Best Hit: {text.strip()}")
-                    return text.strip(), None
-
-            logger.debug(f"   Kein Best Hit gefunden für {pack_id}")
-            return None, None
-
-        except Exception as e:
-            logger.debug(f"   Detail-Seite Fehler: {e}")
-            return None, None
 
     def _convert_to_scraped_banners(self) -> List[ScrapedBanner]:
         """Konvertiert zu ScrapedBanner Objekten."""

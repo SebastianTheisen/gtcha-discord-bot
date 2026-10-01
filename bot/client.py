@@ -38,6 +38,9 @@ from utils.notifications import (
 from utils.rate_limiter import discord_rate_limiter
 from utils.memory_monitor import memory_monitor
 from utils.cache import banner_cache
+from utils.banner_info import (
+    banner_conditions, chance_at_least_one, format_conditions, to_int as _int,
+)
 from utils.card_pool import (
     estimate, fmt_coins, fmt_pct, TIERS, MAX_LISTED, EMBEDS_PER_MESSAGE, decided_value, detect_jump_pulls,
     match_shipped_hits, shipment_values, tier_keys, tracked_units,
@@ -48,54 +51,8 @@ from utils.card_pool import (
 ENDSPURT_PERCENT = float(os.getenv("ENDSPURT_PERCENT") or "10")
 # Zeitraum für das Abverkaufs-Tempo
 SALES_WINDOW_HOURS = 2
-RANK_ORDER = ("white", "bronze", "silver", "gold", "rainbow", "black")
-RANK_NAMES = {"white": "Weiß", "bronze": "Bronze", "silver": "Silber", "gold": "Gold",
-              "rainbow": "Rainbow", "black": "Black"}
-
-
-def banner_conditions(item: dict) -> dict:
-    """Kaufbedingungen eines Banners aus pack/list."""
-    badges = item.get("badges") or []
-    return {
-        "ranks": badges if isinstance(badges, list) else [],
-        "min_charge": _int(item.get("min_charge_amount")),
-        "password": bool(item.get("password_flag")),
-    }
-
-
-def format_conditions(raw: Optional[str]) -> Optional[str]:
-    """Kaufbedingungen als Text für den Startbeitrag (None, solange keine Daten da sind)."""
-    if not raw:
-        return None
-    cond = json.loads(raw)
-    lines = []
-    ranks = [r for r in cond.get("ranks", []) if r in RANK_ORDER]
-    if "all" in cond.get("ranks", []) or not ranks or min(RANK_ORDER.index(r) for r in ranks) == 0:
-        lines.append("Alle Mitgliedsränge")
-    else:
-        lowest = min(ranks, key=RANK_ORDER.index)
-        lines.append(f"Ab Mitgliedsrang **{RANK_NAMES[lowest]}**")
-    if cond.get("min_charge"):
-        lines.append(f"Mindest-Aufladung: {fmt_coins(cond['min_charge'])} Coins im Monat")
-    if cond.get("password"):
-        lines.append("🔒 Nur mit Passwort")
-    return "\n".join(lines)
-
-
 # Zugzahlen für die Hit-Chance in der 🎯-Nachricht
 HIT_CHANCE_PULLS = (1, 10, 50)
-
-
-def chance_at_least_one(packs: int, hits: int, pulls: int) -> float:
-    """Wahrscheinlichkeit in %, bei `pulls` Zügen aus `packs` Packs mindestens einen der `hits` zu ziehen."""
-    if hits <= 0 or packs <= 0:
-        return 0.0
-    if pulls > packs - hits:
-        return 100.0
-    none = 1.0
-    for i in range(pulls):
-        none *= (packs - hits - i) / (packs - i)
-    return (1 - none) * 100
 
 
 # Fehlende Kartenpools, die pro Scrape geladen werden (Nachrüsten bestehender Threads)
@@ -113,11 +70,6 @@ MEDAL_EMOJIS = {"T1": "🥇", "T2": "🥈", "T3": "🥉", "T4": "4️⃣", "T5":
 EMOJI_TO_MEDAL = {emoji: tier for tier, emoji in MEDAL_EMOJIS.items()}
 
 
-def _int(value) -> int:
-    try:
-        return int(float(value or 0))
-    except (TypeError, ValueError):
-        return 0
 
 
 def format_end_date_countdown(sale_end_date: str) -> str:
