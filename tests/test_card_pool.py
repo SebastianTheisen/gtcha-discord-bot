@@ -22,6 +22,11 @@ def hit_pool():
     ])
 
 
+def net(value):
+    """Betrag, wie ihn total_sendprice zählt (ohne 10 % Steuer)."""
+    return round(value / 1.1)
+
+
 def keys_by_name(pool):
     return {u["name"]: u["key"] for u in tracked_units(pool)}
 
@@ -41,7 +46,7 @@ def test_summarize_cards_without_cards_returns_none():
 
 def test_unique_hit_is_certain_even_with_normal_cards_in_same_shipment():
     pool = hit_pool()
-    result = match_shipped_hits(pool, 2, 50000 + 500, set())
+    result = match_shipped_hits(pool, 2, net(50000 + 500), set())
     assert result["certain"] == [keys_by_name(pool)["Top"]]
     assert result["groups"] == [] and result["maybe"] == []
 
@@ -49,7 +54,7 @@ def test_unique_hit_is_certain_even_with_normal_cards_in_same_shipment():
 def test_equal_valued_hits_form_a_group():
     pool = hit_pool()
     keys = keys_by_name(pool)
-    result = match_shipped_hits(pool, 1, 8000, set())
+    result = match_shipped_hits(pool, 1, net(8000), set())
     assert result["certain"] == []
     assert result["groups"] == [{"value": 8000, "value_max": 8000,
                                  "keys": [keys["Gleich A"], keys["Gleich B"]], "pulled": 1}]
@@ -58,12 +63,12 @@ def test_equal_valued_hits_form_a_group():
 def test_both_equal_valued_hits_shipped_are_certain():
     pool = hit_pool()
     keys = keys_by_name(pool)
-    assert match_shipped_hits(pool, 2, 16000, set())["certain"] == [keys["Gleich A"], keys["Gleich B"]]
+    assert match_shipped_hits(pool, 2, net(16000), set())["certain"] == [keys["Gleich A"], keys["Gleich B"]]
 
 
 def test_hit_with_same_value_as_normal_card_is_only_possible():
     pool = hit_pool()
-    result = match_shipped_hits(pool, 1, 3000, set())
+    result = match_shipped_hits(pool, 1, net(3000), set())
     assert result["certain"] == [] and result["groups"] == []
     assert result["maybe"] == [{"value": 3000, "value_max": 3000,
                                 "keys": [keys_by_name(pool)["Klein"]], "pulled": 0}]
@@ -71,14 +76,14 @@ def test_hit_with_same_value_as_normal_card_is_only_possible():
 
 def test_shipment_of_normal_cards_or_unknown_value_detects_nothing():
     pool = hit_pool()
-    assert match_shipped_hits(pool, 1, 500, set()) == {"certain": [], "groups": [], "maybe": []}
+    assert match_shipped_hits(pool, 1, net(500), set()) == {"certain": [], "groups": [], "maybe": []}
     assert match_shipped_hits(pool, 1, 12345, set()) == {"certain": [], "groups": [], "maybe": []}
 
 
 def test_already_pulled_hit_is_not_detected_again():
     pool = hit_pool()
     top = keys_by_name(pool)["Top"]
-    assert match_shipped_hits(pool, 1, 50000, {top})["certain"] == []
+    assert match_shipped_hits(pool, 1, net(50000), {top})["certain"] == []
 
 
 def test_estimate_at_start_is_pool_average():
@@ -149,15 +154,15 @@ def test_cost_to_next_hit():
 
 def test_drifted_card_value_still_matches_within_tolerance():
     pool = hit_pool()
-    # Top-Hit ist inzwischen 50.240 statt 50.000 wert
-    assert match_shipped_hits(pool, 1, 50240, set())["certain"] == [keys_by_name(pool)["Top"]]
+    # Rundung: Top-Hit wird mit 50.240 statt 50.000 gezählt (< 1 %)
+    assert match_shipped_hits(pool, 1, net(50240), set())["certain"] == [keys_by_name(pool)["Top"]]
 
 
 def test_shipment_needing_one_of_several_similar_hits_becomes_group():
-    # Wie 24111: 3 Karten, Summe nur mit genau einem Hit erreichbar, mehrere Hits kommen in Frage
+    # 3 Karten, Summe nur mit genau einem Hit erreichbar, zwei gleich teure Hits kommen in Frage
     pool = summarize_cards([card(1, 26180, hit=True), card(2, 25410, hit=True), card(3, 18260, hit=True),
                             card(4, 18260, hit=True), card(5, 5000, copies=20), card(6, 300, copies=500)])
-    result = match_shipped_hits(pool, 3, 25915, set())
+    result = match_shipped_hits(pool, 3, net(18260 + 5000 + 300), set())
     assert result["certain"] == []
     assert len(result["groups"]) == 1 and result["groups"][0]["pulled"] == 1
 
@@ -166,7 +171,15 @@ def test_identical_duplicate_hits_are_checked_off_one_by_one():
     # Wie 24158: 5 Exemplare derselben Karte, eins wird verschickt -> genau eins sicher abgehakt
     pool = summarize_cards([card(1, 165000, copies=5, hit=True, name="Box"), card(2, 55000, copies=10),
                             card(3, 300, copies=200)])
-    result = match_shipped_hits(pool, 1, 165000, set())
+    result = match_shipped_hits(pool, 1, 150000, set())
     assert len(result["certain"]) == 1 and result["groups"] == []
-    second = match_shipped_hits(pool, 1, 165000, set(result["certain"]))
+    second = match_shipped_hits(pool, 1, 150000, set(result["certain"]))
     assert len(second["certain"]) == 1 and second["certain"] != result["certain"]
+
+
+def test_shipment_values_are_counted_without_tax():
+    # Echte Fälle: gezählter Betrag = Kartenwert / 1,1
+    pool = summarize_cards([card(1, 18260, hit=True, name="Hit 18"), card(2, 25410, hit=True),
+                            card(3, 660, copies=200), card(4, 300, copies=500)])
+    assert match_shipped_hits(pool, 1, 16600, set())["certain"] == [keys_by_name(pool)["Hit 18"]]
+    assert match_shipped_hits(pool, 1, 18260, set())["certain"] == []   # Bruttowert passt nicht mehr
