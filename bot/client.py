@@ -44,10 +44,12 @@ from utils.banner_info import (
 )
 from utils.card_pool import (
     estimate, fmt_coins, fmt_pct, TIERS, MAX_LISTED, EMBEDS_PER_MESSAGE, decided_value, detect_jump_pulls,
-    match_shipped_hits, shipment_values, tier_keys, tracked_units,
+    match_shipped_hits, pool_minimum, shipment_values, tier_keys, tracked_units,
 )
 
 
+# Erhöhen, wenn der Startbeitrag neue Felder bekommt: alle Threads werden dann einmal aktualisiert
+EMBED_VERSION = 1
 # Endspurt-Alarm, sobald höchstens so viel Prozent der Packs übrig sind und noch Hits drin sind
 ENDSPURT_PERCENT = float(os.getenv("ENDSPURT_PERCENT") or "10")
 # Zeitraum für das Abverkaufs-Tempo
@@ -255,6 +257,7 @@ class GTCHABot(commands.Bot):
         self._startup_tasks = asyncio.gather(
             self._sync_medals_from_discord(),
             self._cleanup_duplicate_probability_messages(),
+            self._refresh_all_embeds_once(),
             return_exceptions=True,
         )
 
@@ -922,7 +925,7 @@ class GTCHABot(commands.Bot):
 
     def _build_banner_embed(self, banner, title_prefix: str = None, stats: Optional[dict] = None,
                             tempo: Optional[str] = None, conditions: Optional[str] = None,
-                            shipped: Optional[str] = None) -> discord.Embed:
+                            shipped: Optional[str] = None, minimum: Optional[str] = None) -> discord.Embed:
         """Erstellt ein Embed für einen Banner (funktioniert mit Objekt oder Dict)."""
         # Helper für Zugriff
         get = lambda key, default=None: self._get_banner_value(banner, key, default)
@@ -985,6 +988,8 @@ class GTCHABot(commands.Bot):
                 hits_text = f"Top 3 noch drin: {open_tiers}"
             embed.add_field(name="Hits", value=hits_text, inline=False)
 
+        if minimum:
+            embed.add_field(name="Mindestens zurück pro Zug", value=minimum, inline=False)
         if tempo:
             embed.add_field(name="Abverkauf", value=tempo, inline=False)
         if shipped:
@@ -1321,8 +1326,9 @@ class GTCHABot(commands.Bot):
             row = await self.db.get_banner(pack_id) or {}
             conditions = format_conditions(row.get('conditions'))
             shipped = format_shipping(row.get('site_stats'))
+            minimum = self._minimum_text(await self.db.get_card_pool(pack_id), row.get('price_coins'))
             new_embed = self._build_banner_embed(banner, stats=stats, tempo=tempo, conditions=conditions,
-                                                 shipped=shipped)
+                                                 shipped=shipped, minimum=minimum)
 
             # Message updaten
             await discord_rate_limiter.acquire("message_edit")
@@ -1404,6 +1410,32 @@ class GTCHABot(commands.Bot):
         detected = set((await self.db.get_pull_tracking(pack_id))["pulled"])
         keys = tier_keys(pool)
         return {t: t in medals or keys.get(t) in detected for t in TIERS}
+
+    @staticmethod
+    def _minimum_text(pool: Optional[dict], price) -> Optional[str]:
+        """'300 Coins (22,5 % vom Preis) · 500× Karte' aus dem niedrigsten Kartenwert des Pools."""
+        low = pool_minimum(pool) if pool and pool.get('total_count') else None
+        if not low:
+            return None
+        text = f"{fmt_coins(low['value'])} Coins"
+        if price:
+            text += f" ({fmt_pct(low['value'] / _int(price) * 100)} % vom Preis)"
+        if low.get('name'):
+            text += f" · {fmt_coins(low['copies'])}× „{low['name']}“"
+        elif low.get('copies'):
+            text += f" · {fmt_coins(low['copies'])} Karten mit diesem Wert"
+        return text
+
+    async def _refresh_all_embeds_once(self):
+        """Aktualisiert alle Startbeiträge einmal, wenn neue Felder dazugekommen sind."""
+        if await self.db.get_meta('embed_version') == str(EMBED_VERSION):
+            return
+        rows = await self.db.get_active_banners()
+        logger.info(f"Neue Felder im Startbeitrag: aktualisiere {len(rows)} Threads einmalig...")
+        for row in rows.values():
+            await self._update_thread_embed(row)
+        await self.db.set_meta('embed_version', str(EMBED_VERSION))
+        logger.info("Startbeiträge aktualisiert")
 
     async def _check_endspurt(self, thread: discord.Thread, thread_data: dict, stats: dict, banner, silent: bool):
         """Einmaliger Alarm, wenn nur noch wenige Packs übrig und noch Hits drin sind."""

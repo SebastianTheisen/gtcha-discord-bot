@@ -51,7 +51,34 @@ def summarize_cards(cards: List[Dict]) -> Optional[Dict]:
         "hits": [{k: c[k] for k in ("id", "name", "value", "image", "copies")} for c in parsed if c["hit"]],
         "top": [{k: c[k] for k in ("id", "name", "value", "image", "hit")} for c in parsed[:5]],
         "normal_values": normal_values,
+        "min": _min_card(parsed),
     }
+
+
+def _min_card(parsed: List[Dict]) -> Optional[Dict]:
+    cards = [c for c in parsed if c["copies"] > 0]
+    if not cards:
+        return None
+    low = min(c["value"] for c in cards)
+    same = [c for c in cards if c["value"] == low]
+    return {"value": low, "copies": sum(c["copies"] for c in same),
+            "name": same[0]["name"] if len(same) == 1 else None}
+
+
+def pool_minimum(pool: Dict) -> Optional[Dict]:
+    """Niedrigster Kartenwert im Pool = was ein Zug mindestens zurückbringt.
+
+    Ältere gespeicherte Pools haben noch kein "min"; dann aus den Kartenwerten ohne Namen.
+    """
+    if pool.get("min"):
+        return pool["min"]
+    values = {int(v): n for v, n in (pool.get("normal_values") or {}).items()}
+    for hit in pool.get("hits") or []:
+        values[hit["value"]] = values.get(hit["value"], 0) + int(hit.get("copies") or 1)
+    if not values:
+        return None
+    low = min(values)
+    return {"value": low, "copies": values[low], "name": None}
 
 
 def tracked_units(pool: Dict) -> List[Dict]:

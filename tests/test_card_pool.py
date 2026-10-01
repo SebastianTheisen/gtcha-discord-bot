@@ -109,3 +109,11 @@ def test_jump_detection_for_banners_without_shipping_hits():
     assert detect_jump_pulls(pool, 1000, set()) == []
     assert detect_jump_pulls(pool, 91000, set()) == [keys["Karte 1"]]
     assert detect_jump_pulls(pool, 61000, set()) == [keys["Karte 2"], keys["Karte 3"]]
+
+
+def test_pool_minimum_from_new_and_old_pools():
+    from utils.card_pool import pool_minimum
+    pool = hit_pool()
+    assert pool_minimum(pool) == {"value": 300, "copies": 50, "name": "Karte 8"}
+    old = {k: v for k, v in pool.items() if k != "min"}
+    assert pool_minimum(old) == {"value": 300, "copies": 50, "name": None}

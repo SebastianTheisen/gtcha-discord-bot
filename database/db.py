@@ -60,6 +60,11 @@ class Database:
                     UNIQUE(thread_id, tier)
                 );
 
+                CREATE TABLE IF NOT EXISTS bot_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                );
+
                 CREATE TABLE IF NOT EXISTS pack_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     banner_id INTEGER,
@@ -260,6 +265,17 @@ class Database:
     async def set_endspurt_sent(self, thread_id: int) -> None:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("UPDATE discord_threads SET endspurt_sent = 1 WHERE thread_id = ?", (thread_id,))
+            await db.commit()
+
+    async def get_meta(self, key: str) -> Optional[str]:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("SELECT value FROM bot_meta WHERE key = ?", (key,))
+            row = await cursor.fetchone()
+        return row[0] if row else None
+
+    async def set_meta(self, key: str, value: str) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("INSERT OR REPLACE INTO bot_meta (key, value) VALUES (?, ?)", (key, value))
             await db.commit()
 
     async def update_site_stats(self, pack_id: int, stats: Dict) -> bool:
