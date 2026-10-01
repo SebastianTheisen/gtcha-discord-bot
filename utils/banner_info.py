@@ -106,6 +106,30 @@ def jst_timestamp(text: Optional[str]) -> Optional[int]:
     return None
 
 
+def sale_end_timestamp(text: Optional[str]) -> Optional[int]:
+    """Verkaufsende aus dem Text der Seite (Zeit in JST) -> Unix-Zeit.
+
+    Die Seite liefert verschiedene Formate, z.B. 'Erhältlich bis 31/10/2026 23:59 JST' oder
+    '2026/10/31 23:59 まで販売'. Ohne Uhrzeit gilt 23:59.
+    """
+    if not text:
+        return None
+    s = str(text)
+    m = re.search(r"(\d{4})[/.-](\d{1,2})[/.-](\d{1,2})(?:\D+(\d{1,2}):(\d{2}))?", s)
+    if m:
+        y, mo, d, h, mi = m.groups()
+    else:
+        m = re.search(r"(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})(?:\D+(\d{1,2}):(\d{2}))?", s)
+        if not m:
+            return None
+        d, mo, y, h, mi = m.groups()
+    try:
+        when = datetime(int(y), int(mo), int(d), int(h or 23), int(mi or 59), tzinfo=JST)
+    except ValueError:
+        return None
+    return int(when.timestamp())
+
+
 def is_upcoming(item: dict) -> bool:
     return bool(item.get("is_before"))
 

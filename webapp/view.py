@@ -10,7 +10,7 @@ from typing import Dict, List, Optional
 import aiosqlite
 
 from database.db import Database
-from utils.banner_info import RANK_ORDER, format_conditions, format_shipping, to_int
+from utils.banner_info import RANK_ORDER, format_conditions, format_shipping, sale_end_timestamp, to_int
 from utils.card_pool import (
     card_value, estimate, explain_batch, out_of_banner_value, fmt_coins, pool_minimum, relevant_units, resolve_pulled, tier_keys,
     tracked_units,
@@ -84,7 +84,8 @@ class BannerView:
             "id": pid, "title": row.get('title') or f"Pack {pid}", "category": row.get('category'),
             "price": price, "remaining": remaining, "total": total,
             "per_day": row.get('entries_per_day'), "image": row.get('image_url'), "buy_url": buy_url(row),
-            "end": row.get('sale_end_date'), "starts_at": row.get('starts_at'),
+            "end": row.get('sale_end_date'), "end_ts": sale_end_timestamp(row.get('sale_end_date')),
+            "starts_at": row.get('starts_at'),
             "status": self._status(row, thread, stats, pool, sure, winners),
             "ev": round(stats['ev']) if stats else None,
             "ev_pct": round(stats['ev_pct'], 1) if stats and stats.get('ev_pct') is not None else None,
