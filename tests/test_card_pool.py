@@ -244,3 +244,23 @@ def test_pool_keeps_full_card_list_for_web_app():
     assert [c["value"] for c in pool["cards"]] == sorted((c["value"] for c in pool["cards"]), reverse=True)
     assert sum(c["copies"] for c in pool["cards"]) == pool["total_count"]
     assert {c["name"] for c in pool["cards"] if c["hit"]} == {"Top", "Zweiter", "Gleich A", "Gleich B", "Klein"}
+
+
+def test_explain_batch_kinds():
+    from utils.card_pool import explain_batch
+    pool = _glurak_pool()
+    keys = keys_by_name(pool)
+    pika = explain_batch(pool, 1, 16100, set())
+    assert pika["kind"] == "hits" and pika["certain"] == [keys["Pikachu"]] and pika["value"] == 17710
+    group = explain_batch(pool, 8, 37900, set())
+    assert group["kind"] == "hits" and len(group["groups"]) == 1
+    medal = explain_batch(pool, 8, 37900, set(), claimed={keys["Lugia"]})
+    assert medal["certain"] == [keys["Lugia"]] and medal["groups"] == []
+    assert explain_batch(pool, 1, 600, set())["kind"] == "normal"
+    assert explain_batch(pool, 80, 999999, set())["kind"] == "too_big"
+    assert explain_batch(pool, 1, 12345, set())["kind"] == "unclear"
+    # schon verschickter Hit zählt nicht noch einmal
+    assert explain_batch(pool, 1, 16100, {keys["Pikachu"]})["kind"] == "unclear"
+    # Hit mit gleichem Wert wie eine normale Karte: nur "vielleicht"
+    maybe = explain_batch(hit_pool(), 1, net(3000), set())
+    assert maybe["kind"] == "maybe" and maybe["maybe"][0]["keys"] == [keys_by_name(hit_pool())["Klein"]]

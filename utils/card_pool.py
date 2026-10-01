@@ -354,6 +354,39 @@ def match_shipped_hits(pool: Dict, count: int, value: int, pulled_keys: Set[str]
     return result
 
 
+def explain_batch(pool: Dict, count: int, value: int, pulled_keys: Set[str],
+                  claimed: Set[str] = frozenset(), tol: float = VALUE_TOLERANCE) -> Dict:
+    """Was steckt in einem einzelnen Versandschub? Für die Anzeige pro Schub.
+
+    kind: "hits"    - mindestens ein Versand-Hit ist sicher oder als ❓-Gruppe drin
+          "maybe"   - passt zu Hits, aber auch zu nur normalen Karten
+          "normal"  - nur normale Karten möglich
+          "unclear" - keine Kombination passt (z.B. Hit schon vorher gezählt)
+          "too_big" - zu viele Karten/zu viel Wert zum Zerlegen
+    """
+    gross = round(value * TAX_FACTOR)
+    base = {"kind": "unclear", "value": gross, "certain": [], "groups": [], "maybe": []}
+    if count <= 0 or gross <= 0:
+        return {**base, "kind": "normal"}
+    if count > MAX_SHIPMENT_CARDS or gross > MAX_SHIPMENT_VALUE:
+        return {**base, "kind": "too_big"}
+    open_hits = [u for u in tracked_units(pool) if u["shipping_only"] and u["key"] not in pulled_keys]
+    classes = _value_classes(open_hits, tol) if open_hits else []
+    possible = _batch_options(pool, classes, count, gross, tol)
+    if possible is None:
+        return {**base, "kind": "too_big"}
+    if not possible:
+        return base
+    if all(not any(t) for t in possible):
+        return {**base, "kind": "normal"}
+    match = prefer_claimed(_summarize_options(classes, possible, open_hits), set(claimed))
+    if match["certain"] or match["groups"]:
+        return {**base, "kind": "hits", **{k: match[k] for k in ("certain", "groups")}}
+    maybe = [{"value": cls["min"], "value_max": cls["max"], "keys": cls["keys"], "pulled": 0}
+             for i, cls in enumerate(classes) if any(t[i] for t in possible)]
+    return {**base, "kind": "maybe", "maybe": maybe}
+
+
 def match_shipment_history(pool: Dict, batches: List[List[int]], claimed: Set[str] = frozenset(),
                            tol: float = VALUE_TOLERANCE) -> Dict:
     """Wertet alle Versand-Schübe eines Banners gemeinsam aus.
