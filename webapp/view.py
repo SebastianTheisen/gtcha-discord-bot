@@ -12,7 +12,7 @@ import aiosqlite
 from database.db import Database
 from utils.banner_info import RANK_ORDER, format_conditions, format_shipping, to_int
 from utils.card_pool import (
-    card_value, estimate, explain_batch, fmt_coins, pool_minimum, relevant_units, resolve_pulled, tier_keys,
+    card_value, estimate, explain_batch, out_of_banner_value, fmt_coins, pool_minimum, relevant_units, resolve_pulled, tier_keys,
     tracked_units,
 )
 from utils.hot_list import min_rank, needs_password, rank_entries
@@ -70,10 +70,13 @@ class BannerView:
         thread_id = int(thread['thread_id']) if thread.get('thread_id') and not thread.get('is_expired') else 0
         price, remaining, total = (to_int(row.get(k)) for k in ('price_coins', 'current_packs', 'total_packs'))
         pool = json.loads(row['card_pool']) if row.get('card_pool') else None
-        stats, sure, winners, open_groups, unsure, pulled = None, set(), {}, [], [], set()
+        stats, sure, winners, open_groups, unsure, pulled, held = None, set(), {}, [], [], set(), set()
         if pool and pool.get('total_count'):
             pulled, sure, winners, open_groups, unsure = await self._pulled(thread_id, pid, pool)
-            stats = estimate(pool, row.get('current_packs'), row.get('total_packs'), pulled, price or None)
+            # gezogene Hits mit Medaille, die noch nicht verschickt sind - auch nicht mehr im Banner
+            held = set(winners) - set((await self.db.get_pull_tracking(pid))["pulled"])
+            stats = estimate(pool, row.get('current_packs'), row.get('total_packs'), pulled, price or None,
+                             self._out_value(row, pool, held))
         else:
             pool = None
         low = pool_minimum(pool) if pool else None
@@ -85,6 +88,7 @@ class BannerView:
             "status": self._status(row, thread, stats, pool, sure, winners),
             "ev": round(stats['ev']) if stats else None,
             "ev_pct": round(stats['ev_pct'], 1) if stats and stats.get('ev_pct') is not None else None,
+            "ev_from_site": bool(stats and stats.get('data_based')),
             "hits_open": (stats['hits_open'] if stats['tracked_hits'] else len(stats['open_tiers'])) if stats else None,
             "hits_total": (stats['hits_total'] if stats['tracked_hits'] else 3) if stats else None,
             "tracked_hits": bool(stats and stats['tracked_hits']),
@@ -98,7 +102,7 @@ class BannerView:
             **self._rank_info(row.get('conditions')),
             "shipped": format_shipping(row.get('site_stats')),
             **self._shipping(row.get('site_stats')),
-            **self._out_of_banner(row, pool),
+            **self._out_of_banner(row, pool, held),
             "thread_id": thread_id or None,
             **self._out(pool, sure, winners, open_groups),
         }
@@ -126,30 +130,43 @@ class BannerView:
                 "ship_counted": to_int(st.get("coins")), "ship_players": to_int(st.get("players"))}
 
     @staticmethod
-    def _out_of_banner(row: Dict, pool: Optional[Dict]) -> Dict:
+    def _converted(row: Dict) -> Optional[int]:
+        """Umgewandelte Coins: eigene Spalte, bei älteren Ständen decided_value - verschickt."""
+        st = json.loads(row['site_stats']) if row.get('site_stats') else {}
+        if row.get('converted') is not None:
+            return to_int(row['converted'])
+        if row.get('decided_value') is not None and st:
+            return max(0, to_int(row['decided_value']) - to_int(st.get("coins")))
+        return None
+
+    @classmethod
+    def _out_value(cls, row: Dict, pool: Dict, held: set) -> Optional[int]:
+        st = json.loads(row['site_stats']) if row.get('site_stats') else {}
+        return out_of_banner_value(pool, cls._converted(row), to_int(st.get("coins")), held)
+
+    @classmethod
+    def _out_of_banner(cls, row: Dict, pool: Optional[Dict], held: set = frozenset()) -> Dict:
         """Was schon aus dem Banner raus ist (Werte der Seite) und was rechnerisch noch drin ist.
 
         umgewandelt = total_kangen (eigene Spalte); ältere Stände: decided_value - verschickt.
         Eine Anzahl umgewandelter Karten liefert die Seite nicht - nur eine Obergrenze ist bekannt:
         gezogene Packs minus verschickte Karten (darin auch Karten, die noch niemand abgeholt hat).
-        Für "noch drin" wird der Versand auf Kartenwert (×1,1) gerechnet, die Umwandlung wie geliefert.
+        Für "noch drin" wird der Versand auf Kartenwert (×1,1) gerechnet; die Umwandlung zählt die Seite
+        schon mit vollem Kartenwert (bestätigt an 24060). Gemeldete, noch nicht verschickte Hits zählen als raus.
         """
         empty = {"converted": None, "converted_max_cards": None, "out_total": None,
                  "left_value": None, "left_per_pack": None}
         st = json.loads(row['site_stats']) if row.get('site_stats') else {}
         shipped = to_int(st.get("coins"))
-        if row.get('converted') is not None:
-            converted = to_int(row['converted'])
-        elif row.get('decided_value') is not None and st:
-            converted = max(0, to_int(row['decided_value']) - shipped)
-        else:
+        converted = cls._converted(row)
+        if converted is None:
             return empty
         remaining, total = to_int(row.get('current_packs')), to_int(row.get('total_packs'))
         drawn = max(0, total - remaining) if total else None
         max_cards = max(0, drawn - to_int(st.get("cards"))) if drawn is not None else None
         left = per_pack = None
         if pool and pool.get('total_value'):
-            left = max(0, to_int(pool['total_value']) - converted - card_value(shipped))
+            left = max(0, to_int(pool['total_value']) - out_of_banner_value(pool, converted, shipped, held))
             per_pack = round(left / remaining) if remaining > 0 else None
         return {"converted": converted, "converted_max_cards": max_cards, "out_total": converted + shipped,
                 "left_value": left, "left_per_pack": per_pack}

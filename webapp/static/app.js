@@ -297,7 +297,7 @@ async function showBanner(id) {
     ${hits.length ? `<div class="ribbon">Was du gewinnen kannst</div>${podium(hits.slice(0, 3))}` : ""}
     <h2>📊 Auswertung <small>ID ${b.id}</small></h2>
     <div class="stats">
-      ${b.ev != null ? stat("Ø Rückgabe pro Zug", `<span class="ev ${evClass(b.ev_pct)}">${num(b.ev)} Coins</span>`, b.ev_pct != null ? pct(b.ev_pct) + " vom Preis" : "") : ""}
+      ${b.ev != null ? stat("Ø Rückgabe pro Zug", `<span class="ev ${evClass(b.ev_pct)}">${num(b.ev)} Coins</span>`, (b.ev_pct != null ? pct(b.ev_pct) + " vom Preis" : "") + (b.ev_from_site ? " · aus Zahlen der Seite" : " · geschätzt")) : ""}
       ${b.hits_open != null ? stat("Hits noch drin", hitsText(b) + (b.unsure ? " ❓" : ""), b.cost_to_hit ? `Ø ${num(b.cost_to_hit)} Coins bis Hit` : "") : ""}
       ${b.min_value != null ? stat("Mindestens zurück", num(b.min_value) + " Coins", b.price ? pct(b.min_value / b.price * 100) + " vom Preis" : "") : ""}
       ${b.pool_value ? stat("Alle Karten", num(b.pool_value) + " Coins", b.all_packs_cost ? `Alle Packs: ${num(b.all_packs_cost)} (${pct(b.pool_value / b.all_packs_cost * 100)})` : "") : ""}

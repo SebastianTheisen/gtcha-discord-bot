@@ -217,7 +217,9 @@ class ThreadsMixin:
             ev_text = f"{fmt_coins(stats['ev'])} Coins"
             if stats['ev_pct'] is not None:
                 ev_text += f" ({fmt_pct(stats['ev_pct'])} % vom Preis)"
-            if stats['estimated']:
+            if stats.get('data_based'):
+                ev_text += "\n*aus Poolwert minus umgewandelten und verschickten Coins der Seite*"
+            elif stats['estimated']:
                 ev_text += "\n*geschätzt aus Kartenpool und Medaillen*"
             embed.add_field(name="Ø Rückgabe pro Zug", value=ev_text, inline=False)
 
