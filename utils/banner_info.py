@@ -110,7 +110,7 @@ def is_upcoming(item: dict) -> bool:
     return bool(item.get("is_before"))
 
 
-def berlin_time(ts: int) -> datetime:
+def berlin_time(ts: float) -> datetime:
     """Unix-Zeit -> deutsche Zeit (MEZ/MESZ, Umstellung am letzten Sonntag im März/Oktober um 01:00 UTC)."""
     utc = datetime.fromtimestamp(ts, timezone.utc)
 
