@@ -612,7 +612,7 @@ class GTCHABot(commands.Bot):
 
                         # Inaktive Banner die wieder auf der Website erscheinen reaktivieren
                         # (kann passieren wenn bot falscherweise 0-Pack via Proxy-Fehler gelöscht hat)
-                        if existing and existing.get('is_active') == 0:
+                        if existing and existing.get('is_active') == 0 and (banner.current_packs or 0) > 0:
                             logger.info(f"Banner {banner.pack_id} wieder auf Website - reaktiviere und erstelle Thread neu")
                             existing = None  # Als neuen Banner behandeln (save_banner setzt is_active=1)
 
@@ -726,9 +726,16 @@ class GTCHABot(commands.Bot):
                 # === HIT-ERKENNUNG über die Rückgabe-Zähler aus pack/list ===
                 await self._detect_pulled_hits(getattr(scraper, '_api_pack_data', {}) or {})
 
+                # === HIT-LISTEN abgleichen (korrigiert alles, was vom Soll abweicht) ===
+                for pid, row in (await self.db.get_active_banners()).items():
+                    if row.get('card_pool'):
+                        await self._refresh_pool_views(pid, embed=False)
+
                 # === KAUFBEDINGUNGEN und VERSAND-ZAHLEN aus pack/list ===
                 for pid, item in (getattr(scraper, '_api_pack_data', {}) or {}).items():
                     changed = await self.db.update_conditions(pid, banner_conditions(item))
+                    if _int(item.get('point')) > 0:
+                        changed = await self.db.update_price(pid, _int(item.get('point'))) or changed
                     changed = await self.db.update_site_stats(pid, shipping_stats(item)) or changed
                     if changed:
                         row = await self.db.get_banner(pid)
@@ -1434,6 +1441,12 @@ class GTCHABot(commands.Bot):
 
     async def _refresh_all_embeds_once(self):
         """Aktualisiert alle Startbeiträge einmal, wenn neue Felder dazugekommen sind."""
+        try:
+            await self._refresh_all_embeds()
+        except Exception as e:
+            logger.error(f"Einmalige Aktualisierung der Startbeiträge fehlgeschlagen: {e}")
+
+    async def _refresh_all_embeds(self):
         if await self.db.get_meta('embed_version') == str(EMBED_VERSION):
             return
         rows = await self.db.get_active_banners()
@@ -1673,8 +1686,12 @@ class GTCHABot(commands.Bot):
         return [(f"{header} · Teil 1/{len(chunks)}" if i == 0 else f"🏆 **Hits im Pool** · Teil {i + 1}/{len(chunks)}",
                  chunk) for i, chunk in enumerate(chunks)]
 
-    async def _refresh_pool_views(self, pack_id: int, initial_pool: bool = False):
-        """Aktualisiert Startbeitrag (Ø Rückgabe, Hits) und die Hit-Nachricht(en) eines Banners."""
+    async def _refresh_pool_views(self, pack_id: int, initial_pool: bool = False, embed: bool = True):
+        """Aktualisiert Startbeitrag (Ø Rückgabe, Hits) und die Hit-Nachricht(en) eines Banners.
+
+        Die Hit-Nachrichten werden nur bearbeitet, wenn sich ihr Inhalt gegenüber dem zuletzt
+        geposteten Stand geändert hat (Signatur in der DB).
+        """
         try:
             banner = await self.db.get_banner(pack_id)
             thread_data = await self.db.get_thread_by_banner_id(pack_id)
@@ -1682,7 +1699,8 @@ class GTCHABot(commands.Bot):
             if not banner or not thread_data or not pool or thread_data.get('is_expired'):
                 return
 
-            await self._update_thread_embed(banner, initial_pool=initial_pool)
+            if embed:
+                await self._update_thread_embed(banner, initial_pool=initial_pool)
 
             thread_id = int(thread_data['thread_id'])
             thread = self.get_channel(thread_id)
@@ -1700,6 +1718,11 @@ class GTCHABot(commands.Bot):
 
             old_ids = json.loads(thread_data.get('hit_message_ids') or 'null') or (
                 [thread_data['top5_message_id']] if thread_data.get('top5_message_id') else [])
+            sig = json.dumps([[c, [[e.title, e.description, e.color.value if e.color else None,
+                                    e.thumbnail.url if e.thumbnail else None] for e in em]]
+                              for c, em in messages], ensure_ascii=False)
+            if old_ids and thread_data.get('hit_list_sig') == sig:
+                return
             new_ids = []
             for i, (content, embeds) in enumerate(messages):
                 msg = None
@@ -1724,6 +1747,9 @@ class GTCHABot(commands.Bot):
                     pass
             if new_ids != old_ids:
                 await self.db.set_hit_message_ids(thread_id, new_ids)
+            await self.db.set_hit_list_sig(thread_id, sig)
+            if old_ids:
+                logger.info(f"Hit-Liste aktualisiert: Banner {pack_id} ({len(messages)} Nachricht(en))")
         except Exception as e:
             logger.warning(f"Fehler bei Hit-Nachricht/Ø-Update für {pack_id}: {e}")
 

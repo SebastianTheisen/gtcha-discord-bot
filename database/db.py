@@ -136,6 +136,7 @@ class Database:
                                ('discord_threads', 'endspurt_sent INTEGER DEFAULT 0'),
                                ('banners', 'conditions TEXT'),
                                ('banners', 'site_stats TEXT'),
+                               ('discord_threads', 'hit_list_sig TEXT'),
                                ('discord_threads', 'top5_message_id INTEGER'),
                                ('discord_threads', 'value_alert_sent INTEGER DEFAULT 0')]:
                 try:
@@ -301,6 +302,20 @@ class Database:
             await db.execute("UPDATE banners SET conditions = ? WHERE pack_id = ?", (new, pack_id))
             await db.commit()
         return True
+
+    async def update_price(self, pack_id: int, price: int) -> bool:
+        """Setzt den Packpreis, wenn er fehlt oder abweicht; True bei Änderung."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "UPDATE banners SET price_coins = ? WHERE pack_id = ? AND (price_coins IS NULL OR price_coins != ?)",
+                (price, pack_id, price))
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def set_hit_list_sig(self, thread_id: int, sig: str) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE discord_threads SET hit_list_sig = ? WHERE thread_id = ?", (sig, thread_id))
+            await db.commit()
 
     async def set_hit_message_ids(self, thread_id: int, message_ids: List[int]) -> None:
         async with aiosqlite.connect(self.db_path) as db:
