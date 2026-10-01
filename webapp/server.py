@@ -132,6 +132,12 @@ class App:
         user = await self._user(request)
         return web.json_response(user or {}, status=200 if user else 401)
 
+    async def api_my_medals(self, request):
+        user = await self._user(request)
+        if not user:
+            raise web.HTTPUnauthorized(text="Gerät nicht mit Discord verknüpft")
+        return web.json_response({"medals": await self.view.my_medals(user["user_id"])})
+
     async def api_unlink(self, request):
         token = request.headers.get("X-Device-Token")
         if token:
@@ -239,6 +245,7 @@ def make_app(app: App) -> web.Application:
         web.get("/img", app.image),
         web.post("/api/link", app.api_link),
         web.get("/api/me", app.api_me),
+        web.get("/api/me/medals", app.api_my_medals),
         web.post("/api/unlink", app.api_unlink),
         web.post("/api/medal", app.api_medal),
         web.get(r"/api/medal/{id:\d+}", app.api_medal_status),

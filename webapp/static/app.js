@@ -16,7 +16,15 @@ const SORTS = {
 };
 
 const CARDS_PER_PAGE = 20;
-const state = { category: load("category", "Alle"), sort: load("sort", "ev"), timer: null, render: null, cardPage: {} };
+const QUICK_FILTERS = {
+  ev: ["💰 ≥ 100 %", (b) => b.ev_pct != null && b.ev_pct >= 100],
+  hits: ["🎯 Hits drin", (b) => b.status !== "hits_out" && (b.hits_open || 0) > 0],
+  watched: ["👀 Beobachtet", (b) => state.watchIds?.has(String(b.id))],
+  mine: ["✅ Für mich", (b) => canBuy(b) !== false],
+};
+const state = { category: load("category", "Alle"), sort: load("sort", "ev"), timer: null, render: null, cardPage: {},
+                detailTab: {}, cardFilter: load("cardFilter", "all"), cardSize: load("cardSize", "4"),
+                listView: load("listView", "big"), filters: new Set(JSON.parse(load("filters", "[]"))) };
 
 function load(key, fallback) {
   try { return localStorage.getItem(key) || fallback; } catch (e) { return fallback; }
@@ -75,6 +83,27 @@ function flags(b) {
   return out.length ? `<div class="flags">${out.map((f) => `<span class="flag">${esc(f)}</span>`).join("")}</div>` : "";
 }
 
+// Mein Mitgliedsrang und meine Aufladung diesen Monat (nur auf diesem Gerät gespeichert)
+const RANKS = [["white", "Weiß"], ["bronze", "Bronze"], ["silver", "Silber"], ["gold", "Gold"],
+               ["rainbow", "Rainbow"], ["black", "Black"]];
+const myRank = () => load("myRank", "");
+const myCharge = () => Number(load("myCharge", "0")) || 0;
+// true = kann ich kaufen, false = nicht, null = unbekannt (Rang nicht eingestellt)
+function canBuy(b) {
+  if (!myRank()) return null;
+  if (b.password) return false;
+  if (b.ranks?.length && !b.ranks.includes(myRank())) return false;
+  if (b.min_charge && myCharge() < b.min_charge) return false;
+  return true;
+}
+function whyNot(b) {
+  if (b.password) return "nur mit Passwort";
+  if (b.ranks?.length && !b.ranks.includes(myRank())) return "nicht für deinen Mitgliedsrang";
+  if (b.min_charge && myCharge() < b.min_charge) return `erst ab ${num(b.min_charge)} Coins Aufladung`;
+  return "";
+}
+const notMineNote = (b) => (canBuy(b) === false ? `<div class="notice warn">🚫 Für dich nicht kaufbar: ${whyNot(b)}</div>` : "");
+
 // Verkaufsende einheitlich in deutscher Zeit (die Seite liefert verschiedene Formate, teils japanisch)
 function untilText(b) {
   if (b.end_ts) {
@@ -92,7 +121,7 @@ function row(b, rank) {
   const [icon, label] = STATUS[b.status] || STATUS.running;
   const left = b.total ? Math.max(0, Math.min(100, (b.remaining / b.total) * 100)) : 0;
   return `
-    <div class="entry ${rank ? "ranked" : ""}">
+    <div class="entry ${rank ? "ranked" : ""} ${canBuy(b) === false ? "not-mine" : ""}">
       ${rank ? `<span class="rank-no ${rank <= 3 ? "r" + rank : ""}">${rank}</span>` : ""}
       ${flags(b)}
       <div class="row-card ${b.status === "hits_out" ? "done" : ""}" data-href="#/banner/${b.id}">
@@ -118,6 +147,23 @@ function row(b, rank) {
         </div>
       </div>
     </div>`;
+}
+
+// Kompaktansicht: eine Zeile pro Banner
+function compactRow(b) {
+  const [icon] = STATUS[b.status] || STATUS.running;
+  const left = b.total ? Math.max(0, Math.min(100, (b.remaining / b.total) * 100)) : 0;
+  return `<div class="crow ${b.status === "hits_out" ? "done" : ""} ${canBuy(b) === false ? "not-mine" : ""}" data-href="#/banner/${b.id}">
+    <div class="crow-img">${img(b.image, b.title)}</div>
+    <div class="crow-main">
+      <div class="crow-top"><b>${b.id}</b> <span class="muted">${esc(b.category || "")}</span>
+        ${b.status !== "running" ? `<span class="crow-status">${icon}</span>` : ""}</div>
+      <div class="crow-sub">${num(b.remaining)} / ${num(b.total)} Packs${hitsText(b) ? ` · ${hitsText(b)}` : ""}${b.unsure ? " ❓" : ""}</div>
+      <div class="bar thin"><span style="width:${left}%"></span></div>
+    </div>
+    <div class="crow-right"><div class="crow-price">${coins(b.price)}</div>
+      ${b.ev_pct != null ? `<span class="pill ${evClass(b.ev_pct)}">Ø ${pct(b.ev_pct)}</span>` : ""}</div>
+  </div>`;
 }
 
 // "✅ Raus: Lugia Kristall, Pikachu Promo" - Hits, die sicher raus sind (wie in der Hit-Liste)
@@ -159,10 +205,15 @@ async function showList() {
       <form class="search" id="search-form" role="search">
         <input id="search" type="search" inputmode="numeric" autocomplete="off" placeholder="🔍 Banner-ID suchen, z. B. 24149">
       </form>
+      <div class="qfilters">${Object.entries(QUICK_FILTERS).map(([k, [label]]) =>
+        `<button class="qf" data-qf="${k}">${label}</button>`).join("")}</div>
       <div class="toolbar">
         <span class="count" id="count"></span>
-        <select id="sort" aria-label="Sortierung">${Object.entries(SORTS).map(([k, [label]]) =>
-          `<option value="${k}">${label}</option>`).join("")}</select>
+        <div class="toolbar-right">
+          <button class="view-toggle" id="view-toggle" aria-label="Ansicht wechseln"></button>
+          <select id="sort" aria-label="Sortierung">${Object.entries(SORTS).map(([k, [label]]) =>
+            `<option value="${k}">${label}</option>`).join("")}</select>
+        </div>
       </div>
       <div id="results"></div>`;
     view.querySelectorAll(".tab").forEach((el) => el.addEventListener("click", () => {
@@ -170,6 +221,20 @@ async function showList() {
     }));
     view.querySelector("#sort").addEventListener("change", (e) => {
       state.sort = e.target.value; save("sort", state.sort); drawList();
+    });
+    view.querySelectorAll(".qf").forEach((el) => el.addEventListener("click", () => {
+      const k = el.dataset.qf;
+      if (k === "mine" && !myRank()) {
+        ask("Mitgliedsrang fehlt", "Stell im Reiter <b>Ich</b> deinen Mitgliedsrang ein, dann zeigt der Filter nur Banner, die du kaufen kannst.",
+          ["Später", "Einstellen"]).then((r) => { if (r === "Einstellen") location.hash = "#/settings"; });
+        return;
+      }
+      state.filters.has(k) ? state.filters.delete(k) : state.filters.add(k);
+      save("filters", JSON.stringify([...state.filters]));
+      drawList();
+    }));
+    view.querySelector("#view-toggle").addEventListener("click", () => {
+      state.listView = state.listView === "big" ? "compact" : "big"; save("listView", state.listView); drawList();
     });
     const input = view.querySelector("#search");
     input.value = state.query || "";
@@ -186,20 +251,32 @@ async function showList() {
   }
   view.querySelector("#sort").value = state.sort;
   drawList();
+  // beobachtete Banner für den Filter (aus den Push-Einstellungen dieses Geräts)
+  if (state.watchIds === undefined) {
+    state.watchIds = new Set();
+    pushState().then(({ prefs }) => { state.watchIds = new Set(Object.keys(prefs.watch || {})); drawList(); }).catch(() => {});
+  }
 }
 
 function drawList() {
   const { banners, updated } = state.listData;
   const q = state.query || "";
   const sort = SORTS[state.sort] || SORTS.ev;
+  const active = [...state.filters].filter((k) => QUICK_FILTERS[k] && (k !== "mine" || myRank()));
   const shown = banners
     .filter((b) => (q ? matches(b, q) : state.category === "Alle" || b.category === state.category))
+    .filter((b) => active.every((k) => QUICK_FILTERS[k][1](b)))
     .sort(sort[1]);
   view.querySelectorAll(".tab").forEach((el) => el.classList.toggle("active", !q && el.dataset.cat === state.category));
+  view.querySelectorAll(".qf").forEach((el) => el.classList.toggle("on", active.includes(el.dataset.qf)));
+  view.querySelector("#view-toggle").textContent = state.listView === "big" ? "☰ Kompakt" : "▦ Groß";
   view.querySelector("#count").textContent = q ? `${shown.length} Treffer für „${q}“` : `${shown.length} Banner`;
   view.querySelector("#results").innerHTML = `
-    ${shown.length ? `<div class="list">${shown.map((b) => row(b)).join("")}</div>`
-      : `<div class="empty">${q ? "Kein aktiver Banner gefunden – mit Enter die ID direkt öffnen" : "Keine Banner"}</div>`}
+    ${shown.length ? (state.listView === "compact"
+      ? `<div class="clist">${shown.map(compactRow).join("")}</div>`
+      : `<div class="list">${shown.map((b) => row(b)).join("")}</div>`)
+      : `<div class="empty">${q ? "Kein aktiver Banner gefunden – mit Enter die ID direkt öffnen"
+        : active.length ? "Keine Banner für diese Filter" : "Keine Banner"}</div>`}
     <div class="updated">Stand ${time(updated)}</div>`;
   wireRows();
 }
@@ -294,14 +371,34 @@ function pager(page, pages) {
   return `<div class="pager">${out}${btn(page + 1, "›", page === pages)}${btn(pages, "»", page === pages)}</div>`;
 }
 
+const CARD_FILTERS = { all: "Alle", above: "Ab Packpreis", open: "Noch offen" };
+
 function renderCards(b) {
   const box = view.querySelector("#cards");
   if (!box) return;
-  const pages = Math.max(1, Math.ceil(b.cards.length / CARDS_PER_PAGE));
+  const filter = state.cardFilter;
+  const list = b.cards.filter((c) => filter === "above" ? b.price && c.value >= b.price
+    : filter === "open" ? c.pulled < c.copies : true);
+  const perPage = state.cardSize === "5" ? 25 : CARDS_PER_PAGE;
+  const pages = Math.max(1, Math.ceil(list.length / perPage));
   const page = Math.min(state.cardPage[b.id] || 1, pages);
-  const shown = b.cards.slice((page - 1) * CARDS_PER_PAGE, page * CARDS_PER_PAGE);
+  const shown = list.slice((page - 1) * perPage, page * perPage);
   const meId = state.me?.user_id || null;
-  box.innerHTML = `<div class="tiles">${shown.map((c) => cardTile(c, b.price, unitsOf(b, c), meId)).join("")}</div>${pager(page, pages)}`;
+  box.innerHTML = `<div class="card-tools">
+      <div class="seg">${Object.entries(CARD_FILTERS).map(([k, label]) =>
+        `<button class="seg-btn ${k === filter ? "on" : ""}" data-filter="${k}">${label}</button>`).join("")}</div>
+      <button class="seg-btn size" data-size="${state.cardSize === "5" ? "4" : "5"}" aria-label="Kachelgröße">
+        ${state.cardSize === "5" ? "▦ groß" : "▦ klein"}</button>
+    </div>
+    ${list.length ? `<div class="tiles ${state.cardSize === "5" ? "small" : ""}">${shown.map((c) =>
+      cardTile(c, b.price, unitsOf(b, c), meId)).join("")}</div>${pager(page, pages)}`
+      : `<div class="empty">Keine Karten für diesen Filter</div>`}`;
+  box.querySelectorAll("[data-filter]").forEach((el) => el.addEventListener("click", () => {
+    state.cardFilter = el.dataset.filter; save("cardFilter", state.cardFilter); state.cardPage[b.id] = 1; renderCards(b);
+  }));
+  box.querySelector("[data-size]")?.addEventListener("click", (e) => {
+    state.cardSize = e.currentTarget.dataset.size; save("cardSize", state.cardSize); state.cardPage[b.id] = 1; renderCards(b);
+  });
   box.querySelectorAll(".tile[data-card]").forEach((el) => el.addEventListener("click", () => {
     const card = b.cards.find((c) => c.id === el.dataset.card);
     if (card) claimFlow(b, card).catch((e) => ask("Fehler", esc(e.message), ["OK"]));
@@ -309,9 +406,37 @@ function renderCards(b) {
   box.querySelectorAll("[data-page]").forEach((el) => el.addEventListener("click", () => {
     state.cardPage[b.id] = Number(el.dataset.page);
     renderCards(b);
-    view.querySelector("#cards-title").scrollIntoView({ behavior: "smooth", block: "start" });
+    view.querySelector(".dtabs")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }));
 }
+
+// Ampel: lohnt sich (ab 100 %), knapp (90-100 %), lohnt sich nicht
+function verdict(b) {
+  if (b.ev_pct == null) return ["grey", "Keine Daten", "Kartenpool noch nicht geladen"];
+  if (b.status === "upcoming") return ["grey", "Noch nicht gestartet", ""];
+  if (b.ev_pct >= 100) return ["green", "Lohnt sich", "Im Schnitt kommt mehr zurück als ein Zug kostet"];
+  if (b.ev_pct >= 90) return ["yellow", "Knapp", "Im Schnitt etwas weniger zurück als ein Zug kostet"];
+  return ["red", "Lohnt sich nicht", "Im Schnitt deutlich weniger zurück als ein Zug kostet"];
+}
+
+function glance(b) {
+  const [color, title, sub] = verdict(b);
+  const diff = b.price && b.remaining && b.left_value != null ? b.left_value - b.price * b.remaining : null;
+  return `<div class="glance ${color}">
+    <div class="glance-head"><span class="light"></span><div><div class="glance-title">${title}</div>
+      <div class="glance-sub">${sub}</div></div>
+      ${b.ev_pct != null ? `<div class="glance-pct">${pct(b.ev_pct)}<small>Ø ${num(b.ev)} Coins/Zug</small></div>` : ""}</div>
+    <div class="glance-facts">
+      ${b.hits_open != null ? `<span>🎯 <b>${hitsText(b)}</b>${b.unsure ? " ❓" : ""}</span>` : ""}
+      <span>📦 <b>${num(b.remaining)}</b> von ${num(b.total)} übrig</span>
+      ${diff != null ? `<span>💰 Rest kaufen: <b class="${diff >= 0 ? "pos" : "neg"}">${diff >= 0 ? "+" : "−"}${num(Math.abs(diff))}</b></span>` : ""}
+      ${b.cost_to_hit ? `<span>⏱ Ø <b>${num(b.cost_to_hit)}</b> bis Hit</span>` : ""}
+    </div>
+    <div class="glance-note">${b.ev_from_site ? "aus den Zahlen der Seite" : "geschätzt"} · nicht abgeholte Karten zählen noch als drin</div>
+  </div>`;
+}
+
+const DETAIL_TABS = { overview: "Übersicht", cards: "Karten", history: "Verlauf" };
 
 async function showBanner(id) {
   const b = await api(`/api/banner/${encodeURIComponent(id)}`);
@@ -319,48 +444,63 @@ async function showBanner(id) {
   const hits = b.hits.map((h) => ({ ...h, ship: b.tracked_hits }));
   const open = hits.filter((h) => h.state === "open").length;
   const left = b.total ? Math.max(0, Math.min(100, (b.remaining / b.total) * 100)) : 0;
+  const tab = state.detailTab[b.id] || "overview";
   view.innerHTML = `
     <a class="back" href="javascript:history.back()">‹ Zurück</a>
     ${flags(b)}
     <div class="hero">${img(b.image, b.title)}${b.status !== "running" ? `<span class="status ${b.status}">${icon} ${label}</span>` : ""}
       <span class="price-pill">${coins(b.price)}</span></div>
+    ${notMineNote(b)}
+    ${glance(b)}
     <div class="watch-row"><button class="watch-btn" id="watch-btn">🔔 Beobachten</button>
-      <a class="hint" href="#/settings">Pushes einstellen ›</a></div>
-    <h2>📊 Auswertung <small>ID ${b.id}</small></h2>
-    <div class="stats">
-      ${b.ev != null ? stat("Ø Rückgabe pro Zug", `<span class="ev ${evClass(b.ev_pct)}">${num(b.ev)} Coins</span>`, (b.ev_pct != null ? pct(b.ev_pct) + " vom Preis" : "") + (b.ev_from_site ? " · aus Zahlen der Seite" : " · geschätzt")) : ""}
-      ${b.hits_open != null ? stat("Hits noch drin", hitsText(b) + (b.unsure ? " ❓" : ""), b.cost_to_hit ? `Ø ${num(b.cost_to_hit)} Coins bis Hit` : "") : ""}
-      ${b.min_value != null ? stat("Mindestens zurück", num(b.min_value) + " Coins", b.price ? pct(b.min_value / b.price * 100) + " vom Preis" : "") : ""}
-      ${b.pool_value ? stat("Alle Karten", num(b.pool_value) + " Coins", b.all_packs_cost ? `Alle Packs: ${num(b.all_packs_cost)} (${pct(b.pool_value / b.all_packs_cost * 100)})` : "") : ""}
-      ${b.out_total != null ? stat("Aus dem Banner raus", `${num(b.out_total)} Coins`,
-        `📦 verschickt: ${num(b.ship_cards)} ${b.ship_cards === 1 ? "Karte" : "Karten"} · ${num(b.ship_counted)} Coins`
-         + `${b.ship_players ? ` · ${num(b.ship_players)} Spieler` : ""}<br>
-         🪙 umgewandelt: ${num(b.converted)} Coins${b.converted_max_cards != null ? ` · höchstens ${num(b.converted_max_cards)} Karten` : ""}<br>
-         <i>Werte wie von der Seite geliefert</i>`) : ""}
-      ${b.left_value != null ? stat("Noch im Banner (rechnerisch)", `${num(b.left_value)} Coins`,
-        (b.left_per_pack != null ? `Ø ${num(b.left_per_pack)} pro Restpack${b.price ? ` (${pct(b.left_per_pack / b.price * 100)} vom Preis)` : ""}` : "")
-        + restCost(b)) : ""}
-      ${b.ship_cards != null && b.out_total == null ? stat("Verschickt", b.ship_cards ? `${num(b.ship_cards)} Karten` : "Noch nichts",
-        b.ship_cards ? `${num(b.ship_value)} Coins Kartenwert · ${num(b.ship_players)} Spieler` : "") : ""}
-      ${b.per_day ? stat("Pro Tag", `${b.per_day}×`) : ""}
-    </div>
-    ${b.conditions ? `<div class="notice">${esc(b.conditions).replace(/\*\*/g, "").replace(/\n/g, "<br>")}</div>` : ""}
-    ${b.cards.length ? `<h2 id="cards-title">🃏 Alle Karten <small>${num(b.cards.reduce((n, c) => n + c.copies, 0))} Karten · ${b.cards.length} verschiedene</small></h2>
-      ${b.share_above_price != null ? `<div class="notice">${pct(b.share_above_price)} der Karten sind mindestens so viel wert wie ein Zug (${num(b.price)} Coins) – diese Werte sind <b>gold</b>. Prozent = Anteil am Start-Pool.</div>` : ""}
-      <div id="cards"></div>`
-      : hits.length > 3 ? `<h2>🏆 Alle Hits <small>${open} von ${hits.length} noch drin</small></h2>
-      <div class="hits">${hits.map(hitCard).join("")}</div>` : ""}
-    <h2>📉 Pack-Verlauf</h2>
-    ${chart(b.history)}
-    <h2>📦 Versandschübe <small>Kartenwert = gezählter Wert × 1,1 (Steuer)</small></h2>
-    ${b.shipments.length ? `<div class="rows">${b.shipments.map((s) => `
-      <div class="batch ${s.kind === "hits" ? "has-hit" : ""}">
-        <div class="line"><span class="muted">${time(s.t)}</span>
-          <span><b>+${num(s.cards)}</b> ${s.cards === 1 ? "Karte" : "Karten"} · <b>${num(s.value)}</b> Coins${s.players ? ` · +${num(s.players)} Spieler` : ""}</span></div>
-        ${s.explain.length ? `<div class="explain">${s.explain.map((l) =>
-          `<div><span class="ico">${esc(l.icon)}</span>${esc(l.text)}</div>`).join("")}</div>` : ""}
-      </div>`).join("")}</div>`
-      : `<div class="rows"><div class="line muted">Noch keine Versandschübe aufgezeichnet</div></div>`}
+      <a class="hint" href="#/settings">Einstellungen ›</a></div>
+    <div class="dtabs" role="tablist">${Object.entries(DETAIL_TABS).map(([k, l]) =>
+      `<button class="dtab ${k === tab ? "on" : ""}" data-tab="${k}" role="tab">${l}</button>`).join("")}</div>
+
+    <section class="pane" data-pane="overview" ${tab === "overview" ? "" : "hidden"}>
+      <div class="stats">
+        ${b.ev != null ? stat("Ø Rückgabe pro Zug", `<span class="ev ${evClass(b.ev_pct)}">${num(b.ev)} Coins</span>`, (b.ev_pct != null ? pct(b.ev_pct) + " vom Preis" : "") + (b.ev_from_site ? " · aus Zahlen der Seite" : " · geschätzt")) : ""}
+        ${b.hits_open != null ? stat("Hits noch drin", hitsText(b) + (b.unsure ? " ❓" : ""), b.cost_to_hit ? `Ø ${num(b.cost_to_hit)} Coins bis Hit` : "") : ""}
+        ${b.min_value != null ? stat("Mindestens zurück", num(b.min_value) + " Coins", b.price ? pct(b.min_value / b.price * 100) + " vom Preis" : "") : ""}
+        ${b.pool_value ? stat("Alle Karten", num(b.pool_value) + " Coins", b.all_packs_cost ? `Alle Packs: ${num(b.all_packs_cost)} (${pct(b.pool_value / b.all_packs_cost * 100)})` : "") : ""}
+        ${b.out_total != null ? stat("Aus dem Banner raus", `${num(b.out_total)} Coins`,
+          `📦 verschickt: ${num(b.ship_cards)} ${b.ship_cards === 1 ? "Karte" : "Karten"} · ${num(b.ship_counted)} Coins`
+           + `${b.ship_players ? ` · ${num(b.ship_players)} Spieler` : ""}<br>
+           🪙 umgewandelt: ${num(b.converted)} Coins${b.converted_max_cards != null ? ` · höchstens ${num(b.converted_max_cards)} Karten` : ""}<br>
+           <i>Werte wie von der Seite geliefert</i>`) : ""}
+        ${b.left_value != null ? stat("Noch im Banner (rechnerisch)", `${num(b.left_value)} Coins`,
+          (b.left_per_pack != null ? `Ø ${num(b.left_per_pack)} pro Restpack${b.price ? ` (${pct(b.left_per_pack / b.price * 100)} vom Preis)` : ""}` : "")
+          + restCost(b)) : ""}
+        ${b.ship_cards != null && b.out_total == null ? stat("Verschickt", b.ship_cards ? `${num(b.ship_cards)} Karten` : "Noch nichts",
+          b.ship_cards ? `${num(b.ship_value)} Coins Kartenwert · ${num(b.ship_players)} Spieler` : "") : ""}
+        ${b.per_day ? stat("Pro Tag", `${b.per_day}×`) : ""}
+      </div>
+      ${b.conditions ? `<div class="notice">${esc(b.conditions).replace(/\*\*/g, "").replace(/\n/g, "<br>")}</div>` : ""}
+    </section>
+
+    <section class="pane" data-pane="cards" ${tab === "cards" ? "" : "hidden"}>
+      ${b.cards.length ? `<h2 id="cards-title">🃏 Alle Karten <small>${num(b.cards.reduce((n, c) => n + c.copies, 0))} Karten · ${b.cards.length} verschiedene</small></h2>
+        <div class="hint pane-hint">${b.share_above_price != null ? `${pct(b.share_above_price)} der Karten sind mindestens einen Zug wert (<b>gold</b>). ` : ""}
+          Karte antippen, um sie als gezogen zu melden.</div>
+        <div id="cards"></div>`
+        : hits.length ? `<h2>🏆 Hits <small>${open} von ${hits.length} noch drin</small></h2>
+        <div class="hits">${hits.map(hitCard).join("")}</div>` : `<div class="empty">Kartenliste noch nicht geladen</div>`}
+    </section>
+
+    <section class="pane" data-pane="history" ${tab === "history" ? "" : "hidden"}>
+      <h2>📉 Pack-Verlauf</h2>
+      ${chart(b.history)}
+      <h2>📦 Versandschübe <small>Kartenwert = gezählter Wert × 1,1 (Steuer)</small></h2>
+      ${b.shipments.length ? `<div class="rows">${b.shipments.map((s) => `
+        <div class="batch ${s.kind === "hits" ? "has-hit" : ""}">
+          <div class="line"><span class="muted">${time(s.t)}</span>
+            <span><b>+${num(s.cards)}</b> ${s.cards === 1 ? "Karte" : "Karten"} · <b>${num(s.value)}</b> Coins${s.players ? ` · +${num(s.players)} Spieler` : ""}</span></div>
+          ${s.explain.length ? `<div class="explain">${s.explain.map((l) =>
+            `<div><span class="ico">${esc(l.icon)}</span>${esc(l.text)}</div>`).join("")}</div>` : ""}
+        </div>`).join("")}</div>`
+        : `<div class="rows"><div class="line muted">Noch keine Versandschübe aufgezeichnet</div></div>`}
+    </section>
+
     <div class="buybar">
       <div class="big">${coins(b.price)}</div>
       ${openLink(b)}
@@ -368,6 +508,11 @@ async function showBanner(id) {
         <div class="bar" style="margin-top:4px"><span style="width:${left}%"></span></div></div>
       ${b.end ? `<div class="until">${esc(untilText(b))}</div>` : ""}
     </div>`;
+  view.querySelectorAll(".dtab").forEach((el) => el.addEventListener("click", () => {
+    state.detailTab[b.id] = el.dataset.tab;
+    view.querySelectorAll(".dtab").forEach((t) => t.classList.toggle("on", t === el));
+    view.querySelectorAll(".pane").forEach((p) => { p.hidden = p.dataset.pane !== el.dataset.tab; });
+  }));
   renderCards(b);
   wireWatchButton(String(b.id)).catch(() => {});
   me().then(() => renderCards(b)).catch(() => {});
@@ -434,8 +579,31 @@ async function showSettings() {
   const byId = Object.fromEntries(banners.map((b) => [b.id, b]));
   const watched = Object.keys(prefs.watch);
   const options = banners.filter((b) => !prefs.watch[b.id]).sort((a, b) => b.id - a.id);
+  const user = await me();
+  const medals = user ? await authApi("/api/me/medals").then((r) => r.medals).catch(() => []) : [];
   view.innerHTML = `
-    <div class="section-title">🔔 Push-Benachrichtigungen</div>
+    <div class="section-title">👤 ${user ? esc(user.name) : "Ich"}</div>
+    ${linkPanel(user)}
+    ${user ? `<h2>🏅 Meine gemeldeten Hits <small>${medals.length} aktiv</small></h2>
+      <div class="rows">${medals.length ? medals.map((m) => `
+        <a class="line claim-row" href="#/banner/${m.banner_id}">
+          <span class="claim-thumb">${img(m.image, m.name)}</span>
+          <span class="claim-text"><b>${m.tier}</b> ${esc(m.name)}<br>
+            <span class="claim-value">${m.value != null ? num(m.value) + " Coins" : ""}</span>
+            <span class="muted"> · Banner ${m.banner_id}${m.t ? " · " + time(m.t) : ""}</span></span>
+          <span class="muted">›</span></a>`).join("")
+        : `<div class="line muted">Noch nichts gemeldet – auf einer Banner-Seite unter „Karten“ eine Karte antippen.</div>`}</div>` : ""}
+    <h2>🎖️ Mein Mitgliedsrang</h2>
+    <div class="panel">
+      <div class="add-watch">
+        <select id="my-rank" aria-label="Mitgliedsrang"><option value="">Nicht angegeben</option>
+          ${RANKS.map(([k, l]) => `<option value="${k}" ${k === myRank() ? "selected" : ""}>${l}</option>`).join("")}</select>
+        <input id="my-charge" class="code-input plain" inputmode="numeric" placeholder="Aufladung" value="${myCharge() || ""}">
+      </div>
+      <div class="hint">Rang und diesen Monat aufgeladene Coins. Damit graut die App Banner aus, die du nicht kaufen kannst,
+        und der Filter „✅ Für mich“ funktioniert. Nur auf diesem Gerät gespeichert.</div>
+    </div>
+    <h2>🔔 Push-Benachrichtigungen</h2>
     ${!isStandalone() ? `<div class="notice" style="margin-bottom:12px">Auf dem iPhone gehen Pushes nur, wenn die App installiert ist:
       in Safari auf <b>Teilen</b> → <b>Zum Home-Bildschirm</b>, dann die App vom Home-Bildschirm öffnen.</div>` : ""}
     <div class="panel">
@@ -463,7 +631,6 @@ async function showSettings() {
         ${watched.length ? watched.sort((a, b) => b - a).map((id) => watchCard(id, prefs.watch[id], byId[id])).join("")
           : `<div class="hint">Noch kein Banner beobachtet. Auch auf jeder Banner-Seite über „🔔 Beobachten“.</div>`}
       </div>` : ""}
-    ${linkPanel(await me())}
     <h2>🔗 GTCHA-Seite öffnen in</h2>
     <div class="panel">
       <select id="link-mode" aria-label="GTCHA-Seite öffnen in">${Object.entries(LINK_MODES).map(([k, label]) =>
@@ -475,6 +642,8 @@ async function showSettings() {
     <div class="panel"><div class="hint">Private, inoffizielle App mit den Daten deines GTCHA-Discord-Bots.
       Kein Angebot von GTCHA. Gezogen wird immer auf der offiziellen Seite.</div></div>`;
   view.querySelector("#link-mode")?.addEventListener("change", (e) => save("linkMode", e.target.value));
+  view.querySelector("#my-rank")?.addEventListener("change", (e) => save("myRank", e.target.value));
+  view.querySelector("#my-charge")?.addEventListener("change", (e) => save("myCharge", String(Number(e.target.value.replace(/\D/g, "")) || 0)));
   wireLinkPanel();
   const msg = view.querySelector("#msg");
   const readToggles = () => view.querySelectorAll("[data-event]").forEach((i) => { prefs[i.dataset.event] = i.checked; });
@@ -589,7 +758,7 @@ async function claimFlow(b, card) {
   }
   const user = await me();
   if (!user) {
-    if (await ask("Discord verknüpfen", "Zum Melden einmal mit Discord verknüpfen (Push-Tab).", ["Später", "Verknüpfen"]) === "Verknüpfen")
+    if (await ask("Discord verknüpfen", "Zum Melden einmal mit Discord verknüpfen (Reiter „Ich“).", ["Später", "Verknüpfen"]) === "Verknüpfen")
       location.hash = "#/settings";
     return;
   }

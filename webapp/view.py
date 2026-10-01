@@ -225,6 +225,24 @@ class BannerView:
             cards += [c.get('image') for c in pool.get('cards') or []]
         return [u for u in dict.fromkeys(banners + hits + cards) if u]
 
+    async def my_medals(self, user_id: str) -> List[Dict]:
+        """Alle Medaillen eines Discord-Nutzers bei aktiven Bannern, mit Karte (neueste zuerst)."""
+        async with aiosqlite.connect(self.db.db_path) as conn:
+            cur = await conn.execute(
+                "SELECT m.tier, t.banner_id, m.created_at FROM medals m "
+                "JOIN discord_threads t ON t.thread_id = m.thread_id "
+                "WHERE m.user_id = ? AND t.is_expired = 0 ORDER BY m.created_at DESC", (int(user_id),))
+            rows = await cur.fetchall()
+        result = []
+        for tier, banner_id, created in rows:
+            row = await self.db.get_banner(banner_id) or {}
+            pool = json.loads(row['card_pool']) if row.get('card_pool') else {}
+            unit = next((u for u in medal_units(pool) if u["tier"] == tier), {}) if pool else {}
+            result.append({"banner_id": banner_id, "tier": tier, "name": unit.get("name") or tier,
+                           "value": unit.get("value"), "image": unit.get("image"),
+                           "price": to_int(row.get("price_coins")), "t": epoch(created)})
+        return result
+
     async def all_banners(self, with_pool: bool = False) -> List[Dict]:
         rows = await self.db.get_active_banners()
         return [await self.summary(row, with_pool=with_pool) for row in rows.values()]
