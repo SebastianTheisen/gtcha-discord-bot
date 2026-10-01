@@ -1,0 +1,2 @@
+# Nur für die Entwicklung: python -m pytest tests
+pytest>=8

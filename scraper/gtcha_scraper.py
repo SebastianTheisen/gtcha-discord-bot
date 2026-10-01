@@ -9,17 +9,82 @@ GTCHA Webseiten-Scraper - VERSION v6 (Pure DOM)
 import asyncio
 import re
 import random
+import time
+import unicodedata
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Set
 from datetime import datetime, timezone, timedelta
 
-from playwright.async_api import async_playwright, Page, Browser, BrowserContext, ElementHandle
+from playwright.async_api import async_playwright, Page, Browser, BrowserContext
 from loguru import logger
 
 from .models import ScrapedBanner
-from config import CATEGORIES, PARALLEL_SCRAPING, PARALLEL_TABS
+from config import CATEGORIES, PARALLEL_SCRAPING, PARALLEL_TABS, SCRAPER_PROXY
+from utils.card_pool import summarize_cards
 
 JST = timezone(timedelta(hours=9))
+
+FETCH_PACK_LIST_JS = """async () => {
+    const r = await fetch('/api/user/pack/list', {headers: {Accept: 'application/json'}});
+    try { return await r.json(); } catch (e) { return null; }
+}"""
+
+# Lädt Seite 1 der Kartenliste, dann alle weiteren Seiten gleichzeitig, und gibt alle Karten zurück.
+FETCH_CARD_LIST_JS = """async (pid) => {
+    const get = async (n) => {
+        const r = await fetch(`/api/user/pack/card_list/${pid}/${n}`, {headers: {Accept: 'application/json'}});
+        try { return await r.json(); } catch (e) { return {}; }
+    };
+    const first = await get(1);
+    if (!Array.isArray(first.list)) return null;
+    const pages = Math.min(parseInt((first.page || {}).all_page) || 1, 60);
+    const rest = await Promise.all(Array.from({length: pages - 1}, (_, i) => get(i + 2)));
+    return [first, ...rest].flatMap(d => d.list || []);
+}"""
+
+TITLE_SELECTORS = ['.gacha_name', '.gacha-name', '.title', '.name', '.pack-name',
+                   '.gacha_title', 'h3', 'h4', '.header .text']
+
+# Liest pro Banner-Element dieselben Felder wie früher die Einzelabfragen, aber alle in einem
+# Browser-Aufruf. innerText entspricht Playwrights inner_text(), die Sichtbarkeit is_visible().
+BANNER_EXTRACT_JS = """(els, titleSelectors) => els.map(el => {
+    const q = s => { try { return el.querySelector(s); } catch (e) { return null; } };
+    const text = e => (e ? e.innerText : null);
+    const rect = el.getBoundingClientRect();
+    const visible = rect.width > 0 && rect.height > 0 && getComputedStyle(el).visibility !== 'hidden';
+    let title = null;
+    for (const s of titleSelectors) {
+        const t = text(q(s));
+        if (t && t.trim().length > 1) { title = t.trim(); break; }
+    }
+    const priceEl = q('.gacha_pay div:not(:has(img))') || q('.gacha_pay');
+    const limitEl = q('.limit_detail') || q('.buy_limit .limit_detail') || q('.buy_limit');
+    const img = q('img.current, .image img');
+    const cd = q('.countdown');
+    let timer = null;
+    if (cd) { try { timer = cd.querySelector('.num.timer-font, .num, .timer-font'); } catch (e) {} }
+    return {
+        id: el.getAttribute('data-pack-id'),
+        visible,
+        title,
+        price: text(priceEl),
+        limit: text(limitEl),
+        bar: text(q('.gacha_bar')),
+        end: text(q('.end-date')),
+        has_img: !!img,
+        img: img ? img.getAttribute('src') : null,
+        has_countdown: !!cd,
+        timer: text(timer),
+        countdown: text(cd),
+    };
+})"""
+
+
+def _normalize(text: str) -> str:
+    """Akzente entfernen und in Kleinbuchstaben – damit 'pokemon' auf 'Pokémon' matcht."""
+    nfkd = unicodedata.normalize('NFKD', text)
+    return ''.join(c for c in nfkd if not unicodedata.combining(c)).lower()
+
 
 # User-Agent Pool für Rotation
 USER_AGENTS = [
@@ -40,9 +105,6 @@ class GTCHAScraper:
         self._browser: Optional[Browser] = None
         self._context: Optional[BrowserContext] = None
         self._page: Optional[Page] = None
-        self.debug_dir = Path("screenshots/debug")
-        self.debug_dir.mkdir(parents=True, exist_ok=True)
-
         # Banner-Daten
         self._captured_banners: Dict[int, Dict] = {}
         self._category_banners: Dict[str, Set[int]] = {cat: set() for cat in CATEGORIES}
@@ -58,27 +120,75 @@ class GTCHAScraper:
         logger.info("Starte Browser...")
         self._playwright = await async_playwright().start()
 
+        # Der ganze Browser läuft über SCRAPER_PROXY (Tor), weil die Seite den VPS- und
+        # WARP-IPs einen falschen Pack-Zähler liefert. Fällt der Proxy aus, schlägt der Scrape
+        # bewusst fehl, statt direkt (mit falschem Zähler) zu laden.
         self._browser = await self._playwright.chromium.launch(
             headless=self.headless,
-            args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+            # Bilder per Browser-Einstellung statt page.route() blockieren: page.route() schaltet
+            # den HTTP-Cache ab, dann lädt jeder Tab alle Skripte erneut über Tor.
+            args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
+                  '--blink-settings=imagesEnabled=false'],
         )
+        if SCRAPER_PROXY:
+            logger.info(f"Browser-Proxy: {SCRAPER_PROXY.split('@')[-1]}")
+        else:
+            logger.info("Kein Proxy konfiguriert (SCRAPER_PROXY nicht gesetzt)")
 
         # Zufälligen User-Agent auswählen
         user_agent = random.choice(USER_AGENTS)
         logger.debug(f"User-Agent: {user_agent[:50]}...")
 
+        # Manche Server nutzen X-Forwarded-For / X-Real-IP für Geolocation statt der echten IP.
+        # Wir senden eine deutsche Telekom-IP damit der Server Deutschland als Herkunftsland erkennt.
+        # Kein Cache-Control/Pragma: die Seite liefert HTML und API ohnehin mit no-store,
+        # und die Header würden den Browser-Cache für die (unveränderlichen) Skripte umgehen.
+        geo_headers = {
+            "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
+            "X-Forwarded-For": "217.237.150.100",   # Deutsche Telekom (T-Online)
+            "X-Real-IP": "217.237.150.100",
+            "CF-Connecting-IP": "217.237.150.100",
+            "X-Country": "DE",
+            "X-Country-Code": "DE",
+        }
+
+        proxy_cfg = {"server": SCRAPER_PROXY} if SCRAPER_PROXY else None
         self._context = await self._browser.new_context(
-            viewport={"width": 800, "height": 600},
+            viewport={"width": 1920, "height": 1080},
             user_agent=user_agent,
-            locale="ja-JP",
+            extra_http_headers=geo_headers,
+            proxy=proxy_cfg,
         )
 
         self._page = await self._context.new_page()
 
-        # Resource-Blocking für schnelleres Scraping aktivieren
-        await self._block_unnecessary_resources(self._page)
 
-        logger.info("Browser gestartet (v6 - Pure DOM + Resource-Blocking)")
+        # API-Response abfangen: /api/user/pack/list enthält echte Pack-Zahlen.
+        # Listener am Kontext-Level → gilt für alle Pages (main + parallel).
+        self._api_pack_data: Dict[int, dict] = {}
+
+        async def _capture_pack_api(response):
+            try:
+                if response.status != 200:
+                    return
+                ct = response.headers.get('content-type', '')
+                if 'json' not in ct:
+                    return
+                if 'pack/list' in response.url:
+                    data = await response.json()
+                    items = data.get('list', [])
+                    for item in items:
+                        pid = item.get('id')
+                        if pid:
+                            self._api_pack_data[int(pid)] = item
+                    if items:
+                        logger.debug(f"[PACK-API] {len(items)} Pack-Zahlen via Browser+Proxy geladen")
+            except Exception as e:
+                logger.debug(f"[PACK-API] Fehler: {e}")
+
+        self._context.on('response', _capture_pack_api)
+
+        logger.info("Browser gestartet (v6 - Pure DOM, Bilder aus)")
 
     async def close(self):
         if self._context:
@@ -93,28 +203,6 @@ class GTCHAScraper:
         """Zufällige Verzögerung um menschliches Verhalten zu simulieren."""
         delay = random.uniform(min_sec, max_sec)
         await asyncio.sleep(delay)
-
-    async def _block_unnecessary_resources(self, page: Page):
-        """Blockt Bilder, Fonts, CSS und Tracking für schnelleres Scraping.
-
-        Da wir nur das DOM brauchen, können wir diese Ressourcen überspringen.
-        Spart ~40-60% Ladezeit pro Seite.
-        """
-        # Bilder blockieren (verschiedene Formate)
-        await page.route("**/*.{png,jpg,jpeg,gif,webp,svg,ico}", lambda r: r.abort())
-
-        # Fonts blockieren
-        await page.route("**/*.{woff,woff2,ttf,eot,otf}", lambda r: r.abort())
-
-        # Analytics und Tracking blockieren
-        await page.route("**/analytics*", lambda r: r.abort())
-        await page.route("**/tracking*", lambda r: r.abort())
-        await page.route("**/google-analytics*", lambda r: r.abort())
-        await page.route("**/gtag*", lambda r: r.abort())
-        await page.route("**/facebook*", lambda r: r.abort())
-        await page.route("**/twitter*", lambda r: r.abort())
-
-        logger.debug("Resource-Blocking aktiviert")
 
     async def _heartbeat(self, start_time: datetime):
         """Heartbeat-Task der alle 30 Sekunden den Status loggt."""
@@ -135,6 +223,7 @@ class GTCHAScraper:
 
         self._captured_banners = {}
         self._category_banners = {cat: set() for cat in CATEGORIES}
+        self._api_pack_data = {}
         self._current_status = "Initialisierung"
 
         now_jst = datetime.now(JST)
@@ -149,9 +238,18 @@ class GTCHAScraper:
             # === HAUPTLOGIK ===
             try:
                 self._current_status = "Seite laden"
-                await self._page.goto(self.base_url, wait_until="domcontentloaded", timeout=60000)
-                logger.info("Seite geladen, warte auf JS...")
-                await asyncio.sleep(2)
+                # Cache-Busting: Timestamp-Parameter verhindert CDN-Cache-Treffer
+                cache_bust_url = f"{self.base_url}?_={int(time.time())}"
+                await self._page.goto(cache_bust_url, wait_until="domcontentloaded", timeout=90000)
+                logger.info("Seite geladen, warte auf Tabs...")
+                # Warte auf Tab-Menü
+                try:
+                    await self._page.wait_for_selector('.pack_menu_list .pack_menu', timeout=60000)
+                    await asyncio.sleep(1)
+                except Exception as e:
+                    logger.warning(f"Tab-Menü nicht gefunden: {e}")
+                    await asyncio.sleep(3)
+
 
             except asyncio.CancelledError:
                 # Extern abgebrochen (z.B. durch Timeout) - weiterleiten
@@ -177,14 +275,18 @@ class GTCHAScraper:
                         failed_categories.append((category, "Tab nicht gefunden"))
                         continue
 
-                    # Warte auf DOM-Update und Stabilisierung (reduziert von 1-2s)
-                    await self._random_delay(0.3, 0.5)
+                    # Warte auf AJAX-Update der Pack-Zahlen.
+                    # Die Seite rendert erst alte Werte (SSR-Cache), dann lädt JS die echten Zahlen.
+                    # networkidle würde durch WebSockets nie enden → kurzes Timeout akzeptieren.
                     try:
-                        await self._page.wait_for_load_state("domcontentloaded", timeout=5000)
+                        await self._page.wait_for_load_state("networkidle", timeout=4000)
                     except asyncio.CancelledError:
                         raise
                     except:
+                        # Timeout erwartet wegen WebSockets – trotzdem 4s gewartet, reicht für AJAX
                         pass
+                    # Zusätzlicher Buffer damit DOM komplett gerendert ist
+                    await asyncio.sleep(1.5)
 
                     # Banner aus DOM extrahieren
                     self._current_status = f"Extrahiere: {category}"
@@ -234,11 +336,64 @@ class GTCHAScraper:
                 pass
             logger.debug("Heartbeat gestoppt")
 
+    async def fetch_pack_list(self) -> Dict[int, Dict]:
+        """Alle Banner mit Pack-Zahlen in einer Anfrage (pack/list) über die Browser-Sitzung (Tor).
+
+        Ersetzt bei normalen Scrapes das Durchklicken der Tabs. Leeres Ergebnis = Fehler.
+        """
+        page = await self._context.new_page()
+        try:
+            for url in (f"{self.base_url}/api/user/point", self.base_url):
+                # Erst ein leichtes Dokument der Seite (setzt die Sitzung), notfalls die Startseite
+                await page.goto(url, wait_until="domcontentloaded", timeout=90000)
+                data = await page.evaluate(FETCH_PACK_LIST_JS)
+                items = (data or {}).get("list") if isinstance(data, dict) else None
+                if items:
+                    result = {int(it["id"]): it for it in items if it.get("id")}
+                    self._api_pack_data = dict(result)
+                    logger.info(f"[API] pack/list: {len(result)} Banner")
+                    return result
+            logger.warning("[API] pack/list lieferte keine Banner")
+            return {}
+        finally:
+            await page.close()
+
+    async def fetch_card_pools(self, pack_ids: List[int]) -> Dict[int, Dict]:
+        """Holt die komplette Kartenliste (alle Seiten) je Banner über die Browser-Sitzung (Tor)."""
+        pools: Dict[int, Dict] = {}
+        if not pack_ids:
+            return pools
+        page = await self._context.new_page()
+        try:
+            # Ein Dokument auf der Seiten-Domain, damit fetch() Cookies und Proxy des Browsers nutzt
+            await page.goto(f"{self.base_url}/api/user/point", wait_until="domcontentloaded", timeout=60000)
+            for pid in pack_ids:
+                try:
+                    cards = await page.evaluate(FETCH_CARD_LIST_JS, pid)
+                    if cards is None:
+                        logger.warning(f"[POOL] {pid}: Kartenliste nicht abrufbar - nächster Scrape versucht es erneut")
+                        continue
+                    pool = summarize_cards(cards)
+                    if pool:
+                        logger.info(f"[POOL] {pid}: {len(cards)} Karten, {pool['total_count']} Packs, "
+                                    f"{pool['hits_total']} Hits")
+                    else:
+                        # Banner ohne Karten merken, damit er nicht bei jedem Scrape neu geladen wird
+                        pool = {"total_count": 0, "total_value": 0, "hits_total": 0, "top": []}
+                        logger.info(f"[POOL] {pid}: Banner hat keine Kartenliste")
+                    pools[pid] = pool
+                except Exception as e:
+                    logger.warning(f"[POOL] {pid}: Fehler beim Laden der Kartenliste: {e}")
+        finally:
+            await page.close()
+        return pools
+
     async def scrape_all_banners_parallel(self) -> List[ScrapedBanner]:
         """Scrapet alle Kategorien parallel mit mehreren Browser-Tabs."""
 
         self._captured_banners = {}
         self._category_banners = {cat: set() for cat in CATEGORIES}
+        self._api_pack_data = {}
         self._current_status = "Parallel-Scraping"
 
         now_jst = datetime.now(JST)
@@ -266,14 +421,14 @@ class GTCHAScraper:
 
                 for category in category_group:
                     page = await self._context.new_page()
-                    # Resource-Blocking für schnelleres Scraping
-                    await self._block_unnecessary_resources(page)
                     pages.append(page)
                     task = self._scrape_single_category_parallel(page, category)
                     tasks.append(task)
 
-                # Parallel ausführen
-                results = await asyncio.gather(*tasks, return_exceptions=True)
+                # Erster Tab allein füllt den Browser-Cache (Skripte), die übrigen laden
+                # danach parallel aus dem Cache statt alle gleichzeitig über Tor.
+                results = await asyncio.gather(tasks[0], return_exceptions=True)
+                results += await asyncio.gather(*tasks[1:], return_exceptions=True)
 
                 # Pages schließen
                 for page in pages:
@@ -288,14 +443,7 @@ class GTCHAScraper:
                         logger.warning(f"   Fehler bei {category}: {result}")
                         failed_categories.append((category, str(result)))
                     elif result is not None:
-                        count, banners_data = result
-                        # Banner-Daten mergen
-                        for pack_id, data in banners_data.items():
-                            if pack_id not in self._captured_banners:
-                                self._captured_banners[pack_id] = data
-                            self._category_banners[category].add(pack_id)
-                        successful_categories.append((category, count))
-                        logger.info(f"   -> {count} Banner in {category}")
+                        successful_categories.append((category, result[0]))
 
                 # Kurze Pause zwischen Gruppen
                 if group_idx < len(category_groups) - 1:
@@ -337,15 +485,16 @@ class GTCHAScraper:
         banners_data = {}
 
         try:
-            # Seite laden
-            await page.goto(self.base_url, wait_until="domcontentloaded", timeout=60000)
+            # Seite laden - Cache-Busting via Timestamp-Parameter
+            cache_bust_url = f"{self.base_url}?_={int(time.time())}"
+            await page.goto(cache_bust_url, wait_until="domcontentloaded", timeout=90000)
 
             # Warte auf Tab-Menü (JavaScript lädt die Tabs)
             try:
-                await page.wait_for_selector('.pack_menu, .menu-item', timeout=10000)
-                await asyncio.sleep(1)  # Extra Stabilisierung
-            except Exception:
-                # Fallback: feste Wartezeit
+                await page.wait_for_selector('.pack_menu_list .pack_menu', timeout=60000)
+                await asyncio.sleep(1)
+            except Exception as e:
+                logger.debug(f"   [{category}] wait_for_selector fehlgeschlagen: {e}")
                 await asyncio.sleep(3)
 
             # Tab klicken (mit Retry)
@@ -353,9 +502,10 @@ class GTCHAScraper:
             if not clicked:
                 # Retry: Seite neu laden und nochmal versuchen
                 logger.debug(f"   [{category}] Retry nach Tab-Fehler...")
-                await page.reload(wait_until="domcontentloaded", timeout=30000)
+                retry_url = f"{self.base_url}?_={int(time.time())}"
+                await page.goto(retry_url, wait_until="domcontentloaded", timeout=90000)
                 try:
-                    await page.wait_for_selector('.pack_menu, .menu-item', timeout=10000)
+                    await page.wait_for_selector('.pack_menu_list .pack_menu', timeout=60000)
                     await asyncio.sleep(1)
                 except Exception:
                     await asyncio.sleep(3)
@@ -363,11 +513,21 @@ class GTCHAScraper:
                 if not clicked:
                     return (0, {})
 
-            # Warten auf DOM-Update (reduziert von 1-1.5s)
-            await self._random_delay(0.3, 0.5)
+            # Warte auf AJAX-Update der Pack-Zahlen
+            try:
+                await page.wait_for_load_state("networkidle", timeout=4000)
+            except asyncio.CancelledError:
+                raise
+            except:
+                pass
+            await asyncio.sleep(1.5)
 
             # Banner extrahieren
             count = await self._extract_banners_from_page(page, category, banners_data)
+            for pack_id, data in banners_data.items():
+                self._captured_banners.setdefault(pack_id, data)
+                self._category_banners[category].add(pack_id)
+            logger.info(f"   -> {count} Banner in {category}")
             return (count, banners_data)
 
         except asyncio.CancelledError:
@@ -381,44 +541,36 @@ class GTCHAScraper:
         category_keywords = {
             "Bonus": ["bonus", "ボーナス"],
             "MIX": ["mix"],
-            "Yu-Gi-Oh!": ["yu-gi-oh", "yugioh", "遊戯王"],
-            "Pokémon": ["pokemon", "poke", "ポケモン"],
-            "Weiss Schwarz": ["weiss", "schwarz", "ヴァイスシュヴァルツ", "ヴァイスシュバルツ"],
+            "Pokémon": ["pokemon", "pokémon", "poke", "ポケモン"],
             "One piece": ["one piece", "onepiece", "ワンピース"],
             "Dragon Ball": ["dragon ball", "dragonball", "ドラゴンボール"],
         }
 
-        keywords = category_keywords.get(category, [category.lower()])
+        keywords = [_normalize(k) for k in category_keywords.get(category, [category.lower()])]
 
         for attempt in range(2):
             try:
-                # Warte kurz damit die Seite stabil ist (wie in sequenzieller Version)
                 await asyncio.sleep(0.3)
-
-                # Gleiche Selektoren wie sequenzielle Version
-                tabs = await page.query_selector_all('.pack_menu, .menu-item')
-
-                if attempt == 0:
-                    # Log alle gefundenen Tabs beim ersten Versuch
-                    all_tabs = []
-                    for tab in tabs:
-                        try:
-                            t = await tab.inner_text()
-                            all_tabs.append(t.strip())
-                        except:
-                            pass
-                    logger.debug(f"   [{category}] Gefundene Tabs: {all_tabs}")
+                tabs = await page.query_selector_all('.pack_menu_list .pack_menu')
 
                 for tab in tabs:
                     try:
                         text = await tab.inner_text()
-                        text_lower = text.lower().strip()
+                        if not text.strip():
+                            text = await tab.text_content() or ''
+                        if not text.strip():
+                            text = (await tab.get_attribute('aria-label') or
+                                    await tab.get_attribute('title') or
+                                    await tab.get_attribute('data-category') or '')
+
+                        text_norm = _normalize(text.strip())
+                        if not text_norm:
+                            continue
 
                         for keyword in keywords:
-                            if keyword in text_lower:
+                            if keyword in text_norm:
                                 await tab.click()
                                 logger.debug(f"   [{category}] Klick: '{text.strip()}' (keyword: {keyword})")
-                                # Warte nach Klick (reduziert von 1s)
                                 await asyncio.sleep(0.3)
                                 return True
                     except:
@@ -430,7 +582,7 @@ class GTCHAScraper:
                 logger.debug(f"   [{category}] Versuch {attempt+1} fehlgeschlagen: {e}")
                 if "crashed" in str(e).lower():
                     try:
-                        await page.reload(wait_until="domcontentloaded", timeout=30000)
+                        await page.reload(wait_until="domcontentloaded", timeout=90000)
                         await self._random_delay(2.0, 4.0)
                     except:
                         pass
@@ -438,33 +590,44 @@ class GTCHAScraper:
             if attempt < 1:
                 await asyncio.sleep(1)
 
-        logger.warning(f"   Tab nicht gefunden: {category}")
+        # Zeige verfügbare Tabs für Diagnose
+        try:
+            all_tabs = await page.query_selector_all('.pack_menu_list .pack_menu')
+            tab_texts = []
+            for t in all_tabs:
+                try:
+                    txt = (await t.inner_text()).strip() or (await t.text_content() or '').strip()
+                    tab_texts.append(repr(txt))
+                except:
+                    pass
+            logger.warning(f"   Tab nicht gefunden: {category} | Verfügbare Tabs: {tab_texts}")
+        except:
+            logger.warning(f"   Tab nicht gefunden: {category}")
         return False
+
+    async def _read_banner_elements(self, page: Page) -> List[Dict]:
+        """Liest alle Banner-Rohtexte in einem einzigen Browser-Aufruf (statt ~25 Abfragen pro Banner)."""
+        return await page.eval_on_selector_all('[data-pack-id]', BANNER_EXTRACT_JS, TITLE_SELECTORS)
 
     async def _extract_banners_from_page(self, page: Page, category: str, banners_data: Dict[int, Dict]) -> int:
         """Extrahiert Banner aus einer spezifischen Page."""
         count = 0
 
         try:
-            banner_elements = await page.query_selector_all('[data-pack-id]')
-
-            for el in banner_elements:
+            for raw in await self._read_banner_elements(page):
                 try:
-                    is_visible = await el.is_visible()
-                    if not is_visible:
+                    if not raw.get('visible'):
                         continue
-
-                    pack_id_str = await el.get_attribute('data-pack-id')
-                    if not pack_id_str or not pack_id_str.isdigit():
+                    pack_id_str = raw.get('id') or ''
+                    if not pack_id_str.isdigit():
                         continue
-
                     pack_id = int(pack_id_str)
 
                     if pack_id in banners_data:
                         count += 1
                         continue
 
-                    banner = await self._parse_banner_element(el, pack_id, category)
+                    banner = self._parse_banner_raw(raw, pack_id, category)
                     if banner:
                         banners_data[pack_id] = banner
                         count += 1
@@ -479,53 +642,43 @@ class GTCHAScraper:
 
     async def _click_category_tab(self, category: str) -> bool:
         """Klickt auf einen Kategorie-Tab im Menü."""
-        # Mapping: Config-Name -> mögliche DOM-Texte (lowercase für Vergleich)
-        # Japanische Tab-Namen von der Webseite:
-        # ボーナス, MIX, 遊戯王, ポケモン, ヴァイスシュヴァルツ, ワンピース, ホビー
         category_keywords = {
             "Bonus": ["bonus", "ボーナス"],
             "MIX": ["mix"],
-            "Yu-Gi-Oh!": ["yu-gi-oh", "yugioh", "遊戯王"],
-            "Pokémon": ["pokemon", "poke", "ポケモン"],
-            "Weiss Schwarz": ["weiss", "schwarz", "ヴァイスシュヴァルツ", "ヴァイスシュバルツ"],
+            "Pokémon": ["pokemon", "pokémon", "poke", "ポケモン"],
             "One piece": ["one piece", "onepiece", "ワンピース"],
             "Dragon Ball": ["dragon ball", "dragonball", "ドラゴンボール"],
         }
 
-        keywords = category_keywords.get(category, [category.lower()])
+        keywords = [_normalize(k) for k in category_keywords.get(category, [category.lower()])]
 
         # Retry-Mechanismus (2 Versuche reichen normalerweise)
         for attempt in range(2):
             try:
-                # Warte kurz damit die Seite stabil ist
                 await asyncio.sleep(0.3)
-
-                # Finde alle menu-items
-                menu_items = await self._page.query_selector_all('.pack_menu, .menu-item')
-
-                if attempt == 0:
-                    # Log alle gefundenen Tabs beim ersten Versuch
-                    all_tabs = []
-                    for item in menu_items:
-                        try:
-                            t = await item.inner_text()
-                            all_tabs.append(t.strip())
-                        except:
-                            pass
-                    logger.debug(f"   Gefundene Tabs: {all_tabs}")
+                menu_items = await self._page.query_selector_all('.pack_menu_list .pack_menu')
 
                 for item in menu_items:
                     try:
+                        # inner_text() für sichtbaren Text, text_content() als Fallback
                         text = await item.inner_text()
-                        text_clean = text.strip()
-                        text_lower = text_clean.lower()
+                        if not text.strip():
+                            text = await item.text_content() or ''
+                        if not text.strip():
+                            # Letzter Versuch: aria-label oder title Attribut
+                            text = (await item.get_attribute('aria-label') or
+                                    await item.get_attribute('title') or
+                                    await item.get_attribute('data-category') or '')
 
-                        # Prüfe ob einer der Keywords im Tab-Text vorkommt
+                        text_norm = _normalize(text.strip())
+                        if not text_norm:
+                            continue
+
                         for keyword in keywords:
-                            if keyword in text_lower:
+                            if keyword in text_norm:
                                 await item.click()
-                                logger.debug(f"   Klick: '{text_clean}' (keyword: {keyword})")
-                                await asyncio.sleep(0.3)  # reduziert von 1s
+                                logger.debug(f"   Klick: '{text.strip()}' (keyword: {keyword})")
+                                await asyncio.sleep(0.3)
                                 return True
                     except Exception as inner_e:
                         logger.debug(f"   Item-Fehler: {inner_e}")
@@ -533,20 +686,30 @@ class GTCHAScraper:
 
             except Exception as e:
                 logger.debug(f"   Versuch {attempt+1} fehlgeschlagen: {e}")
-                # Bei Crash: Seite neu laden
                 if "crashed" in str(e).lower():
                     try:
                         logger.warning(f"   Seite crasht - lade neu...")
-                        await self._page.reload(wait_until="domcontentloaded", timeout=30000)
+                        await self._page.reload(wait_until="domcontentloaded", timeout=90000)
                         await self._random_delay(2.0, 4.0)
                     except:
                         pass
 
-            # Warten vor nächstem Versuch
             if attempt < 1:
                 await asyncio.sleep(1)
 
-        logger.warning(f"   Tab nicht gefunden: {category}")
+        # Zeige verfügbare Tabs für Diagnose
+        try:
+            all_tabs = await self._page.query_selector_all('.pack_menu_list .pack_menu')
+            tab_texts = []
+            for t in all_tabs:
+                try:
+                    txt = (await t.inner_text()).strip() or (await t.text_content() or '').strip()
+                    tab_texts.append(repr(txt))
+                except:
+                    pass
+            logger.warning(f"   Tab nicht gefunden: {category} | Verfügbare Tabs: {tab_texts}")
+        except:
+            logger.warning(f"   Tab nicht gefunden: {category}")
         return False
 
     async def _extract_banners_from_dom(self, category: str) -> int:
@@ -554,22 +717,16 @@ class GTCHAScraper:
         count = 0
 
         try:
-            # Finde alle Banner-Elemente
-            banner_elements = await self._page.query_selector_all('[data-pack-id]')
-            logger.debug(f"   Gefundene [data-pack-id] Elemente: {len(banner_elements)}")
+            raw_banners = await self._read_banner_elements(self._page)
+            logger.debug(f"   Gefundene [data-pack-id] Elemente: {len(raw_banners)}")
 
-            for el in banner_elements:
+            for raw in raw_banners:
                 try:
-                    # Prüfe Sichtbarkeit
-                    is_visible = await el.is_visible()
-                    if not is_visible:
+                    if not raw.get('visible'):
                         continue
-
-                    # Pack ID
-                    pack_id_str = await el.get_attribute('data-pack-id')
-                    if not pack_id_str or not pack_id_str.isdigit():
+                    pack_id_str = raw.get('id') or ''
+                    if not pack_id_str.isdigit():
                         continue
-
                     pack_id = int(pack_id_str)
 
                     # Wenn Banner schon existiert, nur Kategorie hinzufügen
@@ -579,7 +736,7 @@ class GTCHAScraper:
                         continue
 
                     # Neuen Banner aus DOM extrahieren
-                    banner = await self._parse_banner_element(el, pack_id, category)
+                    banner = self._parse_banner_raw(raw, pack_id, category)
                     if banner:
                         self._captured_banners[pack_id] = banner
                         self._category_banners[category].add(pack_id)
@@ -593,45 +750,21 @@ class GTCHAScraper:
 
         return count
 
-    async def _parse_banner_element(self, el: ElementHandle, pack_id: int, category: str) -> Optional[Dict]:
-        """Parst ein Banner-Element und extrahiert alle Daten."""
+    def _parse_banner_raw(self, raw: Dict, pack_id: int, category: str) -> Optional[Dict]:
+        """Wertet die Rohtexte eines Banner-Elements aus (siehe BANNER_EXTRACT_JS)."""
         banner = {
             'pack_id': pack_id,
             'category': category,
         }
 
         try:
-            # Titel/Name aus verschiedenen möglichen Elementen
-            title_selectors = [
-                '.gacha_name',
-                '.gacha-name',
-                '.title',
-                '.name',
-                '.pack-name',
-                '.gacha_title',
-                'h3',
-                'h4',
-                '.header .text',
-            ]
-            for sel in title_selectors:
-                try:
-                    title_el = await el.query_selector(sel)
-                    if title_el:
-                        title_text = await title_el.inner_text()
-                        title_text = title_text.strip()
-                        if title_text and len(title_text) > 1:
-                            banner['title'] = title_text
-                            break
-                except:
-                    pass
+            if raw.get('title'):
+                banner['title'] = raw['title']
 
             # Preis aus .gacha_pay
             # <div class="gacha_pay"><img ...><div>1.111</div></div>
-            price_el = await el.query_selector('.gacha_pay div:not(:has(img))')
-            if not price_el:
-                price_el = await el.query_selector('.gacha_pay')
-            if price_el:
-                price_text = await price_el.inner_text()
+            price_text = raw.get('price')
+            if price_text:
                 price_text = price_text.strip().replace('.', '').replace(',', '').replace(' ', '')
                 # Extrahiere Zahl
                 price_match = re.search(r'(\d+)', price_text)
@@ -642,13 +775,8 @@ class GTCHAScraper:
             # Deutsch: "Beschränkt auf 10 Mal" oder "Beschränkt auf 10 Mal pro Tag"
             # Japanisch: "1日50回限定" (50 mal pro Tag limitiert)
             # Erst .limit_detail versuchen (spezifischer), dann .buy_limit
-            limit_el = await el.query_selector('.limit_detail')
-            if not limit_el:
-                limit_el = await el.query_selector('.buy_limit .limit_detail')
-            if not limit_el:
-                limit_el = await el.query_selector('.buy_limit')
-            if limit_el:
-                limit_text = await limit_el.inner_text()
+            limit_text = raw.get('limit')
+            if limit_text is not None:
                 logger.debug(f"   limit_detail Text für {pack_id}: '{limit_text}'")
 
                 # Japanisches Format: "1日50回限定" -> 50 (Zahl vor 回)
@@ -669,43 +797,70 @@ class GTCHAScraper:
                             banner['entries_per_day'] = int(all_numbers[-1])
                             logger.debug(f"   Entries für {pack_id}: {banner['entries_per_day']} (Fallback)")
                         else:
-                            logger.warning(f"   Entries-Pattern nicht gefunden für {pack_id}: '{limit_text}'")
+                            logger.debug(f"   Entries-Pattern nicht gefunden für {pack_id}: '{limit_text}'")
             else:
                 logger.debug(f"   Kein .limit_detail/.buy_limit für {pack_id}")
 
-            # Packs aus .gacha_bar
-            # "Rückstand 100 / 2.000" oder "0 / 2,000"
-            bar_el = await el.query_selector('.gacha_bar')
-            if bar_el:
-                bar_text = await bar_el.inner_text()
-                logger.debug(f"   gacha_bar Text für {pack_id}: '{bar_text}'")
-                # Entferne Tausender-Trennzeichen (. und ,) aus Zahlen
-                # "0 / 2.000" -> "0 / 2000"
+            # Packs: API bevorzugen (immer aktuell), DOM als Fallback (CDN-gecacht)
+            # WICHTIG: DE-Proxy kann 0 zurückgeben für Banner die nur im JP-Pool verfügbar sind.
+            # Wenn API=0 aber DOM>0 → Banner noch aktiv → DOM-Wert verwenden.
+            api_item = self._api_pack_data.get(pack_id, {})
+            api_pack_count = None
+            if api_item:
+                pack_fields = ['pack_count', 'pack_remaining', 'remaining_count', 'remaining',
+                               'stock', 'packs', 'pack_num', 'pack_stock', 'count']
+                for field in pack_fields:
+                    val = api_item.get(field)
+                    if val is not None:
+                        api_pack_count = int(val)
+                        logger.debug(f"   [PACK-API] {pack_id}: {val} (Feld: {field})")
+                        break
+                else:
+                    logger.debug(f"   [PACK-API] {pack_id}: unbekannte Felder {list(api_item.keys())}")
+
+                # total_packs aus API
+                total_fields = ['total_pack_count', 'total_pack', 'total_count', 'pack_total', 'total', 'pack_limit']
+                for field in total_fields:
+                    val = api_item.get(field)
+                    if val is not None:
+                        banner['total_packs'] = int(val)
+                        break
+
+            # DOM immer lesen – als Validierung wenn API 0 zurückgibt
+            dom_pack_count = None
+            dom_total_packs = None
+            bar_text = raw.get('bar')
+            if bar_text is not None:
                 bar_text_clean = re.sub(r'(\d)[.,](\d{3})', r'\1\2', bar_text)
-                # Wiederhole für mehrere Tausender (z.B. 1.000.000)
                 bar_text_clean = re.sub(r'(\d)[.,](\d{3})', r'\1\2', bar_text_clean)
-                # Suche nach "X / Y" Pattern
                 packs_match = re.search(r'(\d+)\s*/\s*(\d+)', bar_text_clean)
                 if packs_match:
-                    banner['current_packs'] = int(packs_match.group(1))
-                    banner['total_packs'] = int(packs_match.group(2))
-                    logger.debug(f"   Packs für {pack_id}: {banner['current_packs']}/{banner['total_packs']}")
+                    dom_pack_count = int(packs_match.group(1))
+                    dom_total_packs = int(packs_match.group(2))
                 else:
-                    logger.warning(f"   Packs-Pattern nicht gefunden für {pack_id}: '{bar_text_clean}'")
+                    logger.debug(f"   [PACK-DOM] Pattern nicht gefunden für {pack_id}: '{bar_text_clean}'")
             else:
-                logger.debug(f"   Kein .gacha_bar für {pack_id}")
+                logger.debug(f"   [PACK-DOM] Kein .gacha_bar für {pack_id}")
+
+            # Priorität: API>0 gewinnt; wenn API=0/fehlend, DOM als Fallback
+            if api_pack_count is not None and api_pack_count > 0:
+                banner['current_packs'] = api_pack_count
+            elif dom_pack_count is not None and dom_pack_count > 0:
+                banner['current_packs'] = dom_pack_count
+                if dom_total_packs is not None and 'total_packs' not in banner:
+                    banner['total_packs'] = dom_total_packs
+                logger.debug(f"   [PACK] {pack_id}: DOM-Fallback ({dom_pack_count}) da API={api_pack_count}")
+            elif api_pack_count is not None:
+                banner['current_packs'] = api_pack_count  # Beide zeigen 0 – wirklich leer
 
             # End-Datum aus .end-date
             # "Verkauf bis 2026/01/21 JST"
-            end_el = await el.query_selector('.end-date')
-            if end_el:
-                end_text = await end_el.inner_text()
-                banner['sale_end_date'] = end_text.strip()
+            if raw.get('end') is not None:
+                banner['sale_end_date'] = raw['end'].strip()
 
             # Bild-URL aus img.current
-            img_el = await el.query_selector('img.current, .image img')
-            if img_el:
-                img_src = await img_el.get_attribute('src')
+            if raw.get('has_img'):
+                img_src = raw.get('img')
                 if img_src:
                     if not img_src.startswith('http'):
                         img_src = f"{self.base_url}{img_src}"
@@ -715,20 +870,17 @@ class GTCHAScraper:
 
             # Prüfe ob Banner aktiv ist (kein Countdown = aktiv)
             # Wenn "Bis zum Verkaufsbeginn" sichtbar ist oder Timer > 0, ist der Banner noch nicht aktiv
-            countdown_el = await el.query_selector('.countdown')
-            if countdown_el:
+            if raw.get('has_countdown'):
                 # Prüfe auf Timer-Wert
-                timer_el = await countdown_el.query_selector('.num.timer-font, .num, .timer-font')
-                if timer_el:
-                    timer_text = await timer_el.inner_text()
-                    timer_text = timer_text.strip()
+                if raw.get('timer') is not None:
+                    timer_text = raw['timer'].strip()
                     # Wenn Timer nicht leer und nicht "00.00.00" oder ähnlich
                     if timer_text and not all(c in '0.: ' for c in timer_text):
                         logger.debug(f"   Banner {pack_id} noch nicht aktiv (Timer: {timer_text})")
                         return None
 
                 # Fallback: Prüfe auf "Verkaufsbeginn" Text
-                countdown_text = await countdown_el.inner_text()
+                countdown_text = raw.get('countdown') or ''
                 if 'Verkaufsbeginn' in countdown_text or 'start' in countdown_text.lower():
                     logger.debug(f"   Banner {pack_id} noch nicht aktiv (Countdown)")
                     return None
@@ -743,54 +895,6 @@ class GTCHAScraper:
         except Exception as e:
             logger.debug(f"   Parse Fehler für {pack_id}: {e}")
             return None
-
-    async def scrape_banner_details(self, pack_id: int) -> Tuple[Optional[str], Optional[bytes]]:
-        """Holt den Best Hit (erste Karte) von der Detail-Seite."""
-        detail_url = f"{self.base_url}/pack-detail?packId={pack_id}"
-
-        try:
-            logger.debug(f"   Lade Detail-Seite: {detail_url}")
-            await self._page.goto(detail_url, wait_until="domcontentloaded", timeout=30000)
-            await self._random_delay(2.0, 4.0)
-
-            # Suche nach der ersten Karte (Rang 1)
-            # Die erste .card-container hat rank-icon-1
-            # Name ist in .card-info .name .text
-
-            # Methode 1: Erste Karte mit rank-icon-1
-            first_card = await self._page.query_selector('.card-container:has(.rank-icon-1)')
-            if first_card:
-                name_el = await first_card.query_selector('.name .text, .name span')
-                if name_el:
-                    text = await name_el.inner_text()
-                    if text and len(text.strip()) > 2:
-                        logger.debug(f"   Best Hit: {text.strip()}")
-                        return text.strip(), None
-
-            # Methode 2: Erste .card-container
-            first_card = await self._page.query_selector('.card-container')
-            if first_card:
-                name_el = await first_card.query_selector('.name .text, .name span, .name')
-                if name_el:
-                    text = await name_el.inner_text()
-                    if text and len(text.strip()) > 2:
-                        logger.debug(f"   Best Hit: {text.strip()}")
-                        return text.strip(), None
-
-            # Methode 3: Direkt .name .text suchen
-            name_el = await self._page.query_selector('.card-info .name .text, .name .text')
-            if name_el:
-                text = await name_el.inner_text()
-                if text and len(text.strip()) > 2:
-                    logger.debug(f"   Best Hit: {text.strip()}")
-                    return text.strip(), None
-
-            logger.debug(f"   Kein Best Hit gefunden für {pack_id}")
-            return None, None
-
-        except Exception as e:
-            logger.debug(f"   Detail-Seite Fehler: {e}")
-            return None, None
 
     def _convert_to_scraped_banners(self) -> List[ScrapedBanner]:
         """Konvertiert zu ScrapedBanner Objekten."""

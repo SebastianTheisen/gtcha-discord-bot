@@ -34,9 +34,7 @@ class Config:
         channel_ids = {
             "Bonus": int(os.getenv("CHANNEL_BONUS") or "0"),
             "MIX": int(os.getenv("CHANNEL_MIX") or "0"),
-            "Yu-Gi-Oh!": int(os.getenv("CHANNEL_YUGIOH") or "0"),
             "Pokémon": int(os.getenv("CHANNEL_POKEMON") or "0"),
-            "Weiss Schwarz": int(os.getenv("CHANNEL_WEISS_SCHWARZ") or "0"),
             "One piece": int(os.getenv("CHANNEL_ONE_PIECE") or "0"),
             "Dragon Ball": int(os.getenv("CHANNEL_DRAGON_BALL") or "0"),
         }
@@ -62,7 +60,7 @@ except ValueError as e:
     config = None
 
 # Direkte Exporte fuer einfachen Import
-CATEGORIES = ["Bonus", "MIX", "Yu-Gi-Oh!", "Pokémon", "Weiss Schwarz", "One piece", "Dragon Ball"]
+CATEGORIES = ["Bonus", "MIX", "Pokémon", "One piece", "Dragon Ball"]
 MEDAL_EMOJIS = {"T1": "🥇", "T2": "🥈", "T3": "🥉"}
 
 # Kompatibilitaets-Exporte
@@ -75,9 +73,7 @@ DATABASE_PATH = os.getenv("DATABASE_PATH", "data/gtcha_bot.db")
 CHANNEL_IDS = {
     "Bonus": int(os.getenv("CHANNEL_BONUS") or "0"),
     "MIX": int(os.getenv("CHANNEL_MIX") or "0"),
-    "Yu-Gi-Oh!": int(os.getenv("CHANNEL_YUGIOH") or "0"),
     "Pokémon": int(os.getenv("CHANNEL_POKEMON") or "0"),
-    "Weiss Schwarz": int(os.getenv("CHANNEL_WEISS_SCHWARZ") or "0"),
     "One piece": int(os.getenv("CHANNEL_ONE_PIECE") or "0"),
     "Dragon Ball": int(os.getenv("CHANNEL_DRAGON_BALL") or "0"),
 }
@@ -90,6 +86,11 @@ ADMIN_CHANNEL_ID = int(os.getenv("ADMIN_CHANNEL_ID") or "0")
 # Für kleine Server können diese Werte reduziert werden
 MEMORY_WARNING_MB = int(os.getenv("MEMORY_WARNING_MB") or "300")
 MEMORY_CRITICAL_MB = int(os.getenv("MEMORY_CRITICAL_MB") or "500")
+
+# HTTP/SOCKS5-Proxy für den Scraper (optional, aber nötig wenn VPS-IP als Japan erkannt wird)
+# Beispiel: "http://user:pass@proxy-host:3128" oder "socks5://user:pass@proxy-host:1080"
+# Ohne Proxy liefert die Website je nach VPS-IP-Geolocation andere Pack-Zahlen (JP vs. international)
+SCRAPER_PROXY = os.getenv("SCRAPER_PROXY", "")
 
 # Paralleles Scrapen aktivieren (kann mehr RAM verbrauchen)
 PARALLEL_SCRAPING = os.getenv("PARALLEL_SCRAPING", "false").lower() == "true"

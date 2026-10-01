@@ -2,6 +2,8 @@
 Datenbank-Operationen
 """
 
+import json
+
 import aiosqlite
 from pathlib import Path
 from typing import Optional, Dict, Any, List
@@ -56,6 +58,11 @@ class Database:
                     user_id INTEGER,
                     created_at TEXT,
                     UNIQUE(thread_id, tier)
+                );
+
+                CREATE TABLE IF NOT EXISTS bot_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS pack_history (
@@ -118,6 +125,29 @@ class Database:
             except Exception as e:
                 logger.debug(f"Migration Medaillen-Sync: {e}")
 
+            # Migration: Kartenpool (JSON) pro Banner, Top-5-Nachricht und Lohnt-sich-Hinweis pro Thread
+            for table, col in [('banners', 'card_pool TEXT'),
+                               ('banners', 'decided_value INTEGER'),
+                               ('banners', 'ship_count INTEGER'),
+                               ('banners', 'ship_value INTEGER'),
+                               ('banners', 'pulled_cards TEXT'),
+                               ('banners', 'unsure_cards TEXT'),
+                               ('discord_threads', 'hit_message_ids TEXT'),
+                               ('discord_threads', 'endspurt_sent INTEGER DEFAULT 0'),
+                               ('banners', 'conditions TEXT'),
+                               ('banners', 'site_stats TEXT'),
+                               ('discord_threads', 'hit_list_sig TEXT'),
+                               ('banners', 'starts_at INTEGER'),
+                               ('banners', 'start_announced INTEGER DEFAULT 0'),
+                               ('discord_threads', 'top5_message_id INTEGER'),
+                               ('discord_threads', 'value_alert_sent INTEGER DEFAULT 0')]:
+                try:
+                    await db.execute(f"ALTER TABLE {table} ADD COLUMN {col}")
+                    await db.commit()
+                    logger.info(f"Migration: {table}.{col.split()[0]} hinzugefügt")
+                except Exception:
+                    pass  # Spalte existiert bereits
+
             # Performance-Indexes hinzufügen (IF NOT EXISTS für idempotente Migration)
             await db.executescript("""
                 CREATE INDEX IF NOT EXISTS idx_banners_is_active ON banners(is_active);
@@ -178,6 +208,141 @@ class Database:
 
             await db.commit()
 
+    async def get_banners_without_pool(self, limit: int, prefer_ids: List[int]) -> List[int]:
+        """Aktive Banner mit Thread, deren Kartenpool noch fehlt; prefer_ids (z.B. neue Banner) zuerst."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("""
+                SELECT b.pack_id FROM banners b
+                JOIN discord_threads t ON t.banner_id = b.pack_id AND t.is_expired = 0
+                WHERE b.is_active = 1 AND (b.card_pool IS NULL OR b.card_pool NOT LIKE '%"version": 2%')
+            """)
+            ids = [row[0] for row in await cursor.fetchall()]
+        preferred = set(prefer_ids)
+        ids.sort(key=lambda pid: pid not in preferred)
+        return ids[:limit]
+
+    async def save_card_pool(self, pack_id: int, pool: Dict) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE banners SET card_pool = ? WHERE pack_id = ?",
+                             (json.dumps(pool, ensure_ascii=False), pack_id))
+            await db.commit()
+
+    async def get_card_pool(self, pack_id: int) -> Optional[Dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("SELECT card_pool FROM banners WHERE pack_id = ?", (pack_id,))
+            row = await cursor.fetchone()
+        return json.loads(row[0]) if row and row[0] else None
+
+    async def get_pull_tracking(self, pack_id: int) -> Dict:
+        """Zuletzt gesehene Zähler (None = noch nie gesehen) und als gezogen erkannte Karten."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT decided_value, ship_count, ship_value, pulled_cards, unsure_cards "
+                "FROM banners WHERE pack_id = ?", (pack_id,))
+            row = await cursor.fetchone()
+        if not row:
+            return {"decided_value": None, "ship_count": None, "ship_value": None, "pulled": [], "unsure": []}
+        return {"decided_value": row[0], "ship_count": row[1], "ship_value": row[2],
+                "pulled": json.loads(row[3]) if row[3] else [],
+                "unsure": json.loads(row[4]) if row[4] else []}
+
+    async def set_pull_tracking(self, pack_id: int, decided_value: Optional[int], ship_count: Optional[int],
+                                ship_value: Optional[int], pulled: List[str], unsure: List[Dict]) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE banners SET decided_value = ?, ship_count = ?, ship_value = ?, pulled_cards = ?, "
+                "unsure_cards = ? WHERE pack_id = ?",
+                (decided_value, ship_count, ship_value, json.dumps(pulled), json.dumps(unsure), pack_id))
+            await db.commit()
+
+    async def get_sales_since(self, pack_id: int, since: datetime) -> tuple:
+        """(verkaufte Packs seit `since`, Zeitpunkt der ersten Änderung in diesem Zeitraum oder None)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT COALESCE(SUM(old_count - new_count), 0), MIN(changed_at) FROM pack_history "
+                "WHERE banner_id = ? AND changed_at >= ? AND new_count < old_count",
+                (pack_id, since.isoformat()))
+            sold, first = await cursor.fetchone()
+        return int(sold or 0), datetime.fromisoformat(first) if first else None
+
+    async def set_endspurt_sent(self, thread_id: int) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE discord_threads SET endspurt_sent = 1 WHERE thread_id = ?", (thread_id,))
+            await db.commit()
+
+    async def get_meta(self, key: str) -> Optional[str]:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("SELECT value FROM bot_meta WHERE key = ?", (key,))
+            row = await cursor.fetchone()
+        return row[0] if row else None
+
+    async def set_meta(self, key: str, value: str) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("INSERT OR REPLACE INTO bot_meta (key, value) VALUES (?, ?)", (key, value))
+            await db.commit()
+
+    async def update_site_stats(self, pack_id: int, stats: Dict) -> bool:
+        """Speichert die Versand-Zahlen der Seite; True, wenn sie sich geändert haben."""
+        new = json.dumps(stats, sort_keys=True)
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("SELECT site_stats FROM banners WHERE pack_id = ?", (pack_id,))
+            row = await cursor.fetchone()
+            if not row or row[0] == new:
+                return False
+            await db.execute("UPDATE banners SET site_stats = ? WHERE pack_id = ?", (new, pack_id))
+            await db.commit()
+        return True
+
+    async def update_conditions(self, pack_id: int, conditions: Dict) -> bool:
+        """Speichert die Kaufbedingungen; True, wenn sie sich geändert haben."""
+        new = json.dumps(conditions, sort_keys=True, ensure_ascii=False)
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("SELECT conditions FROM banners WHERE pack_id = ?", (pack_id,))
+            row = await cursor.fetchone()
+            if not row or row[0] == new:
+                return False
+            await db.execute("UPDATE banners SET conditions = ? WHERE pack_id = ?", (new, pack_id))
+            await db.commit()
+        return True
+
+    async def set_start(self, pack_id: int, starts_at: Optional[int], announced: bool) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE banners SET starts_at = ?, start_announced = ? WHERE pack_id = ?",
+                             (starts_at, 1 if announced else 0, pack_id))
+            await db.commit()
+
+    async def update_price(self, pack_id: int, price: int) -> bool:
+        """Setzt den Packpreis, wenn er fehlt oder abweicht; True bei Änderung."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "UPDATE banners SET price_coins = ? WHERE pack_id = ? AND (price_coins IS NULL OR price_coins != ?)",
+                (price, pack_id, price))
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def set_hit_list_sig(self, thread_id: int, sig: str) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE discord_threads SET hit_list_sig = ? WHERE thread_id = ?", (sig, thread_id))
+            await db.commit()
+
+    async def set_hit_message_ids(self, thread_id: int, message_ids: List[int]) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE discord_threads SET hit_message_ids = ?, top5_message_id = ? WHERE thread_id = ?",
+                             (json.dumps(message_ids), message_ids[0] if message_ids else None, thread_id))
+            await db.commit()
+
+    async def set_top5_message_id(self, thread_id: int, message_id: int) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE discord_threads SET top5_message_id = ? WHERE thread_id = ?",
+                             (message_id, thread_id))
+            await db.commit()
+
+    async def set_value_alert_sent(self, thread_id: int, sent: bool) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE discord_threads SET value_alert_sent = ? WHERE thread_id = ?",
+                             (1 if sent else 0, thread_id))
+            await db.commit()
+
     async def update_banner_entries(self, pack_id: int, entries_per_day: int) -> None:
         """Aktualisiert entries_per_day für einen Banner."""
         now = datetime.now().isoformat()
@@ -208,6 +373,11 @@ class Database:
     async def save_thread(self, banner_id: int, thread_id: int, channel_id: int, starter_message_id: int) -> None:
         now = datetime.now().isoformat()
         async with aiosqlite.connect(self.db_path) as db:
+            # Alte Threads für denselben Banner als expired markieren (verhindert doppelte Einträge)
+            await db.execute(
+                "UPDATE discord_threads SET is_expired = 1 WHERE banner_id = ? AND thread_id != ?",
+                (banner_id, thread_id)
+            )
             await db.execute("""
                 INSERT OR REPLACE INTO discord_threads
                 (banner_id, thread_id, channel_id, starter_message_id, created_at)
@@ -234,6 +404,19 @@ class Database:
             row = await cursor.fetchone()
             return dict(row) if row else None
 
+    async def get_medals(self, thread_id: int) -> Dict[str, int]:
+        """Alle vergebenen Medaillen eines Threads: Stufe (T1-T10) -> Discord-User-ID (0 = unbekannt)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("SELECT tier, user_id FROM medals WHERE thread_id = ?", (thread_id,))
+            medals = {row[0]: row[1] or 0 for row in await cursor.fetchall()}
+            cursor = await db.execute(
+                "SELECT t1_claimed, t2_claimed, t3_claimed FROM discord_threads WHERE thread_id = ?", (thread_id,))
+            row = await cursor.fetchone()
+        for tier, claimed in zip(("T1", "T2", "T3"), row or ()):
+            if claimed:
+                medals.setdefault(tier, 0)
+        return medals
+
     async def save_medal(self, thread_id: int, tier: str, user_id: int) -> None:
         now = datetime.now().isoformat()
         async with aiosqlite.connect(self.db_path) as db:
@@ -254,33 +437,13 @@ class Database:
     async def get_thread_by_banner_id(self, banner_id: int) -> Optional[Dict]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
+            # Aktive Threads zuerst (is_expired=0), dann neueste - verhindert Rückgabe alter gelöschter Threads
             cursor = await db.execute(
-                "SELECT * FROM discord_threads WHERE banner_id = ?", (banner_id,)
+                "SELECT * FROM discord_threads WHERE banner_id = ? ORDER BY is_expired ASC, id DESC LIMIT 1",
+                (banner_id,)
             )
             row = await cursor.fetchone()
             return dict(row) if row else None
-
-    async def get_medal_status(self, thread_id: int) -> Dict[str, bool]:
-        """Gibt den Status der Medaillen für einen Thread zurück.
-
-        Returns:
-            Dict mit 'T1', 'T2', 'T3' als Keys und True/False als Werte
-            (True = vergeben, False = verfügbar)
-        """
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                "SELECT t1_claimed, t2_claimed, t3_claimed FROM discord_threads WHERE thread_id = ?",
-                (thread_id,)
-            )
-            row = await cursor.fetchone()
-            if row:
-                return {
-                    'T1': bool(row['t1_claimed']),
-                    'T2': bool(row['t2_claimed']),
-                    'T3': bool(row['t3_claimed'])
-                }
-            return {'T1': False, 'T2': False, 'T3': False}
 
     async def delete_thread(self, banner_id: int) -> None:
         async with aiosqlite.connect(self.db_path) as db:
@@ -316,6 +479,29 @@ class Database:
 
             return stats
 
+    async def get_all_active_banners_basic(self) -> List[Dict]:
+        """Gibt pack_id, current_packs und total_packs aller aktiven Banner zurück."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT pack_id, current_packs, total_packs FROM banners WHERE is_active = 1"
+            )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def get_banner_states(self) -> Dict[int, bool]:
+        """pack_id -> aktiv? für alle Banner, die der Bot kennt."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("SELECT pack_id, is_active FROM banners")
+            return {row[0]: bool(row[1]) for row in await cursor.fetchall()}
+
+    async def get_active_banners(self) -> Dict[int, Dict]:
+        """Alle aktiven Banner als pack_id -> Zeile."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM banners WHERE is_active = 1")
+            return {row["pack_id"]: dict(row) for row in await cursor.fetchall()}
+
     async def get_all_active_banner_ids(self) -> List[int]:
         """Gibt alle aktiven Banner-IDs zurück."""
         async with aiosqlite.connect(self.db_path) as db:
@@ -324,30 +510,6 @@ class Database:
             )
             rows = await cursor.fetchall()
             return [row[0] for row in rows]
-
-    async def increment_not_found_count(self, pack_id: int) -> int:
-        """Erhöht not_found_count um 1 und gibt den neuen Wert zurück."""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "UPDATE banners SET not_found_count = not_found_count + 1 WHERE pack_id = ?",
-                (pack_id,)
-            )
-            await db.commit()
-
-            cursor = await db.execute(
-                "SELECT not_found_count FROM banners WHERE pack_id = ?", (pack_id,)
-            )
-            row = await cursor.fetchone()
-            return row[0] if row else 0
-
-    async def reset_not_found_count(self, pack_id: int) -> None:
-        """Setzt not_found_count auf 0 zurück."""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "UPDATE banners SET not_found_count = 0 WHERE pack_id = ?",
-                (pack_id,)
-            )
-            await db.commit()
 
     async def batch_reset_not_found_count(self, pack_ids: List[int]) -> None:
         """Setzt not_found_count für alle angegebenen Banner auf 0 (Batch-Update)."""
@@ -361,8 +523,8 @@ class Database:
             )
             await db.commit()
 
-    async def batch_increment_not_found_count(self, pack_ids: List[int]) -> List[int]:
-        """Erhöht not_found_count für alle Banner um 1 und gibt IDs mit count >= 20 zurück."""
+    async def batch_increment_not_found_count(self, pack_ids: List[int], threshold: int = 20) -> List[int]:
+        """Erhöht not_found_count für alle Banner um 1 und gibt IDs mit count >= threshold zurück."""
         if not pack_ids:
             return []
         async with aiosqlite.connect(self.db_path) as db:
@@ -372,10 +534,9 @@ class Database:
                 pack_ids
             )
             await db.commit()
-            # Finde Banner die jetzt >= 20 haben
             cursor = await db.execute(
-                f"SELECT pack_id FROM banners WHERE pack_id IN ({placeholders}) AND not_found_count >= 20",
-                pack_ids
+                f"SELECT pack_id FROM banners WHERE pack_id IN ({placeholders}) AND not_found_count >= ?",
+                [*pack_ids, threshold]
             )
             rows = await cursor.fetchall()
             return [row[0] for row in rows]
@@ -436,17 +597,6 @@ class Database:
             await db.commit()
             return len(old_ids)
 
-    async def get_expired_banners(self, threshold: int = 2) -> List[Dict]:
-        """Gibt Banner zurück die >= threshold mal nicht gefunden wurden."""
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                "SELECT * FROM banners WHERE not_found_count >= ? AND is_active = 1",
-                (threshold,)
-            )
-            rows = await cursor.fetchall()
-            return [dict(row) for row in rows]
-
     async def mark_banner_inactive(self, pack_id: int) -> None:
         """Markiert einen Banner als inaktiv (statt löschen)."""
         now = datetime.now().isoformat()
@@ -465,26 +615,6 @@ class Database:
                 (banner_id,)
             )
             await db.commit()
-
-    async def get_medal_count(self, thread_id: int) -> int:
-        """Gibt die Anzahl der bereits vergebenen Medaillen für einen Thread zurück."""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT COUNT(*) FROM medals WHERE thread_id = ?",
-                (thread_id,)
-            )
-            row = await cursor.fetchone()
-            return row[0] if row else 0
-
-    async def get_medals_for_thread(self, thread_id: int) -> List[str]:
-        """Gibt Liste der vergebenen Medaillen-Tiers für einen Thread zurück."""
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT tier FROM medals WHERE thread_id = ?",
-                (thread_id,)
-            )
-            rows = await cursor.fetchall()
-            return [row[0] for row in rows]
 
     async def update_probability_message_id(self, thread_id: int, message_id: int) -> None:
         """Speichert die Message-ID der Wahrscheinlichkeits-Nachricht."""

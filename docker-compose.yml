@@ -1,11 +1,43 @@
-version: '3.8'
 services:
+  tor:
+    build: ./tor
+    container_name: gtcha-tor
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - TOR_CONTROL_PASSWORD=${TOR_CONTROL_PASSWORD:-gtcha-tor-control}
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
   gtcha-bot:
     build: .
     container_name: gtcha-discord-bot
     restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - tor
     env_file:
       - .env
+    environment:
+      # Die Seite liefert den bisher genutzten IPs (VPS, WARP) einen falschen Pack-Zähler;
+      # über Tor-Ausgänge kommen die echten Werte.
+      - SCRAPER_PROXY=socks5://127.0.0.1:9050
+      - TOR_CONTROL_PASSWORD=${TOR_CONTROL_PASSWORD:-gtcha-tor-control}
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+    healthcheck:
+      # gesund, wenn in den letzten 15 Minuten ein Scrape fertig wurde
+      test: ["CMD", "python", "-c", "import os,sys,time; sys.exit(time.time() - os.path.getmtime('/app/data/heartbeat') > 900)"]
+      interval: 2m
+      timeout: 10s
+      start_period: 20m
+      retries: 1
