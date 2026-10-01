@@ -656,15 +656,15 @@ class GTCHABot(commands.Bot):
                         pools = {}
                     for pid, pool in pools.items():
                         await self.db.save_card_pool(pid, pool)
-                        await self._refresh_pool_views(pid)
+                        await self._refresh_pool_views(pid, initial_pool=True)
 
                 # Hole alle bekannten Banner aus der DB
                 db_banner_ids = set(await self.db.get_all_active_banner_ids())
 
-                # SCHUTZ: Nur tracken wenn mindestens 60 Banner gefunden wurden
-                # Verhindert Massen-Löschung bei fehlgeschlagenem Scrape
-                # (Website hat normalerweise 50-100 Banner)
-                MIN_BANNERS_FOR_TRACKING = 60
+                # SCHUTZ: Nur tracken wenn der Scrape fast alle Banner gefunden hat, die die
+                # Seite laut API anbietet. Verhindert Massen-Löschung bei fehlgeschlagenem Scrape.
+                api_banner_count = len(getattr(scraper, '_api_pack_data', {}) or {})
+                MIN_BANNERS_FOR_TRACKING = max(30, int(api_banner_count * 0.8))
                 expired_count = 0
 
                 if len(found_banner_ids) < MIN_BANNERS_FOR_TRACKING:
@@ -1131,7 +1131,7 @@ class GTCHABot(commands.Bot):
         except Exception as e:
             logger.debug(f"Fehler bei Titel-Update für {banner.pack_id}: {e}")
 
-    async def _update_thread_embed(self, banner):
+    async def _update_thread_embed(self, banner, initial_pool: bool = False):
         """Aktualisiert das Embed im Thread mit aktuellen Daten (z.B. Countdown, Ø Rückgabe)."""
         pack_id = self._get_banner_value(banner, 'pack_id')
         try:
@@ -1179,7 +1179,10 @@ class GTCHABot(commands.Bot):
             logger.debug(f"Embed aktualisiert für Banner {pack_id}")
 
             if stats:
-                await self._check_value_alert(thread, thread_data, stats, banner)
+                # Beim Nachrüsten alter Threads ist der erste Wert eine Schätzung ohne Verlauf
+                # (Medaillen oft nie gesetzt) - dann nur scharf schalten, nicht posten.
+                silent = initial_pool and stats['estimated']
+                await self._check_value_alert(thread, thread_data, stats, banner, silent=silent)
 
         except discord.HTTPException as e:
             logger.debug(f"Discord-Fehler bei Embed-Update: {e}")
@@ -1195,13 +1198,16 @@ class GTCHABot(commands.Bot):
         claimed = await self.db.get_medal_status(int(thread_data['thread_id']))
         return estimate(pool, get('current_packs'), get('total_packs'), claimed, get('price_coins'))
 
-    async def _check_value_alert(self, thread: discord.Thread, thread_data: dict, stats: dict, banner):
+    async def _check_value_alert(self, thread: discord.Thread, thread_data: dict, stats: dict, banner,
+                                 silent: bool = False):
         """Einmaliger Hinweis, wenn die Ø Rückgabe über 100 % des Preises steigt."""
         pct = stats.get('ev_pct')
         if pct is None:
             return
         alert_sent = bool(thread_data.get('value_alert_sent'))
-        if pct > 100 and not alert_sent:
+        if pct > 100 and not alert_sent and silent:
+            await self.db.set_value_alert_sent(thread.id, True)
+        elif pct > 100 and not alert_sent:
             price = self._get_banner_value(banner, 'price_coins')
             mention = "@everyone " if MENTION_ON_PACK_UPDATE else ""
             await discord_rate_limiter.acquire("message_send")
@@ -1234,7 +1240,7 @@ class GTCHABot(commands.Bot):
             embeds.append(embed)
         return embeds
 
-    async def _refresh_pool_views(self, pack_id: int):
+    async def _refresh_pool_views(self, pack_id: int, initial_pool: bool = False):
         """Aktualisiert Startbeitrag (Ø Rückgabe, Hits) und Top-5-Nachricht eines Banners."""
         try:
             banner = await self.db.get_banner(pack_id)
@@ -1243,7 +1249,7 @@ class GTCHABot(commands.Bot):
             if not banner or not thread_data or not pool or thread_data.get('is_expired'):
                 return
 
-            await self._update_thread_embed(banner)
+            await self._update_thread_embed(banner, initial_pool=initial_pool)
 
             thread_id = int(thread_data['thread_id'])
             thread = self.get_channel(thread_id)
