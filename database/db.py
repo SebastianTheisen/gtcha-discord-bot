@@ -162,9 +162,13 @@ class Database:
             # Versand-Abgleich mit Toleranz: bisherige Versand-Summen einmal neu auswerten lassen
             cursor = await db.execute("SELECT value FROM bot_meta WHERE key = 'ship_match_version'")
             row = await cursor.fetchone()
-            if not row or row[0] != '3':
+            if not row or row[0] != '4':
+                # Banner mit Versand-Hits komplett neu auswerten (auch die erkannten Karten), damit
+                # Fehlzuordnungen der alten Logik verschwinden; Medaillen bleiben unberührt
+                await db.execute("""UPDATE banners SET pulled_cards = NULL, unsure_cards = NULL
+                                    WHERE card_pool LIKE '%"hits": [{%'""")
                 await db.execute("UPDATE banners SET ship_count = NULL, ship_value = NULL")
-                await db.execute("INSERT OR REPLACE INTO bot_meta (key, value) VALUES ('ship_match_version', '3')")
+                await db.execute("INSERT OR REPLACE INTO bot_meta (key, value) VALUES ('ship_match_version', '4')")
                 await db.commit()
                 logger.info("Migration: Versand-Summen werden mit Toleranz neu ausgewertet")
 

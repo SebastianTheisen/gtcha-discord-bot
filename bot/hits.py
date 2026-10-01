@@ -130,10 +130,12 @@ class HitsMixin:
 
                 state = await self.db.get_pull_tracking(pid)
                 pulled, unsure = list(state["pulled"]), list(state["unsure"])
-                # Für den Abgleich zählen auch Medaillen und Stellvertreter offener Gruppen als gezogen
+                # Ausgeschlossen sind nur schon als verschickt erkannte Karten. Per Medaille gemeldete
+                # Karten sind gezogen, aber noch nicht verschickt: sie bleiben Kandidaten (sogar bevorzugt).
                 medals = await self.db.get_medals(int(thread_data['thread_id']))
                 claimed = {k for t, k in tier_keys(pool).items() if t in medals}
-                known, _, _ = resolve_pulled(pulled, unsure, claimed)
+                known, _, _ = resolve_pulled(pulled, unsure, set())
+                expected = claimed - known
                 ships = shipment_values(item) or (None, None)
                 value = decided_value(item)
                 match = {"certain": [], "groups": [], "maybe": []}
@@ -146,10 +148,11 @@ class HitsMixin:
                         pass
                     elif prev_count is None:
                         # Erste Messung: bisherige Sendungen nur auswerten, soweit es eindeutig ist
-                        match = match_shipped_hits(pool, count, ship_value, known)
+                        match = prefer_claimed(match_shipped_hits(pool, count, ship_value, known), expected)
                         first_look, reason = True, f"bisher {count} Karten / {ship_value:,} Coins verschickt"
                     elif count > prev_count and ship_value > prev_value:
-                        match = match_shipped_hits(pool, count - prev_count, ship_value - prev_value, known)
+                        match = prefer_claimed(
+                            match_shipped_hits(pool, count - prev_count, ship_value - prev_value, known), expected)
                         reason = f"{count - prev_count} Karte(n) / {ship_value - prev_value:,} Coins verschickt"
                 elif value is not None and state["decided_value"] is not None and value > state["decided_value"]:
                     match["certain"] = detect_jump_pulls(pool, value - state["decided_value"], known)

@@ -183,3 +183,17 @@ def test_shipment_values_are_counted_without_tax():
                             card(3, 660, copies=200), card(4, 300, copies=500)])
     assert match_shipped_hits(pool, 1, 16600, set())["certain"] == [keys_by_name(pool)["Hit 18"]]
     assert match_shipped_hits(pool, 1, 18260, set())["certain"] == []   # Bruttowert passt nicht mehr
+
+
+def test_medal_claimed_card_is_preferred_for_a_shipment():
+    # Wie 24149: T2 (Lugia) per Medaille gemeldet, dann 8 Karten / 37.900 verschickt.
+    # Rechnerisch passen Glurak oder Lugia - die gemeldete Lugia ist es.
+    from utils.card_pool import prefer_claimed
+    pool = summarize_cards([card(1, 36740, hit=True, name="Glurak"), card(2, 35420, hit=True, name="Lugia"),
+                            card(3, 17710, hit=True, name="Pikachu"), card(4, 1980, copies=20),
+                            card(5, 660, copies=200), card(6, 330, copies=300)])
+    keys = keys_by_name(pool)
+    raw = match_shipped_hits(pool, 8, 37900, set())
+    assert raw["certain"] == [] and len(raw["groups"]) == 1        # ohne Medaille: Glurak oder Lugia
+    result = prefer_claimed(raw, {keys["Lugia"]})
+    assert result["certain"] == [keys["Lugia"]] and result["groups"] == []
