@@ -39,7 +39,7 @@ class MedalsMixin:
                 # Format: "#1 | 25.3% | ID: 15393 | 5 Pulls"
                 id_match = re.search(r'ID:\s*(\d+)', message.channel.name)
                 if not id_match:
-                    await message.reply("❌ Konnte Pack-ID nicht aus Thread-Titel extrahieren!")
+                    await message.reply("ℹ️ Medaillen bitte im Thread des Banners setzen (Link in der Rangliste).")
                     return
 
                 pack_id = int(id_match.group(1))
