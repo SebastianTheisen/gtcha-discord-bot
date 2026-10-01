@@ -33,7 +33,11 @@ const num = (n) => (n == null ? "–" : Math.round(n).toLocaleString("de-DE"));
 const pct = (n) => (n == null ? "–" : n.toLocaleString("de-DE", { maximumFractionDigits: 1 }) + " %");
 const safeUrl = (u) => (typeof u === "string" && /^https:\/\//.test(u) ? u : "");
 // Bilder von GTCHA über den Zwischenspeicher des VPS laden (schneller, bleiben 30 Tage im iPhone-Cache)
-const imgSrc = (u) => (/^https:\/\/([\w-]+\.)*gtchaxonline\.com\//.test(u) ? `/img?u=${encodeURIComponent(u)}` : u);
+// v= ändert die Adresse, wenn sich die Auslieferung ändert: Safari hält Bilder 30 Tage und würde sonst
+// alte (kaputte) Antworten weiterverwenden
+const IMG_VERSION = 2;
+const imgSrc = (u) => (/^https:\/\/([\w-]+\.)*gtchaxonline\.com\//.test(u)
+  ? `/img?v=${IMG_VERSION}&u=${encodeURIComponent(u)}` : u);
 const img = (u, alt = "") => (safeUrl(u)
   ? `<img src="${esc(imgSrc(u))}" data-orig="${esc(u)}" alt="${esc(alt)}" loading="lazy" decoding="async">` : "");
 const evClass = (p) => (p == null ? "" : p >= 100 ? "good" : p >= 70 ? "ok" : "");
