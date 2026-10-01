@@ -4,6 +4,8 @@ services:
     container_name: gtcha-tor
     restart: unless-stopped
     network_mode: host
+    environment:
+      - TOR_CONTROL_PASSWORD=${TOR_CONTROL_PASSWORD:-gtcha-tor-control}
     logging:
       driver: json-file
       options:
@@ -23,6 +25,7 @@ services:
       # Die Seite liefert den bisher genutzten IPs (VPS, WARP) einen falschen Pack-Zähler;
       # über Tor-Ausgänge kommen die echten Werte.
       - SCRAPER_PROXY=socks5://127.0.0.1:9050
+      - TOR_CONTROL_PASSWORD=${TOR_CONTROL_PASSWORD:-gtcha-tor-control}
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs

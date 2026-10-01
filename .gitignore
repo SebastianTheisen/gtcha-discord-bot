@@ -47,3 +47,10 @@ screenshots/*.png
 # OS
 .DS_Store
 Thumbs.db
+
+# Laufzeitdaten des Bots
+data/backups/
+data/heartbeat
+data/*.txt
+data/*.tar.gz
+data/*.csv

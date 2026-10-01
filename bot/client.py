@@ -38,7 +38,7 @@ from utils.notifications import (
 from utils.rate_limiter import discord_rate_limiter
 from utils.memory_monitor import memory_monitor
 from utils.cache import banner_cache
-from utils.maintenance import backup_database, start_watchdog, touch_heartbeat
+from utils.maintenance import backup_database, new_tor_identity, start_watchdog, touch_heartbeat
 from utils.banner_info import (
     banner_conditions, chance_at_least_one, format_conditions, format_shipping, shipping_stats,
     to_int as _int,
@@ -66,6 +66,8 @@ POOL_FETCH_PER_SCRAPE = 8
 FULL_SCRAPE_EVERY_MINUTES = 15
 # Thread löschen, wenn ein Banner so oft hintereinander fehlt oder ausverkauft ist
 NOT_FOUND_DELETE_AFTER = 2
+# Pool-Wechsel-Alarm ab so vielen abgefangenen Pack-Anstiegen in einem Scrape (mind. 20 % der Banner)
+POOL_SWITCH_MIN_RISES = 5
 # Meldung im Admin-Kanal nach so vielen fehlerhaften Scrapes in Folge
 SCRAPE_PROBLEM_ALERT_AFTER = 3
 
@@ -147,6 +149,8 @@ class GTCHABot(commands.Bot):
         self._not_in_tabs: set = set()  # Banner aus pack/list, die beim Tab-Scrape nicht auftauchten
         self._scrape_problems = 0
         self._problem_alerted = False
+        self._rises_ignored = 0
+        self._last_pool_alert: Optional[datetime] = None
 
     async def setup_hook(self):
         """Setup beim Start."""
@@ -561,6 +565,9 @@ class GTCHABot(commands.Bot):
         logger.info("Scrape startet...")
         start_time = datetime.now()
 
+        self._rises_ignored = 0
+        if await new_tor_identity():
+            logger.debug("[TOR] Neue Route für diesen Scrape")
         try:
             async with GTCHAScraper(BASE_URL) as scraper:
                 self._scraper = scraper
@@ -664,6 +671,7 @@ class GTCHABot(commands.Bot):
                         logger.info(f"   {updated_count} Banner erfolgreich aktualisiert")
                     if error_count > 0:
                         logger.warning(f"   {error_count} Banner mit Fehlern")
+                    await self._check_pool_switch(len(update_tasks))
 
                 # === NICHT-GEFUNDEN-TRACKING ===
                 # "Gefunden" = laut Seite noch Packs übrig. Ausverkaufte (0 Packs) und verschwundene
@@ -803,6 +811,23 @@ class GTCHABot(commands.Bot):
             await self._report_scrape_problem(f"Scrape-Fehler: {e}")
         finally:
             self._scraper = None
+
+    async def _check_pool_switch(self, banner_count: int):
+        """Viele abgefangene Pack-Anstiege auf einmal = die Seite liefert wohl wieder den falschen Pool."""
+        rises = self._rises_ignored
+        if rises < max(POOL_SWITCH_MIN_RISES, banner_count * 0.2):
+            return
+        logger.warning(f"[ÜBERWACHUNG] {rises} von {banner_count} Bannern mit gestiegenen Packs - Pool-Wechsel?")
+        now = datetime.now()
+        if self._last_pool_alert and now - self._last_pool_alert < timedelta(hours=3):
+            return
+        self._last_pool_alert = now
+        await notify_critical_error(
+            f"Bei {rises} von {banner_count} Bannern meldet die Seite gerade **mehr** Packs als zuvor.\n"
+            f"Das spricht dafür, dass der Bot wieder einen falschen Pack-Pool sieht. Die Anstiege werden "
+            f"ignoriert, aber neue Käufe könnten fehlen.\n"
+            f"Prüfen: `docker restart gtcha-tor` und danach die Pack-Zahlen mit der Seite vergleichen."
+        )
 
     async def _backup_database(self):
         try:
@@ -1210,6 +1235,7 @@ class GTCHABot(commands.Bot):
                         f"(Packs können nicht steigen - bleibe bei {old_packs})"
                     )
                     banner.current_packs = old_packs
+                    self._rises_ignored += 1
 
                 packs_changed = banner.current_packs != old_packs
 

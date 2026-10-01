@@ -1,5 +1,6 @@
 """Betrieb: tägliche Datenbank-Backups und ein Wächter, der einen hängenden Bot neu startet."""
 
+import asyncio
 import os
 import sqlite3
 import threading
@@ -62,3 +63,25 @@ def start_watchdog(max_silence_seconds: int, startup_grace_seconds: int):
                 os._exit(1)
 
     threading.Thread(target=watch, name="watchdog", daemon=True).start()
+
+
+async def new_tor_identity(host: str = "127.0.0.1", port: int = 9051) -> bool:
+    """Fordert bei Tor neue Routen (neue Ausgangs-IP) für die nächsten Verbindungen an."""
+    password = os.getenv("TOR_CONTROL_PASSWORD")
+    if not password:
+        return False
+    try:
+        reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=5)
+        try:
+            writer.write(f'AUTHENTICATE "{password}"\r\nSIGNAL NEWNYM\r\nQUIT\r\n'.encode())
+            await writer.drain()
+            reply = (await asyncio.wait_for(reader.read(1024), timeout=5)).decode(errors="replace")
+        finally:
+            writer.close()
+        ok = reply.count("250 OK") >= 2
+        if not ok:
+            logger.warning(f"[TOR] Neue Route abgelehnt: {reply.strip()[:120]}")
+        return ok
+    except Exception as e:
+        logger.debug(f"[TOR] ControlPort nicht erreichbar: {e}")
+        return False
