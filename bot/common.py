@@ -42,14 +42,14 @@ from utils.banner_info import (
     is_upcoming, jst_timestamp, parse_thread_title, shipping_stats, thread_title, to_int as _int,
 )
 from utils.card_pool import (
-    estimate, fmt_coins, fmt_pct, TIERS, MAX_LISTED, EMBEDS_PER_MESSAGE, decided_value, detect_jump_pulls,
+    card_value, estimate, fmt_coins, fmt_pct, TIERS, MAX_LISTED, EMBEDS_PER_MESSAGE, decided_value, detect_jump_pulls,
     is_relevant_hit, match_shipped_hits, pool_minimum, match_shipment_history, prefer_claimed, relevant_units, resolve_pulled, shipment_values, tier_keys,
     tracked_units,
 )
 
 
 # Erhöhen, wenn der Startbeitrag neue Felder bekommt: alle Threads werden dann einmal aktualisiert
-EMBED_VERSION = 5
+EMBED_VERSION = 6
 # Endspurt-Alarm, sobald höchstens so viel Prozent der Packs übrig sind und noch Hits drin sind
 ENDSPURT_PERCENT = float(os.getenv("ENDSPURT_PERCENT") or "10")
 # Zeitraum für das Abverkaufs-Tempo

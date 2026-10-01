@@ -12,7 +12,7 @@ import aiosqlite
 from database.db import Database
 from utils.banner_info import RANK_ORDER, format_conditions, format_shipping, to_int
 from utils.card_pool import (
-    TAX_FACTOR, estimate, explain_batch, fmt_coins, pool_minimum, relevant_units, resolve_pulled, tier_keys,
+    card_value, estimate, explain_batch, fmt_coins, pool_minimum, relevant_units, resolve_pulled, tier_keys,
     tracked_units,
 )
 from utils.hot_list import min_rank, needs_password, rank_entries
@@ -99,6 +99,7 @@ class BannerView:
             "shipped": format_shipping(row.get('site_stats')),
             **self._shipping(row.get('site_stats')),
             "thread_id": thread_id or None,
+            **self._out(pool, sure, winners, open_groups),
         }
         if with_pool:
             data["hits"] = self._hit_list(pool, pulled, sure, winners, unsure, price) if pool else []
@@ -106,12 +107,21 @@ class BannerView:
         return data
 
     @staticmethod
+    def _out(pool: Optional[Dict], sure: set, winners: Dict, open_groups: List[Dict]) -> Dict:
+        """Welche Hits schon raus sind (Versand sicher erkannt oder per Medaille gemeldet), teuerste zuerst."""
+        if not pool:
+            return {"out": [], "out_unsure": 0}
+        out = [{"name": u["name"], "value": u["value"]} for u in tracked_units(pool)
+               if u["key"] in sure or u["key"] in winners]
+        return {"out": out, "out_unsure": sum(g.get("pulled", 0) for g in open_groups)}
+
+    @staticmethod
     def _shipping(raw: Optional[str]) -> Dict:
         """Verschickte Karten; Coins als Kartenwert (die Seite zählt ohne 10 % Steuer)."""
         st = json.loads(raw) if raw else None
         if not st:
             return {"ship_cards": None, "ship_value": None, "ship_players": None}
-        return {"ship_cards": to_int(st.get("cards")), "ship_value": round(to_int(st.get("coins")) * TAX_FACTOR),
+        return {"ship_cards": to_int(st.get("cards")), "ship_value": card_value(to_int(st.get("coins"))),
                 "ship_players": to_int(st.get("players"))}
 
     @staticmethod
@@ -198,7 +208,7 @@ class BannerView:
         pool = json.loads(row['card_pool']) if row.get('card_pool') else None
         if not pool or not pool.get('hits'):
             for s in shipments:
-                s["value"] = round(max(0, s["coins"]) * TAX_FACTOR)
+                s["value"] = card_value(max(0, s["coins"]))
                 s["explain"] = []
             return shipments
         _, _, winners, _, _ = await self._pulled(data.get("thread_id") or 0, row['pack_id'], pool)

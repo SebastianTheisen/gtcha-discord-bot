@@ -1,4 +1,4 @@
-"""Zeigt, wann die Seite Versände gezählt hat (aus der Bot-Datenbank).
+"""Zeigt, wann die Seite Versände gezählt hat (aus der Bot-Datenbank), Werte als Kartenwert (×1,1).
 
 Aufruf auf dem VPS:
     docker exec -i gtcha-discord-bot python - 24111 < tools/shipments.py     # ein Banner
@@ -11,6 +11,7 @@ from datetime import datetime
 
 sys.path.insert(0, "/app")
 from utils.banner_info import berlin_time  # noqa: E402
+from utils.card_pool import card_value, fmt_coins  # noqa: E402
 
 db = sqlite3.connect("/app/data/gtcha_bot.db")
 args = sys.argv[1:]
@@ -22,5 +23,5 @@ if not rows:
     print("Noch keine Versände aufgezeichnet.")
 for bid, oc, nc, ocoins, ncoins, op, np_, at in rows:
     when = berlin_time(int(datetime.fromisoformat(at).timestamp()))
-    coins = f"+{(ncoins or 0) - (ocoins or 0):,}".replace(",", ".")
-    print(f"{when:%d.%m. %H:%M:%S}  Banner {bid}: {oc} -> {nc} Karten ({coins} Coins), Spieler {op} -> {np_}")
+    coins = fmt_coins(card_value((ncoins or 0) - (ocoins or 0)))
+    print(f"{when:%d.%m. %H:%M:%S}  Banner {bid}: {oc} -> {nc} Karten (+{coins} Coins Kartenwert), Spieler {op} -> {np_}")
