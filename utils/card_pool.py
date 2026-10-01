@@ -289,12 +289,20 @@ def match_shipped_hits(pool: Dict, count: int, value: int, pulled_keys: Set[str]
     if not possible or len(possible) > 50000:
         return result
 
+    unit_by_key = {u["key"]: u for u in open_hits}
+
+    def identical(keys):
+        # Mehrere Exemplare derselben Karte: egal welches verschickt wurde
+        return len({(unit_by_key[k]["name"], unit_by_key[k]["value"]) for k in keys}) == 1
+
     certain_per_class = [min(t[i] for t in possible) for i in range(len(classes))]
     for cls, n in zip(classes, certain_per_class):
         if n <= 0:
             continue
         if len(cls["keys"]) <= n:
             result["certain"] += cls["keys"]
+        elif identical(cls["keys"]):
+            result["certain"] += cls["keys"][:n]
         else:
             result["groups"].append({"value": cls["min"], "value_max": cls["max"], "keys": cls["keys"], "pulled": n})
 
