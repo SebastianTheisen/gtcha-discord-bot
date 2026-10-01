@@ -10,7 +10,7 @@ from typing import Dict, List, Optional
 import aiosqlite
 
 from database.db import Database
-from utils.banner_info import format_conditions, format_shipping, to_int
+from utils.banner_info import RANK_ORDER, format_conditions, format_shipping, to_int
 from utils.card_pool import (
     estimate, pool_minimum, relevant_units, resolve_pulled, tier_keys, tracked_units,
 )
@@ -94,6 +94,7 @@ class BannerView:
             "all_packs_cost": price * total if price and total else None,
             "conditions": format_conditions(row.get('conditions')),
             "rank": min_rank(row.get('conditions')), "password": needs_password(row.get('conditions')),
+            **self._rank_info(row.get('conditions')),
             "shipped": format_shipping(row.get('site_stats')),
             "thread_id": thread_id or None,
         }
@@ -101,6 +102,15 @@ class BannerView:
             data["hits"] = self._hit_list(pool, pulled, sure, winners, unsure, price) if pool else []
             data["hit_keys_detected"] = sorted(sure)
         return data
+
+    @staticmethod
+    def _rank_info(conditions: Optional[str]) -> Dict:
+        """Erlaubte Mitgliedsränge (für die Rauten) und Mindest-Aufladung."""
+        cond = json.loads(conditions) if conditions else {}
+        ranks = [r for r in RANK_ORDER if r in (cond.get("ranks") or [])]
+        if not ranks or "all" in (cond.get("ranks") or []):
+            ranks = list(RANK_ORDER)
+        return {"ranks": ranks if conditions else [], "min_charge": to_int(cond.get("min_charge"))}
 
     @staticmethod
     def _hit_list(pool: Dict, pulled: set, sure: set, winners: Dict, unsure: List[Dict], price: int) -> List[Dict]:
