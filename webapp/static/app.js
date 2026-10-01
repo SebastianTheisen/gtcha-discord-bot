@@ -15,7 +15,8 @@ const SORTS = {
   price_high: ["Preis absteigend", (a, b) => b.price - a.price],
 };
 
-const state = { category: load("category", "Alle"), sort: load("sort", "ev"), timer: null };
+const CARDS_PER_PAGE = 20;
+const state = { category: load("category", "Alle"), sort: load("sort", "ev"), timer: null, render: null, cardPage: {} };
 
 function load(key, fallback) {
   try { return localStorage.getItem(key) || fallback; } catch (e) { return fallback; }
@@ -180,6 +181,44 @@ function hitCard(h) {
   </div>`;
 }
 
+function cardTile(c, price) {
+  const gone = c.pulled >= c.copies;
+  return `<div class="tile ${gone ? "gone" : ""}">
+    <div class="tile-art">
+      ${img(c.image, c.name)}
+      ${c.copies > 1 ? `<span class="copies">×${c.copies}</span>` : ""}
+      ${c.hit ? `<span class="ship-tag small">Versand nur ✈</span>` : ""}
+    </div>
+    <div class="tile-base"></div>
+    <div class="tile-value ${price && c.value >= price ? "above" : ""}"><span class="coin"></span>${num(c.value)}</div>
+    <div class="tile-meta">${pct(c.share)}${c.pulled && !gone ? ` · ${c.pulled}/${c.copies} gezogen` : ""}</div>
+  </div>`;
+}
+
+function pager(page, pages) {
+  if (pages <= 1) return "";
+  const start = Math.max(1, Math.min(page - 2, pages - 4)), end = Math.min(pages, start + 4);
+  const btn = (p, label, off = false, active = false) =>
+    `<button class="pg ${active ? "active" : ""}" data-page="${p}" ${off ? "disabled" : ""}>${label}</button>`;
+  let out = btn(1, "«", page === 1) + btn(page - 1, "‹", page === 1);
+  for (let p = start; p <= end; p++) out += btn(p, p, false, p === page);
+  return `<div class="pager">${out}${btn(page + 1, "›", page === pages)}${btn(pages, "»", page === pages)}</div>`;
+}
+
+function renderCards(b) {
+  const box = view.querySelector("#cards");
+  if (!box) return;
+  const pages = Math.max(1, Math.ceil(b.cards.length / CARDS_PER_PAGE));
+  const page = Math.min(state.cardPage[b.id] || 1, pages);
+  const shown = b.cards.slice((page - 1) * CARDS_PER_PAGE, page * CARDS_PER_PAGE);
+  box.innerHTML = `<div class="tiles">${shown.map((c) => cardTile(c, b.price)).join("")}</div>${pager(page, pages)}`;
+  box.querySelectorAll("[data-page]").forEach((el) => el.addEventListener("click", () => {
+    state.cardPage[b.id] = Number(el.dataset.page);
+    renderCards(b);
+    view.querySelector("#cards-title").scrollIntoView({ behavior: "smooth", block: "start" });
+  }));
+}
+
 async function showBanner(id) {
   const b = await api(`/api/banner/${encodeURIComponent(id)}`);
   const [icon, label] = STATUS[b.status] || STATUS.running;
@@ -202,7 +241,10 @@ async function showBanner(id) {
       ${b.per_day ? stat("Pro Tag", `${b.per_day}×`) : ""}
     </div>
     ${b.conditions ? `<div class="notice">${esc(b.conditions).replace(/\*\*/g, "").replace(/\n/g, "<br>")}</div>` : ""}
-    ${hits.length > 3 ? `<h2>🏆 Alle Hits <small>${open} von ${hits.length} noch drin</small></h2>
+    ${b.cards.length ? `<h2 id="cards-title">🃏 Alle Karten <small>${num(b.cards.reduce((n, c) => n + c.copies, 0))} Karten · ${b.cards.length} verschiedene</small></h2>
+      ${b.share_above_price != null ? `<div class="notice">${pct(b.share_above_price)} der Karten sind mindestens so viel wert wie ein Zug (${num(b.price)} Coins) – diese Werte sind <b>gold</b>. Prozent = Anteil am Start-Pool.</div>` : ""}
+      <div id="cards"></div>`
+      : hits.length > 3 ? `<h2>🏆 Alle Hits <small>${open} von ${hits.length} noch drin</small></h2>
       <div class="hits">${hits.map(hitCard).join("")}</div>` : ""}
     <h2>📉 Pack-Verlauf</h2>
     ${chart(b.history)}
@@ -218,6 +260,7 @@ async function showBanner(id) {
         <div class="bar" style="margin-top:4px"><span style="width:${left}%"></span></div></div>
       ${b.end ? `<div class="until">${esc(untilText(b.end))}</div>` : ""}
     </div>`;
+  renderCards(b);
 }
 
 // --- Push ---
@@ -300,6 +343,7 @@ async function route() {
   const banner = hash.match(/^#\/banner\/(\d+)/);
   document.querySelectorAll(".tabbar a").forEach((a) => a.classList.toggle("active", a.dataset.tab === tab && !banner));
   const render = banner ? () => showBanner(banner[1]) : tab === "hot" ? showHot : tab === "settings" ? showSettings : showList;
+  state.render = tab === "settings" ? null : render;
   if (!view.innerHTML || banner) view.innerHTML = `<div class="loading">Lädt …</div>`;
   try {
     await render();
@@ -315,5 +359,9 @@ document.addEventListener("error", (e) => {
   if (e.target.tagName === "IMG") e.target.style.visibility = "hidden";
 }, true);
 window.addEventListener("hashchange", route);
+// Zurück aus dem Hintergrund: sofort frische Daten statt bis zu 30 s alte
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && state.render) state.render().catch(() => {});
+});
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
 route();

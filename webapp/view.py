@@ -167,4 +167,22 @@ class BannerView:
                          for r in await cur.fetchall()]
         data["history"] = history
         data["shipments"] = shipments
+        data.update(await self._card_list(row, data))
         return data
+
+    async def _card_list(self, row: Dict, data: Dict) -> Dict:
+        """Alle Karten des Banners mit Exemplaren, Anteil im Pool und wie viele davon schon gezogen sind."""
+        pool = json.loads(row['card_pool']) if row.get('card_pool') else None
+        if not pool or not pool.get('cards') or not pool.get('total_count'):
+            return {"cards": [], "share_above_price": None}
+        pulled, *_ = await self._pulled(data.get("thread_id") or 0, row['pack_id'], pool)
+        total, price = pool['total_count'], data.get("price") or 0
+        cards = []
+        for c in pool['cards']:
+            cid = str(c.get("id"))
+            gone = sum(1 for k in pulled if k == cid or k.startswith(cid + "#"))
+            cards.append({"name": c["name"], "value": c["value"], "copies": c["copies"], "image": c.get("image"),
+                          "hit": bool(c.get("hit")), "pulled": min(gone, c["copies"]),
+                          "share": round(c["copies"] / total * 100, 2)})
+        above = sum(c["copies"] for c in pool['cards'] if price and c["value"] >= price)
+        return {"cards": cards, "share_above_price": round(above / total * 100, 1) if price else None}

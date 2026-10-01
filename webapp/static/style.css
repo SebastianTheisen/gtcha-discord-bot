@@ -210,6 +210,31 @@ h2 small { font-size: 13px; color: var(--muted); font-weight: 400; }
 .muted { color: var(--muted); }
 .notice { margin: 10px 10px 0; background: #fff8e6; border-left: 3px solid var(--gold); padding: 10px 12px; border-radius: 8px; font-size: 14px; }
 
+/* Alle Karten: 4er-Raster wie auf der Seite, Wert darunter */
+.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px 8px; padding: 4px 10px 0; }
+.tile { display: grid; justify-items: center; }
+.tile-art { position: relative; width: 100%; aspect-ratio: 63 / 88; }
+.tile-art img { width: 100%; height: 100%; object-fit: contain; filter: drop-shadow(0 3px 5px rgba(0, 0, 0, .2)); }
+.copies {
+  position: absolute; right: -4px; top: -8px; color: var(--red); font-weight: 900; font-size: 16px;
+  text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 3px #fff;
+}
+.ship-tag.small { top: auto; bottom: 4px; right: 50%; transform: translateX(50%); font-size: 9px; padding: 1px 4px; white-space: nowrap; }
+.tile-base { width: 100%; height: 12px; border-radius: 50%; margin-top: 2px; background: linear-gradient(180deg, #f2f4f7, #b9c0cb); }
+.tile-value { display: flex; align-items: center; gap: 3px; font-weight: 800; font-size: 13px; margin-top: 4px; }
+.tile-value .coin { width: 13px; height: 13px; }
+.tile-value.above { color: #b07800; }
+.tile-meta { font-size: 11px; color: var(--muted); text-align: center; }
+.tile.gone .tile-art img { filter: grayscale(1) brightness(.6); }
+.tile.gone .tile-art::after {
+  content: "GEZOGEN"; position: absolute; inset: 0; display: grid; place-items: center;
+  color: #fff; font-weight: 900; font-size: 10px; letter-spacing: 1px;
+}
+.pager { display: flex; justify-content: center; gap: 4px; margin: 16px 0 4px; }
+.pg { border: 0; background: none; color: var(--blue-dark); font-weight: 700; font-size: 17px; min-width: 34px; height: 34px; border-radius: 50%; cursor: pointer; }
+.pg.active { background: #e3e8f3; color: var(--navy); }
+.pg:disabled { color: #c3c8d2; cursor: default; }
+
 /* Untere Kaufleiste auf der Detailseite */
 .buybar {
   position: sticky; bottom: calc(66px + var(--safe-bottom)); z-index: 15; margin: 18px 6px 0;
@@ -253,3 +278,4 @@ h2 small { font-size: 13px; color: var(--muted); font-weight: 400; }
   .until { font-size: 11px; }
   .pill { font-size: 11px; padding: 2px 5px; }
 }
+#cards-title { scroll-margin-top: 64px; }
