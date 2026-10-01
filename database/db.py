@@ -242,11 +242,13 @@ class Database:
         cutoff = (datetime.now() - timedelta(hours=max_age_hours)).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute("""
-                SELECT b.pack_id, b.card_pool IS NULL OR b.card_pool NOT LIKE '%"version": 2%' AS missing,
+                SELECT b.pack_id, b.card_pool IS NULL OR b.card_pool NOT LIKE '%"version": 2%'
+                                  OR b.card_pool NOT LIKE '%"cards": [%' AS missing,
                        COALESCE(b.pool_updated_at, '') AS updated
                 FROM banners b
                 JOIN discord_threads t ON t.banner_id = b.pack_id AND t.is_expired = 0
                 WHERE b.is_active = 1 AND (b.card_pool IS NULL OR b.card_pool NOT LIKE '%"version": 2%'
+                                           OR b.card_pool NOT LIKE '%"cards": [%'
                                            OR b.pool_updated_at IS NULL OR b.pool_updated_at < ?)
             """, (cutoff,))
             rows = await cursor.fetchall()

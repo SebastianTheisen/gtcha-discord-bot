@@ -56,6 +56,8 @@ def summarize_cards(cards: List[Dict]) -> Optional[Dict]:
         "top": [{k: c[k] for k in ("id", "name", "value", "image", "hit")} for c in parsed[:5]],
         "normal_values": normal_values,
         "min": _min_card(parsed),
+        # komplette Kartenliste (für die Web-App), wertvollste zuerst
+        "cards": [{k: c[k] for k in ("id", "name", "value", "copies", "image", "hit")} for c in parsed if c["copies"] > 0],
     }
 
 

@@ -237,3 +237,10 @@ def test_estimate_for_pool_without_shipping_hits():
     stats = estimate(pool, 60, 100, set(), 0)
     assert stats is not None and stats["tracked_hits"] is False
     assert stats["ev_pct"] is None and stats["cost_to_hit"] is None
+
+
+def test_pool_keeps_full_card_list_for_web_app():
+    pool = hit_pool()
+    assert [c["value"] for c in pool["cards"]] == sorted((c["value"] for c in pool["cards"]), reverse=True)
+    assert sum(c["copies"] for c in pool["cards"]) == pool["total_count"]
+    assert {c["name"] for c in pool["cards"] if c["hit"]} == {"Top", "Zweiter", "Gleich A", "Gleich B", "Klein"}
