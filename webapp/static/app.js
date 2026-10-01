@@ -312,7 +312,7 @@ async function showBanner(id) {
       <span class="price-pill">${coins(b.price)}</span></div>
     <div class="watch-row"><button class="watch-btn" id="watch-btn">🔔 Beobachten</button>
       <a class="hint" href="#/settings">Pushes einstellen ›</a></div>
-    ${hits.length ? `<h2>🏆 Hits <small>${open} von ${hits.length} noch drin · antippen zum Melden</small></h2>
+    ${hits.length ? `<h2>🏆 Karten ab Packpreis <small>${open} von ${hits.length} noch drin · zum Melden antippen</small></h2>
       <div class="rows" id="claims"></div>` : ""}
     <h2>📊 Auswertung <small>ID ${b.id}</small></h2>
     <div class="stats">

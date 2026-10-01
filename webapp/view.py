@@ -195,6 +195,7 @@ class BannerView:
             units = tracked_units(pool)[:5]
         result = []
         for rank, u in enumerate(units[:50], 1):
+            tier = u.get("tier") or f"T{rank}"
             key = u["key"]
             state, note = "open", None
             medal_user = winners.get(key)
@@ -207,7 +208,7 @@ class BannerView:
                 state, note = "pulled", "gezogen (erkannt)" if key in sure else "gezogen"
             elif any(key in g["keys"] and g["pulled"] == 0 for g in unsure):
                 state, note = "maybe", "möglicherweise gezogen"
-            result.append({"rank": rank, "tier": f"T{rank}", "key": key, "name": u["name"], "value": u["value"],
+            result.append({"rank": int(tier[1:]), "tier": tier, "key": key, "name": u["name"], "value": u["value"],
                            "image": u.get("image"), "state": state, "note": note,
                            # Medaille ohne bekannte Person (ältere T1-T3-Markierung) = "0"
                            "medal_user": str(medal_user) if key in winners else None})

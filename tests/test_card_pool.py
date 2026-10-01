@@ -106,8 +106,9 @@ def test_estimate_drops_when_top_hit_is_pulled():
 def test_tier_keys_follow_hit_list_order():
     pool = summarize_cards([card(i, 1000 * (20 - i), hit=True) for i in range(1, 14)] + [card(99, 10, copies=50)])
     keys = tier_keys(pool)
-    assert list(keys) == [f"T{i}" for i in range(1, 14)]
-    assert keys["T1"] == "1" and keys["T13"] == "13"
+    # zuerst die 13 Versand-Hits nach Wert, danach normale Karten (hier 50 Exemplare -> bis T50)
+    assert list(keys)[:13] == [f"T{i}" for i in range(1, 14)] and len(keys) == 50
+    assert keys["T1"] == "1" and keys["T13"] == "13" and keys["T14"] == "99"
 
 
 def test_medal_resolves_exactly_one_group():
@@ -335,3 +336,17 @@ def test_claimed_normal_cards_are_not_counted_twice():
     from utils.card_pool import out_of_banner_value
     pool = summarize_cards([card(1, 9000), card(2, 5000), card(4, 300, copies=50)])
     assert out_of_banner_value(pool, 9000, 0, {"1"}) == 9000
+
+
+def test_hits_first_then_normal_cards_above_price():
+    # Wie 24168: 3 Versand-Hits, dazu normale Karten über dem Packpreis
+    from utils.card_pool import claimable_units
+    pool = summarize_cards([card(1, 125180, hit=True), card(2, 85580, hit=True), card(3, 1000, hit=True),
+                            card(4, 26740), card(5, 22220, copies=2), card(6, 990, copies=50)])
+    units = claimable_units(pool, 2500)
+    assert [(u["tier"], u["key"]) for u in units] == [("T1", "1"), ("T2", "2"), ("T4", "4"), ("T5", "5"), ("T6", "5#2")]
+    # Hit unter Packpreis (T3) ist nicht meldbar, behält aber seinen Platz; Hit-Liste bleibt nur Versand-Hits
+    assert [u["key"] for u in tracked_units(pool)] == ["1", "2", "3"]
+    # Normale Karte teurer als ein Hit: Hits bleiben trotzdem vorne (alte Medaillen zeigen auf dieselbe Karte)
+    pool = summarize_cards([card(1, 50000, hit=True), card(7, 90000), card(2, 30000, hit=True)])
+    assert [u["key"] for u in claimable_units(pool, 1000)] == ["1", "2", "7"]
