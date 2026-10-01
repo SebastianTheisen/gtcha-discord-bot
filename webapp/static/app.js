@@ -43,8 +43,18 @@ const img = (u, alt = "") => (safeUrl(u)
 const evClass = (p) => (p == null ? "" : p >= 100 ? "good" : p >= 70 ? "ok" : "");
 const time = (t) => new Date(t * 1000).toLocaleString("de-DE", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 const coins = (n) => `<span class="coin"></span>${n ? num(n) : "Gratis"}`;
+// Installierte App: GTCHA im echten Browser öffnen (dort ist man eingeloggt), nicht im App-Fenster.
+// iOS 17+: x-safari-https:// öffnet Safari, googlechromes:// öffnet Chrome.
+const LINK_MODES = { safari: "Safari", chrome: "Chrome", app: "in der App" };
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
+function buyHref(url) {
+  const mode = load("linkMode", "safari");
+  const installed = window.navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
+  if (!installed || !isIOS() || mode === "app") return url;
+  return mode === "chrome" ? url.replace(/^https:/, "googlechromes:") : `x-safari-${url}`;
+}
 const openLink = (b, label = "Öffnen ↗") => (safeUrl(b.buy_url)
-  ? `<a class="open-btn" href="${esc(b.buy_url)}" target="_blank" rel="noopener noreferrer" data-stop>${label}</a>` : "");
+  ? `<a class="open-btn" href="${esc(buyHref(b.buy_url))}" target="_blank" rel="noopener noreferrer" data-stop>${label}</a>` : "");
 
 async function api(path, options) {
   const res = await fetch(path, { cache: "no-store", ...options });
@@ -449,9 +459,17 @@ async function showSettings() {
         ${watched.length ? watched.sort((a, b) => b - a).map((id) => watchCard(id, prefs.watch[id], byId[id])).join("")
           : `<div class="hint">Noch kein Banner beobachtet. Auch auf jeder Banner-Seite über „🔔 Beobachten“.</div>`}
       </div>` : ""}
+    <h2>🔗 GTCHA-Seite öffnen in</h2>
+    <div class="panel">
+      <select id="link-mode" aria-label="GTCHA-Seite öffnen in">${Object.entries(LINK_MODES).map(([k, label]) =>
+        `<option value="${k}" ${k === load("linkMode", "safari") ? "selected" : ""}>${label}</option>`).join("")}</select>
+      <div class="hint">Gilt für „Öffnen ↗“ in der installierten App auf dem iPhone. Safari bzw. Chrome öffnen die
+        Seite dort, wo du eingeloggt bist (Safari ab iOS 17). „In der App“ öffnet ein eigenes Fenster ohne deine Logins.</div>
+    </div>
     <h2>ℹ️ Über diese App</h2>
     <div class="panel"><div class="hint">Private, inoffizielle App mit den Daten deines GTCHA-Discord-Bots.
       Kein Angebot von GTCHA. Gezogen wird immer auf der offiziellen Seite.</div></div>`;
+  view.querySelector("#link-mode")?.addEventListener("change", (e) => save("linkMode", e.target.value));
   const msg = view.querySelector("#msg");
   const readToggles = () => view.querySelectorAll("[data-event]").forEach((i) => { prefs[i.dataset.event] = i.checked; });
   view.querySelector("#on")?.addEventListener("click", async () => {
