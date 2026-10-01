@@ -34,7 +34,8 @@ const pct = (n) => (n == null ? "–" : n.toLocaleString("de-DE", { maximumFract
 const safeUrl = (u) => (typeof u === "string" && /^https:\/\//.test(u) ? u : "");
 // Bilder von GTCHA über den Zwischenspeicher des VPS laden (schneller, bleiben 30 Tage im iPhone-Cache)
 const imgSrc = (u) => (/^https:\/\/([\w-]+\.)*gtchaxonline\.com\//.test(u) ? `/img?u=${encodeURIComponent(u)}` : u);
-const img = (u, alt = "") => (safeUrl(u) ? `<img src="${esc(imgSrc(u))}" alt="${esc(alt)}" loading="lazy" decoding="async">` : "");
+const img = (u, alt = "") => (safeUrl(u)
+  ? `<img src="${esc(imgSrc(u))}" data-orig="${esc(u)}" alt="${esc(alt)}" loading="lazy" decoding="async">` : "");
 const evClass = (p) => (p == null ? "" : p >= 100 ? "good" : p >= 70 ? "ok" : "");
 const time = (t) => new Date(t * 1000).toLocaleString("de-DE", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 const coins = (n) => `<span class="coin"></span>${n ? num(n) : "Gratis"}`;
@@ -420,8 +421,16 @@ async function route() {
 }
 
 // Bilder, die nicht laden, ausblenden statt Alt-Text zu zeigen
+// Bild vom VPS nicht da -> direkt von GTCHA laden; klappt auch das nicht, ausblenden statt Alt-Text
 document.addEventListener("error", (e) => {
-  if (e.target.tagName === "IMG") e.target.style.visibility = "hidden";
+  const el = e.target;
+  if (el.tagName !== "IMG") return;
+  if (el.dataset.orig && el.getAttribute("src") !== el.dataset.orig) {
+    el.removeAttribute("referrerpolicy");
+    el.src = el.dataset.orig;
+  } else {
+    el.style.visibility = "hidden";
+  }
 }, true);
 window.addEventListener("hashchange", route);
 // Zurück aus dem Hintergrund: sofort frische Daten statt bis zu 30 s alte

@@ -33,3 +33,21 @@ def test_cleanup_keeps_active_and_recent_images(tmp_path):
         os.utime(cache.dir / cache_name(url), (old, old))
     assert cache.cleanup([active]) == 1
     assert cache.cached(active) and cache.cached(just_viewed) and not cache.cached(ended)
+
+
+def test_image_detection_by_magic_bytes():
+    from webapp.images import _looks_like_image
+    assert _looks_like_image(b"RIFF\x00\x00\x00\x00WEBPVP8 ")
+    assert _looks_like_image(b"\x89PNG\r\n\x1a\n....")
+    assert _looks_like_image(b"\xff\xd8\xff\xe0")
+    assert not _looks_like_image(b"<!DOCTYPE html><html>")
+
+
+def test_content_type_is_set_without_system_mime_table(tmp_path):
+    from webapp.images import content_type
+    webp = tmp_path / "a.webp"
+    webp.write_bytes(b"RIFF\x00\x00\x00\x00WEBPVP8 ")
+    unknown = tmp_path / "b.img"
+    unknown.write_bytes(b"\x89PNG\r\n\x1a\n")
+    assert content_type(webp) == "image/webp"
+    assert content_type(unknown) == "image/png"

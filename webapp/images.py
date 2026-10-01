@@ -21,7 +21,11 @@ ALLOWED_HOST = "gtchaxonline.com"
 MAX_BYTES = 8 * 1024 * 1024
 KEEP_UNUSED_SECONDS = 600   # gerade angesehene Bilder nicht verwaister Banner kurz behalten
 TIMEOUT = aiohttp.ClientTimeout(total=30)
-EXTENSIONS = {".webp", ".png", ".jpg", ".jpeg", ".gif", ".avif"}
+# Bildtyp selbst festlegen: im schlanken Container kennt Python ".webp" nicht (keine /etc/mime.types),
+# und mit "nosniff" zeigt Safari Dateien ohne Bildtyp nicht an
+CONTENT_TYPES = {".webp": "image/webp", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                 ".gif": "image/gif", ".avif": "image/avif"}
+EXTENSIONS = set(CONTENT_TYPES)
 
 
 def allowed(url: str) -> bool:
@@ -31,6 +35,23 @@ def allowed(url: str) -> bool:
         return False
     host = (parts.hostname or "").lower()
     return parts.scheme == "https" and (host == ALLOWED_HOST or host.endswith("." + ALLOWED_HOST))
+
+
+def _looks_like_image(data: bytes) -> bool:
+    """Bild an den ersten Bytes erkennen (falls der Server keinen Bild-Typ mitschickt)."""
+    return (data[:4] == b"RIFF" and data[8:12] == b"WEBP") or data[:8] == b"\x89PNG\r\n\x1a\n" \
+        or data[:3] == b"\xff\xd8\xff" or data[:6] in (b"GIF87a", b"GIF89a") or data[4:12] == b"ftypavif"
+
+
+def content_type(path: Path) -> str:
+    """Bildtyp einer gespeicherten Datei (Endung, sonst erste Bytes)."""
+    if path.suffix in CONTENT_TYPES:
+        return CONTENT_TYPES[path.suffix]
+    head = path.read_bytes()[:16]
+    for ext, magic in ((".webp", b"WEBP"), (".png", b"PNG"), (".gif", b"GIF"), (".avif", b"avif")):
+        if magic in head:
+            return CONTENT_TYPES[ext]
+    return "image/jpeg"
 
 
 def cache_name(url: str) -> str:
@@ -45,6 +66,7 @@ class ImageCache:
         self._locks: dict = {}
         self._limit = asyncio.Semaphore(4)
         self._session: Optional[aiohttp.ClientSession] = None
+        self.last_error: Optional[str] = None
 
     async def close(self):
         if self._session:
@@ -77,13 +99,17 @@ class ImageCache:
         async with self._limit:
             try:
                 async with self._session.get(url) as resp:
-                    if resp.status != 200 or not resp.headers.get("Content-Type", "").startswith("image/"):
-                        logger.debug(f"Bild nicht geladen ({resp.status}): {url}")
+                    ctype = resp.headers.get("Content-Type", "")
+                    if resp.status != 200:
+                        self.last_error = f"HTTP {resp.status} ({ctype or 'ohne Typ'}) bei {url}"
                         return None
                     data = await resp.content.read(MAX_BYTES + 1)
             except Exception as e:
-                logger.debug(f"Bild nicht geladen: {url}: {e}")
+                self.last_error = f"{type(e).__name__}: {e} bei {url}"
                 return None
+        if not ctype.startswith("image/") and not _looks_like_image(data):
+            self.last_error = f"kein Bild ({ctype or 'ohne Typ'}, {len(data)} Bytes) bei {url}"
+            return None
         if len(data) > MAX_BYTES:
             return None
         path = self.dir / cache_name(url)
@@ -102,7 +128,11 @@ class ImageCache:
         for i in range(0, len(missing), 20):
             results = await asyncio.gather(*(self.get(u) for u in missing[i:i + 20]))
             loaded += sum(1 for r in results if r)
-        logger.info(f"Bilder: {loaded} von {len(missing)} geladen")
+        if loaded < len(missing):
+            logger.warning(f"Bilder: {loaded} von {len(missing)} geladen, {len(missing) - loaded} fehlgeschlagen "
+                           f"- zuletzt: {self.last_error}")
+        else:
+            logger.info(f"Bilder: {loaded} von {len(missing)} geladen")
         return loaded
 
     def cleanup(self, keep_urls) -> int:
