@@ -10,6 +10,7 @@ Aufruf auf dem VPS (im laufenden Container, nutzt dessen Tor-Proxy):
 import asyncio
 import json
 import os
+import re
 import sys
 from collections import Counter
 
@@ -45,24 +46,28 @@ async def analyse(page, pid):
         print(f"Rohantwort Seite 1: {json.dumps(first, ensure_ascii=False)[:500]}")
         return
 
-    sum_num = sum(int(c.get("num") or 0) for c in cards)
-    sum_value = sum(int(c.get("num") or 0) * int(c.get("buy_point") or 0) for c in cards)
-    print(f"Summe num: {sum_num}  <->  verbleibende Packs: {remaining}  |  Gesamt-Packs: {total}")
-    if sum_num:
-        ev = sum_value / sum_num
+    copies = lambda c: int(c.get("duplication") or 0)
+    sum_dup = sum(copies(c) for c in cards)
+    sum_value = sum(copies(c) * int(c.get("buy_point") or 0) for c in cards)
+    print(f"Summe duplication: {sum_dup}  <->  verbleibende Packs: {remaining}  |  Gesamt-Packs: {total}")
+    if sum_dup:
+        ev = sum_value / sum_dup
         ratio = f" = {ev / price * 100:.1f} % des Preises" if price else ""
-        print(f"Ø Rückgabe pro Zug (über num gewichtet): {ev:,.0f} Coins{ratio}")
+        print(f"Ø Rückgabe pro Zug (Startbestand, mit duplication gewichtet): {ev:,.0f} Coins{ratio}")
+    for c in cards:
+        if str(c.get("action_type")) != "0":
+            print(f"  action_type={c.get('action_type')}: {c.get('name')} | {c.get('buy_point')} Coins | duplication={c.get('duplication')}")
 
-    for field in ("num", "card_type", "action_type", "duplication", "is_digital_content", "rarity"):
+    for field in ("action_type", "duplication", "rarity"):
         print(f"  Werte von {field}: {dict(Counter(str(c.get(field)) for c in cards).most_common(8))}")
 
     print("  Top 5 nach buy_point:")
     for i, c in enumerate(sorted(cards, key=lambda c: -int(c.get("buy_point") or 0))[:5], 1):
-        print(f"    {i}. {c.get('name')} | {int(c.get('buy_point') or 0):,} Coins | num={c.get('num')} "
+        print(f"    {i}. {c.get('name')} | {int(c.get('buy_point') or 0):,} Coins | duplication={c.get('duplication')} "
               f"| {c.get('image_url')}")
     print("  Niedrigste 3 nach buy_point:")
     for c in sorted(cards, key=lambda c: int(c.get("buy_point") or 0))[:3]:
-        print(f"    {c.get('name')} | {c.get('buy_point')} Coins | num={c.get('num')}")
+        print(f"    {c.get('name')} | {c.get('buy_point')} Coins | duplication={c.get('duplication')}")
 
 
 async def main():
@@ -74,13 +79,33 @@ async def main():
             args=["--no-sandbox", "--disable-dev-shm-usage", "--blink-settings=imagesEnabled=false"])
         ctx = await browser.new_context(locale="de-DE", proxy={"server": PROXY} if PROXY else None)
         page = await ctx.new_page()
-        await page.goto(BASE, wait_until="domcontentloaded", timeout=120000)
-        await asyncio.sleep(3)
+        scripts = []
+        page.on("response", lambda r: scripts.append(r) if r.request.resource_type == "script" else None)
+        await page.goto(f"{BASE}/pack-detail?packId={pids[0]}", wait_until="domcontentloaded", timeout=120000)
+        await asyncio.sleep(6)
         for pid in pids:
             try:
                 await analyse(page, pid)
             except Exception as e:
                 print(f"Banner {pid}: Fehler {e}")
+
+        endpoints = set()
+        for resp in scripts:
+            try:
+                code = await resp.text()
+            except Exception:
+                continue
+            endpoints.update(re.findall(r"""api/user/[A-Za-z0-9_/\-]+""", code))
+        print(f"\n=== API-Adressen im JavaScript der Seite ({len(endpoints)}):")
+        for e in sorted(endpoints):
+            print(f"  {e}")
+        print("\n=== Probeabruf von Adressen, die nach Gewinnern/Verlauf klingen:")
+        hints = ("rank", "win", "hist", "log", "result", "draw", "lottery", "gacha")
+        for e in sorted(endpoints):
+            if any(h in e.lower() for h in hints):
+                for path in (f"/{e.rstrip('/')}/{pids[0]}", f"/{e.rstrip('/')}/{pids[0]}/1", f"/{e.rstrip('/')}"):
+                    data = await get(page, path)
+                    print(f"  {path}: {json.dumps(data, ensure_ascii=False)[:400]}")
         await browser.close()
 
 
