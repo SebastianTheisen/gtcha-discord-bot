@@ -1,5 +1,5 @@
 // Service Worker: App-Hülle offline verfügbar halten, Push-Benachrichtigungen anzeigen.
-const CACHE = "gtcha-tracker-v5";
+const CACHE = "gtcha-tracker-v6";
 const SHELL = ["/", "/static/style.css", "/static/app.js", "/static/icon-180.png", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {

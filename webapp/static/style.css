@@ -124,6 +124,8 @@ select { background: var(--surface); color: var(--text); border: 1px solid var(-
 .remaining b { color: var(--text); font-weight: 600; }
 .bar { height: 7px; border-radius: 999px; background: #e6e8ee; border: 1px solid #c9ced8; overflow: hidden; }
 .bar > span { display: block; height: 100%; background: linear-gradient(90deg, #f7d23e, #f08a24 60%, var(--red)); }
+.ship { font-size: 12px; color: var(--text); }
+.ship b { font-weight: 800; }
 .until { font-size: 12px; font-weight: 700; color: var(--navy); }
 .extra { display: flex; justify-content: center; flex-wrap: wrap; gap: 4px; }
 .pill { font-size: 12px; font-weight: 700; padding: 2px 7px; border-radius: 6px; background: var(--surface-2); color: var(--muted); }
