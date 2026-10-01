@@ -278,3 +278,17 @@ def test_average_return_from_site_numbers():
     assert out_of_banner_value(pool, None, 16_100) is None
     # mehr raus als im Pool (z.B. neuer Pool): zurück zur Schätzung
     assert estimate(pool, 100, pool["total_count"], set(), 1000, pool["total_value"] * 2)["data_based"] is False
+
+
+def test_top_three_count_copies_without_shipping_hits():
+    # Wie 24177: 3 Packs, dieselbe Coin-Karte 3x - das sind T1, T2 und T3
+    pool = summarize_cards([card(1, 250000, copies=3, name="Coin")])
+    units = tracked_units(pool)
+    assert [u["key"] for u in units] == ["1", "1#2", "1#3"]
+    assert list(tier_keys(pool).values()) == ["1", "1#2", "1#3"]
+    # ein Exemplar gezogen (alter Schlüssel "1"): noch 2 von 3 drin, nicht "Hits raus"
+    stats = estimate(pool, 2, 3, {"1"}, 200000)
+    assert stats["open_tiers"] == ["T2", "T3"]
+    # gemischt: 2x teuerste Karte, dann die nächste
+    pool = summarize_cards([card(1, 9000, copies=2), card(2, 5000), card(3, 100, copies=50)])
+    assert [u["key"] for u in tracked_units(pool)] == ["1", "1#2", "2"]

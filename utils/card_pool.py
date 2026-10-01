@@ -92,18 +92,27 @@ def tracked_units(pool: Dict) -> List[Dict]:
 
     Jedes Exemplar ist eine Einheit mit eigenem Schlüssel (Karten-ID, bei Mehrfach-Exemplaren
     mit Nummer), absteigend nach Wert. Einheit 1-3 entspricht T1-T3.
+
+    Ohne Versand-Hits zählen auch hier die Exemplare: gibt es die teuerste Karte 3x, sind das
+    T1, T2 und T3 (aus der vollständigen Kartenliste; ältere Pools kennen nur die Top-Karten).
+    Das erste Exemplar behält dabei den bisherigen Schlüssel (nur ID), damit gespeicherte Züge passen.
     """
     if pool.get("hits"):
-        cards, shipping_only = pool["hits"], True
-    else:
-        cards, shipping_only = pool.get("top", [])[:len(TIERS)], False
+        units = []
+        for c in pool["hits"]:
+            copies = int(c.get("copies") or 1)
+            for n in range(copies):
+                key = c.get("id") or c["name"]
+                units.append({**c, "key": f"{key}#{n + 1}" if copies > 1 else str(key), "shipping_only": True})
+        return units
     units = []
-    for c in cards:
-        copies = int(c.get("copies") or 1)
-        for n in range(copies):
-            key = c.get("id") or c["name"]
-            units.append({**c, "key": f"{key}#{n + 1}" if copies > 1 else str(key),
-                          "shipping_only": shipping_only})
+    for c in pool.get("cards") or pool.get("top", []):
+        key = str(c.get("id") or c["name"])
+        for n in range(int(c.get("copies") or 1)):
+            if len(units) >= len(TIERS):
+                return units
+            card = {k: v for k, v in c.items() if k != "copies"}
+            units.append({**card, "key": key if n == 0 else f"{key}#{n + 1}", "shipping_only": False})
     return units
 
 

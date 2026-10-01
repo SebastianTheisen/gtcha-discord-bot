@@ -289,8 +289,11 @@ class HitsMixin:
             open_count = sum(1 for u in units if u["key"] not in pulled)
             header = f"🏆 **Hits im Pool** (nur Versand) · noch drin: {open_count} von {len(units)}"
         else:
-            tracked = {u["name"]: u["key"] for u in units}
-            entries = [{**c, "key": tracked.get(c["name"])} for c in pool.get('top', [])]
+            # verfolgte Exemplare (T1-T3, gleiche Karte ggf. mehrfach), danach weitere teure Karten
+            seen = {str(u.get("id")) for u in units}
+            entries = list(units) + [{**c, "key": None} for c in pool.get('top', [])
+                                     if str(c.get("id")) not in seen]
+            entries = entries[:5]
             header = "🏆 **Top 5 Karten** (Coin-Wert)"
         embeds = []
         for rank, card in enumerate(entries, 1):
