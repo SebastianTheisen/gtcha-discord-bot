@@ -300,3 +300,19 @@ def test_card_value_changes_between_pools():
     new = summarize_cards([card(1, 15400, name="A"), card(2, 990, copies=10), card(4, 700)])
     assert card_value_changes(old, new) == [{"id": "1", "name": "A", "old": 14000, "new": 15400}]
     assert card_value_changes(None, new) == [] and card_value_changes({"hits": []}, new) == []
+
+
+def test_medal_hits_already_shipped_are_not_counted_twice():
+    # Wie 24149: alle 3 Hits per Medaille gemeldet und verschickt, Versand aber keinem Hit zugeordnet
+    from utils.card_pool import out_of_banner_value
+    pool = _glurak_pool()
+    keys = keys_by_name(pool)
+    medals = {keys["Glurak"], keys["Lugia"], keys["Pikachu"]}          # 89.870 Kartenwert
+    out = out_of_banner_value(pool, 337_370, 94_300, medals)           # verschickt: 103.730 Kartenwert
+    assert out == 337_370 + 103_730                                     # Hits stecken im Versand
+    # Hits per Medaille, aber kaum etwas verschickt: dann zählen sie zusätzlich
+    out = out_of_banner_value(pool, 10_000, 600, {keys["Lugia"]})
+    assert out == 10_000 + 660 + 35_420
+    # sicher zugeordnete Hits verbrauchen den Versandwert
+    out = out_of_banner_value(pool, 0, 32_200, {keys["Glurak"]}, {keys["Lugia"]})   # 35.420 = Lugia
+    assert out == 35_420 + 36_740

@@ -71,12 +71,14 @@ class BannerView:
         price, remaining, total = (to_int(row.get(k)) for k in ('price_coins', 'current_packs', 'total_packs'))
         pool = json.loads(row['card_pool']) if row.get('card_pool') else None
         stats, sure, winners, open_groups, unsure, pulled, held = None, set(), {}, [], [], set(), set()
+        shipped_keys = set()
         if pool and pool.get('total_count'):
             pulled, sure, winners, open_groups, unsure = await self._pulled(thread_id, pid, pool)
             # gezogene Hits mit Medaille, die noch nicht verschickt sind - auch nicht mehr im Banner
-            held = set(winners) - set((await self.db.get_pull_tracking(pid))["pulled"])
+            shipped_keys = set((await self.db.get_pull_tracking(pid))["pulled"])
+            held = set(winners) - shipped_keys
             stats = estimate(pool, row.get('current_packs'), row.get('total_packs'), pulled, price or None,
-                             self._out_value(row, pool, held))
+                             self._out_value(row, pool, held, shipped_keys))
         else:
             pool = None
         low = pool_minimum(pool) if pool else None
@@ -103,7 +105,7 @@ class BannerView:
             **self._rank_info(row.get('conditions')),
             "shipped": format_shipping(row.get('site_stats')),
             **self._shipping(row.get('site_stats')),
-            **self._out_of_banner(row, pool, held),
+            **self._out_of_banner(row, pool, held, shipped_keys),
             "thread_id": thread_id or None,
             **self._out(pool, sure, winners, open_groups),
         }
@@ -141,12 +143,13 @@ class BannerView:
         return None
 
     @classmethod
-    def _out_value(cls, row: Dict, pool: Dict, held: set) -> Optional[int]:
+    def _out_value(cls, row: Dict, pool: Dict, held: set, shipped_keys: set = frozenset()) -> Optional[int]:
         st = json.loads(row['site_stats']) if row.get('site_stats') else {}
-        return out_of_banner_value(pool, cls._converted(row), to_int(st.get("coins")), held)
+        return out_of_banner_value(pool, cls._converted(row), to_int(st.get("coins")), held, shipped_keys)
 
     @classmethod
-    def _out_of_banner(cls, row: Dict, pool: Optional[Dict], held: set = frozenset()) -> Dict:
+    def _out_of_banner(cls, row: Dict, pool: Optional[Dict], held: set = frozenset(),
+                       shipped_keys: set = frozenset()) -> Dict:
         """Was schon aus dem Banner raus ist (Werte der Seite) und was rechnerisch noch drin ist.
 
         umgewandelt = total_kangen (eigene Spalte); ältere Stände: decided_value - verschickt.
@@ -167,7 +170,8 @@ class BannerView:
         max_cards = max(0, drawn - to_int(st.get("cards"))) if drawn is not None else None
         left = per_pack = None
         if pool and pool.get('total_value'):
-            left = max(0, to_int(pool['total_value']) - out_of_banner_value(pool, converted, shipped, held))
+            left = max(0, to_int(pool['total_value'])
+                       - out_of_banner_value(pool, converted, shipped, held, shipped_keys))
             per_pack = round(left / remaining) if remaining > 0 else None
         return {"converted": converted, "converted_max_cards": max_cards, "out_total": converted + shipped,
                 "left_value": left, "left_per_pack": per_pack}
