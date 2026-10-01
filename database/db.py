@@ -147,6 +147,7 @@ class Database:
                                ('banners', 'site_stats TEXT'),
                                ('discord_threads', 'hit_list_sig TEXT'),
                                ('discord_threads', 'title TEXT'),
+                               ('banners', 'ship_batches TEXT'),
                                ('banners', 'pool_updated_at TEXT'),
                                ('banners', 'starts_at INTEGER'),
                                ('banners', 'start_announced INTEGER DEFAULT 0'),
@@ -162,13 +163,13 @@ class Database:
             # Versand-Abgleich mit Toleranz: bisherige Versand-Summen einmal neu auswerten lassen
             cursor = await db.execute("SELECT value FROM bot_meta WHERE key = 'ship_match_version'")
             row = await cursor.fetchone()
-            if not row or row[0] != '4':
+            if not row or row[0] != '5':
                 # Banner mit Versand-Hits komplett neu auswerten (auch die erkannten Karten), damit
                 # Fehlzuordnungen der alten Logik verschwinden; Medaillen bleiben unberührt
                 await db.execute("""UPDATE banners SET pulled_cards = NULL, unsure_cards = NULL
                                     WHERE card_pool LIKE '%"hits": [{%'""")
-                await db.execute("UPDATE banners SET ship_count = NULL, ship_value = NULL")
-                await db.execute("INSERT OR REPLACE INTO bot_meta (key, value) VALUES ('ship_match_version', '4')")
+                await db.execute("UPDATE banners SET ship_count = NULL, ship_value = NULL, ship_batches = NULL")
+                await db.execute("INSERT OR REPLACE INTO bot_meta (key, value) VALUES ('ship_match_version', '5')")
                 await db.commit()
                 logger.info("Migration: Versand-Summen werden mit Toleranz neu ausgewertet")
 
@@ -269,23 +270,47 @@ class Database:
         """Zuletzt gesehene Zähler (None = noch nie gesehen) und als gezogen erkannte Karten."""
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
-                "SELECT decided_value, ship_count, ship_value, pulled_cards, unsure_cards "
+                "SELECT decided_value, ship_count, ship_value, pulled_cards, unsure_cards, ship_batches "
                 "FROM banners WHERE pack_id = ?", (pack_id,))
             row = await cursor.fetchone()
         if not row:
-            return {"decided_value": None, "ship_count": None, "ship_value": None, "pulled": [], "unsure": []}
+            return {"decided_value": None, "ship_count": None, "ship_value": None, "pulled": [], "unsure": [],
+                    "batches": None}
         return {"decided_value": row[0], "ship_count": row[1], "ship_value": row[2],
                 "pulled": json.loads(row[3]) if row[3] else [],
-                "unsure": json.loads(row[4]) if row[4] else []}
+                "unsure": json.loads(row[4]) if row[4] else [],
+                "batches": json.loads(row[5]) if row[5] else None}
 
     async def set_pull_tracking(self, pack_id: int, decided_value: Optional[int], ship_count: Optional[int],
-                                ship_value: Optional[int], pulled: List[str], unsure: List[Dict]) -> None:
+                                ship_value: Optional[int], pulled: List[str], unsure: List[Dict],
+                                batches: Optional[List[List[int]]] = None) -> None:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 "UPDATE banners SET decided_value = ?, ship_count = ?, ship_value = ?, pulled_cards = ?, "
-                "unsure_cards = ? WHERE pack_id = ?",
-                (decided_value, ship_count, ship_value, json.dumps(pulled), json.dumps(unsure), pack_id))
+                "unsure_cards = ?, ship_batches = COALESCE(?, ship_batches) WHERE pack_id = ?",
+                (decided_value, ship_count, ship_value, json.dumps(pulled), json.dumps(unsure),
+                 json.dumps(batches) if batches is not None else None, pack_id))
             await db.commit()
+
+    async def rebuild_ship_batches(self, pack_id: int, count: int, value: int) -> List[List[int]]:
+        """Schübe aus dem Versand-Verlauf: Stand vor der ersten Aufzeichnung als ein Schub, dann je Änderung."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT old_cards, new_cards, old_coins, new_coins FROM shipment_history "
+                "WHERE banner_id = ? ORDER BY id", (pack_id,))
+            rows = await cursor.fetchall()
+        batches: List[List[int]] = []
+        total_c = total_v = 0
+        for old_c, new_c, old_v, new_v in rows:
+            if old_c is None or new_c is None or new_c <= old_c:
+                continue
+            if old_c > total_c:  # Stand vor diesem Eintrag, der nicht aufgezeichnet ist
+                batches.append([old_c - total_c, (old_v or 0) - total_v])
+            batches.append([new_c - old_c, (new_v or 0) - (old_v or 0)])
+            total_c, total_v = new_c, new_v or 0
+        if count > total_c:
+            batches.append([count - total_c, value - total_v])
+        return batches
 
     async def get_sales_since(self, pack_id: int, since: datetime) -> tuple:
         """(verkaufte Packs seit `since`, Zeitpunkt der ersten Änderung in diesem Zeitraum oder None)."""
