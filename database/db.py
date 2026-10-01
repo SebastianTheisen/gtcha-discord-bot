@@ -130,6 +130,7 @@ class Database:
                                ('discord_threads', 'hit_message_ids TEXT'),
                                ('discord_threads', 'endspurt_sent INTEGER DEFAULT 0'),
                                ('banners', 'conditions TEXT'),
+                               ('banners', 'site_stats TEXT'),
                                ('discord_threads', 'top5_message_id INTEGER'),
                                ('discord_threads', 'value_alert_sent INTEGER DEFAULT 0')]:
                 try:
@@ -260,6 +261,18 @@ class Database:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("UPDATE discord_threads SET endspurt_sent = 1 WHERE thread_id = ?", (thread_id,))
             await db.commit()
+
+    async def update_site_stats(self, pack_id: int, stats: Dict) -> bool:
+        """Speichert die Versand-Zahlen der Seite; True, wenn sie sich geändert haben."""
+        new = json.dumps(stats, sort_keys=True)
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("SELECT site_stats FROM banners WHERE pack_id = ?", (pack_id,))
+            row = await cursor.fetchone()
+            if not row or row[0] == new:
+                return False
+            await db.execute("UPDATE banners SET site_stats = ? WHERE pack_id = ?", (new, pack_id))
+            await db.commit()
+        return True
 
     async def update_conditions(self, pack_id: int, conditions: Dict) -> bool:
         """Speichert die Kaufbedingungen; True, wenn sie sich geändert haben."""

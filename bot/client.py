@@ -39,7 +39,8 @@ from utils.rate_limiter import discord_rate_limiter
 from utils.memory_monitor import memory_monitor
 from utils.cache import banner_cache
 from utils.banner_info import (
-    banner_conditions, chance_at_least_one, format_conditions, to_int as _int,
+    banner_conditions, chance_at_least_one, format_conditions, format_shipping, shipping_stats,
+    to_int as _int,
 )
 from utils.card_pool import (
     estimate, fmt_coins, fmt_pct, TIERS, MAX_LISTED, EMBEDS_PER_MESSAGE, decided_value, detect_jump_pulls,
@@ -721,9 +722,11 @@ class GTCHABot(commands.Bot):
                 # === HIT-ERKENNUNG über die Rückgabe-Zähler aus pack/list ===
                 await self._detect_pulled_hits(getattr(scraper, '_api_pack_data', {}) or {})
 
-                # === KAUFBEDINGUNGEN (Rang, Aufladung, Passwort) aus pack/list ===
+                # === KAUFBEDINGUNGEN und VERSAND-ZAHLEN aus pack/list ===
                 for pid, item in (getattr(scraper, '_api_pack_data', {}) or {}).items():
-                    if await self.db.update_conditions(pid, banner_conditions(item)):
+                    changed = await self.db.update_conditions(pid, banner_conditions(item))
+                    changed = await self.db.update_site_stats(pid, shipping_stats(item)) or changed
+                    if changed:
                         row = await self.db.get_banner(pid)
                         if row and row.get('is_active'):
                             await self._update_thread_embed(row)
@@ -918,7 +921,8 @@ class GTCHABot(commands.Bot):
         return getattr(banner, key, default)
 
     def _build_banner_embed(self, banner, title_prefix: str = None, stats: Optional[dict] = None,
-                            tempo: Optional[str] = None, conditions: Optional[str] = None) -> discord.Embed:
+                            tempo: Optional[str] = None, conditions: Optional[str] = None,
+                            shipped: Optional[str] = None) -> discord.Embed:
         """Erstellt ein Embed für einen Banner (funktioniert mit Objekt oder Dict)."""
         # Helper für Zugriff
         get = lambda key, default=None: self._get_banner_value(banner, key, default)
@@ -983,6 +987,8 @@ class GTCHABot(commands.Bot):
 
         if tempo:
             embed.add_field(name="Abverkauf", value=tempo, inline=False)
+        if shipped:
+            embed.add_field(name="Verschickt", value=shipped, inline=False)
         if conditions:
             embed.add_field(name="Kaufbedingungen", value=conditions, inline=False)
 
@@ -1312,8 +1318,11 @@ class GTCHABot(commands.Bot):
 
             stats = await self._pool_stats(banner, thread_data)
             tempo = await self._sales_tempo(pack_id, _int(self._get_banner_value(banner, 'current_packs')))
-            conditions = format_conditions((await self.db.get_banner(pack_id) or {}).get('conditions'))
-            new_embed = self._build_banner_embed(banner, stats=stats, tempo=tempo, conditions=conditions)
+            row = await self.db.get_banner(pack_id) or {}
+            conditions = format_conditions(row.get('conditions'))
+            shipped = format_shipping(row.get('site_stats'))
+            new_embed = self._build_banner_embed(banner, stats=stats, tempo=tempo, conditions=conditions,
+                                                 shipped=shipped)
 
             # Message updaten
             await discord_rate_limiter.acquire("message_edit")

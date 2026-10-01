@@ -58,3 +58,24 @@ def format_conditions(raw: Optional[str]) -> Optional[str]:
     if cond.get("password"):
         lines.append("🔒 Nur mit Passwort")
     return "\n".join(lines)
+
+
+def shipping_stats(item: dict) -> dict:
+    """Verschickte Karten eines Banners aus pack/list."""
+    return {
+        "cards": to_int(item.get("total_sendcount")),
+        "coins": to_int(item.get("total_sendprice")),
+        "players": to_int(item.get("total_sendpeople")),
+    }
+
+
+def format_shipping(raw: Optional[str]) -> Optional[str]:
+    """'5 Karten · 702.050 Coins · 1 Spieler' (None, solange keine Daten da sind)."""
+    if not raw:
+        return None
+    st = json.loads(raw)
+    if not st.get("cards"):
+        return "Noch nichts verschickt"
+    cards = "1 Karte" if st["cards"] == 1 else f"{fmt_coins(st['cards'])} Karten"
+    players = "1 Spieler" if st.get("players") == 1 else f"{fmt_coins(st.get('players') or 0)} Spieler"
+    return f"{cards} · {fmt_coins(st['coins'])} Coins · {players}"
