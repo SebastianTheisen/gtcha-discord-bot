@@ -40,8 +40,8 @@ from utils.memory_monitor import memory_monitor
 from utils.cache import banner_cache
 from utils.maintenance import backup_database, new_tor_identity, start_watchdog, touch_heartbeat
 from utils.banner_info import (
-    banner_conditions, chance_at_least_one, format_conditions, format_shipping, shipping_stats,
-    to_int as _int,
+    banner_conditions, category_for, chance_at_least_one, format_conditions, format_shipping,
+    is_upcoming, jst_timestamp, shipping_stats, to_int as _int,
 )
 from utils.card_pool import (
     estimate, fmt_coins, fmt_pct, TIERS, MAX_LISTED, EMBEDS_PER_MESSAGE, decided_value, detect_jump_pulls,
@@ -146,7 +146,6 @@ class GTCHABot(commands.Bot):
         self._scraper: Optional[GTCHAScraper] = None
         self._scrape_lock = asyncio.Lock()  # Verhindert parallele Scrape-Läufe
         self._last_full_scrape: Optional[datetime] = None
-        self._not_in_tabs: set = set()  # Banner aus pack/list, die beim Tab-Scrape nicht auftauchten
         self._scrape_problems = 0
         self._problem_alerted = False
         self._rises_ignored = 0
@@ -577,6 +576,9 @@ class GTCHABot(commands.Bot):
                     logger.warning(f"[API] pack/list fehlgeschlagen: {e}")
                     api_items = {}
 
+                created_from_api = await self._create_banners_from_api(api_items) if api_items else []
+                if api_items:
+                    await self._announce_started_banners(api_items)
                 full_reason = await self._full_scrape_reason(api_items)
                 if full_reason:
                     logger.info(f"Voller Scrape mit Tabs: {full_reason}")
@@ -589,10 +591,6 @@ class GTCHABot(commands.Bot):
                         for b in banners:
                             if b.pack_id in api_items:
                                 b.current_packs = _int(api_items[b.pack_id].get('pack_count'))
-                        found = {b.pack_id for b in banners}
-                        states = await self.db.get_banner_states()
-                        self._not_in_tabs = {pid for pid in self._new_banner_candidates(api_items, states)
-                                             if pid not in found}
                 else:
                     banners = await self._banners_from_api(api_items)
                     logger.info(f"Schneller Scrape über die API: {len(banners)} bekannte Banner")
@@ -617,7 +615,7 @@ class GTCHABot(commands.Bot):
 
                 # Sammle Updates für parallele Verarbeitung
                 update_tasks = []
-                new_banner_ids = []
+                new_banner_ids = list(created_from_api)
 
                 for banner in banners:
                     try:
@@ -861,9 +859,65 @@ class GTCHABot(commands.Bot):
 
     @staticmethod
     def _new_banner_candidates(api_items: dict, states: dict) -> set:
-        """Banner mit Packs, die schon laufen und dem Bot unbekannt oder inaktiv sind."""
+        """Laufende oder angekündigte Banner mit Packs, die dem Bot unbekannt oder inaktiv sind."""
         return {pid for pid, it in api_items.items()
-                if _int(it.get('pack_count')) > 0 and not it.get('is_before') and not states.get(pid)}
+                if _int(it.get('pack_count')) > 0 and not states.get(pid) and category_for(it)}
+
+    async def _create_banners_from_api(self, api_items: dict) -> list:
+        """Legt neue Banner direkt aus pack/list an (auch vor Verkaufsstart); gibt die IDs zurück."""
+        created = []
+        states = await self.db.get_banner_states()
+        for pid in sorted(self._new_banner_candidates(api_items, states)):
+            item = api_items[pid]
+            image = (item.get('image') or [None])[0]
+            limit = _int(item.get('max_buy_count'))
+            banner = ScrapedBanner(
+                pack_id=pid,
+                category=category_for(item),
+                price_coins=_int(item.get('point')) or None,
+                current_packs=_int(item.get('pack_count')),
+                total_packs=_int(item.get('total_pack_count')) or None,
+                entries_per_day=limit or None,
+                sale_end_date=item.get('end_date'),
+                image_url=f"{BASE_URL}{image.split('?')[0]}" if image else None,
+                detail_page_url=f"{BASE_URL}/pack-detail?packId={pid}",
+            )
+            starts_at = jst_timestamp(item.get('start_date'))
+            upcoming = is_upcoming(item)
+            await self.db.save_banner(banner)
+            await self.db.set_start(pid, starts_at, announced=not upcoming)
+            await self.db.update_conditions(pid, banner_conditions(item))
+            await self._post_banner_to_discord(banner, starts_at=starts_at if upcoming else None)
+            created.append(pid)
+            logger.info(f"Neu aus API: {pid} ({banner.category}){' - angekündigt' if upcoming else ''}")
+        return created
+
+    async def _announce_started_banners(self, api_items: dict):
+        """Postet bei angekündigten Bannern, sobald der Verkauf läuft."""
+        now = datetime.now().timestamp()
+        for pid, row in (await self.db.get_active_banners()).items():
+            if row.get('start_announced') or not row.get('starts_at'):
+                continue
+            item = api_items.get(pid)
+            if (item and is_upcoming(item)) or (not item and now < row['starts_at']):
+                continue
+            await self.db.set_start(pid, row['starts_at'], announced=True)
+            thread_data = await self.db.get_thread_by_banner_id(pid)
+            if not thread_data or thread_data.get('is_expired'):
+                continue
+            try:
+                thread = self.get_channel(int(thread_data['thread_id'])) or await self.fetch_channel(
+                    int(thread_data['thread_id']))
+                if thread.archived:
+                    await discord_rate_limiter.acquire("thread_edit")
+                    await thread.edit(archived=False)
+                mention = "@everyone " if MENTION_ON_NEW_THREAD else ""
+                await discord_rate_limiter.acquire("message_send")
+                await thread.send(f"{mention}🟢 **Verkauf gestartet!** Ab jetzt kann gezogen werden.")
+                await self._update_thread_embed(await self.db.get_banner(pid))
+                logger.info(f"Start gemeldet: Banner {pid}")
+            except Exception as e:
+                logger.warning(f"Start-Meldung für {pid} fehlgeschlagen: {e}")
 
     async def _full_scrape_reason(self, api_items: dict) -> Optional[str]:
         """Grund für einen vollen Tab-Scrape, sonst None (dann reicht die API)."""
@@ -873,9 +927,6 @@ class GTCHABot(commands.Bot):
             return "erster Scrape seit Start"
         if datetime.now() - self._last_full_scrape >= timedelta(minutes=FULL_SCRAPE_EVERY_MINUTES):
             return f"regelmäßig alle {FULL_SCRAPE_EVERY_MINUTES} Min"
-        new = self._new_banner_candidates(api_items, await self.db.get_banner_states()) - self._not_in_tabs
-        if new:
-            return f"neue Banner {sorted(new)}"
         return None
 
     async def _banners_from_api(self, api_items: dict) -> list:
@@ -974,7 +1025,8 @@ class GTCHABot(commands.Bot):
 
     def _build_banner_embed(self, banner, title_prefix: str = None, stats: Optional[dict] = None,
                             tempo: Optional[str] = None, conditions: Optional[str] = None,
-                            shipped: Optional[str] = None, minimum: Optional[str] = None) -> discord.Embed:
+                            shipped: Optional[str] = None, minimum: Optional[str] = None,
+                            starts_at: Optional[int] = None) -> discord.Embed:
         """Erstellt ein Embed für einen Banner (funktioniert mit Objekt oder Dict)."""
         # Helper für Zugriff
         get = lambda key, default=None: self._get_banner_value(banner, key, default)
@@ -1002,6 +1054,10 @@ class GTCHABot(commands.Bot):
         )
 
         # Felder hinzufügen
+        starts_at = starts_at or (get('starts_at') if not get('start_announced', 1) else None)
+        if starts_at and starts_at > datetime.now().timestamp():
+            embed.add_field(name="🕒 Verkaufsstart", value=f"<t:{starts_at}:F> (<t:{starts_at}:R>)", inline=False)
+
         if get('price_coins'):
             embed.add_field(name="Preis", value=f"{fmt_coins(get('price_coins'))} Coins", inline=True)
 
@@ -1056,8 +1112,8 @@ class GTCHABot(commands.Bot):
 
         return embed
 
-    async def _post_banner_to_discord(self, banner):
-        """Postet einen Banner als Thread in Discord."""
+    async def _post_banner_to_discord(self, banner, starts_at: Optional[int] = None):
+        """Postet einen Banner als Thread in Discord (starts_at = angekündigt, Verkauf startet später)."""
 
         # Channel fuer Kategorie finden
         channel_id = CHANNEL_IDS.get(banner.category)
@@ -1084,7 +1140,7 @@ class GTCHABot(commands.Bot):
             title = title[:97] + "..."
 
         # Embed erstellen mit Helper-Funktion
-        embed = self._build_banner_embed(banner)
+        embed = self._build_banner_embed(banner, starts_at=starts_at)
 
         try:
             # Rate-Limiting für Discord API
@@ -1108,7 +1164,10 @@ class GTCHABot(commands.Bot):
             # @everyone Mention bei neuem Thread
             if MENTION_ON_NEW_THREAD:
                 await discord_rate_limiter.acquire("message_send")
-                await thread.send("@everyone Neuer Banner verfügbar!")
+                if starts_at:
+                    await thread.send(f"@everyone 🕒 Neuer Banner angekündigt! Verkaufsstart <t:{starts_at}:R>")
+                else:
+                    await thread.send("@everyone Neuer Banner verfügbar!")
 
             # Wahrscheinlichkeit initial posten
             await self._update_probability_message(thread.id, banner.pack_id)

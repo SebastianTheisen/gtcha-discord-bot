@@ -137,6 +137,8 @@ class Database:
                                ('banners', 'conditions TEXT'),
                                ('banners', 'site_stats TEXT'),
                                ('discord_threads', 'hit_list_sig TEXT'),
+                               ('banners', 'starts_at INTEGER'),
+                               ('banners', 'start_announced INTEGER DEFAULT 0'),
                                ('discord_threads', 'top5_message_id INTEGER'),
                                ('discord_threads', 'value_alert_sent INTEGER DEFAULT 0')]:
                 try:
@@ -302,6 +304,12 @@ class Database:
             await db.execute("UPDATE banners SET conditions = ? WHERE pack_id = ?", (new, pack_id))
             await db.commit()
         return True
+
+    async def set_start(self, pack_id: int, starts_at: Optional[int], announced: bool) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE banners SET starts_at = ?, start_announced = ? WHERE pack_id = ?",
+                             (starts_at, 1 if announced else 0, pack_id))
+            await db.commit()
 
     async def update_price(self, pack_id: int, price: int) -> bool:
         """Setzt den Packpreis, wenn er fehlt oder abweicht; True bei Änderung."""

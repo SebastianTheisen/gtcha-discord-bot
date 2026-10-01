@@ -1,6 +1,7 @@
 """Reine Hilfsfunktionen rund um Banner: Zahlen lesen, Hit-Chance, Kaufbedingungen."""
 
 import json
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from utils.card_pool import fmt_coins
@@ -79,3 +80,30 @@ def format_shipping(raw: Optional[str]) -> Optional[str]:
     cards = "1 Karte" if st["cards"] == 1 else f"{fmt_coins(st['cards'])} Karten"
     players = "1 Spieler" if st.get("players") == 1 else f"{fmt_coins(st.get('players') or 0)} Spieler"
     return f"{cards} · {fmt_coins(st['coins'])} Coins · {players}"
+
+
+JST = timezone(timedelta(hours=9))
+CATEGORY_BY_CARD_TYPE = {"2": "Pokémon", "5": "One piece", "9": "Dragon Ball", "999996": "MIX"}
+
+
+def category_for(item: dict) -> Optional[str]:
+    """Discord-Kategorie eines Banners aus pack/list (None = Kategorie wird nicht gepostet)."""
+    if str(item.get("is_bonus")) == "1":
+        return "Bonus"
+    return CATEGORY_BY_CARD_TYPE.get(str(item.get("card_type")))
+
+
+def jst_timestamp(text: Optional[str]) -> Optional[int]:
+    """'2026-10-01 03:00:00' oder '2026/11/01 00:00' (Zeit der Seite, JST) -> Unix-Zeit."""
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M"):
+        try:
+            return int(datetime.strptime(str(text).strip(), fmt).replace(tzinfo=JST).timestamp())
+        except ValueError:
+            continue
+    return None
+
+
+def is_upcoming(item: dict) -> bool:
+    return bool(item.get("is_before"))
