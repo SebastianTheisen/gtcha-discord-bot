@@ -151,6 +151,20 @@ def resolve_pulled(detected: List[str], unsure: List[Dict], claimed: Set[str]) -
     return base | stand_ins, sure, open_groups
 
 
+def prefer_claimed(match: Dict, expected: Set[str]) -> Dict:
+    """Löst ❓-Gruppen zugunsten von Karten auf, die per Medaille gemeldet, aber noch nicht als
+    verschickt erkannt sind: eine gemeldete Karte ist der naheliegendste Kandidat für einen Versand."""
+    groups = []
+    for g in match["groups"]:
+        claimed = [k for k in g["keys"] if k in expected and k not in match["certain"]]
+        if len(claimed) >= g["pulled"]:
+            match["certain"] = match["certain"] + claimed[:g["pulled"]]
+        else:
+            groups.append(g)
+    match["groups"] = groups
+    return match
+
+
 def estimate(pool: Dict, remaining: Optional[int], total_packs: Optional[int],
              pulled_keys: Set[str], price: Optional[int]) -> Optional[Dict]:
     """Geschätzte Ø-Rückgabe pro Zug und Hit-Chance für die verbleibenden Packs.

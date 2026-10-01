@@ -43,7 +43,7 @@ from utils.banner_info import (
 )
 from utils.card_pool import (
     estimate, fmt_coins, fmt_pct, TIERS, MAX_LISTED, EMBEDS_PER_MESSAGE, decided_value, detect_jump_pulls,
-    is_relevant_hit, match_shipped_hits, pool_minimum, relevant_units, resolve_pulled, shipment_values, tier_keys,
+    is_relevant_hit, match_shipped_hits, pool_minimum, prefer_claimed, relevant_units, resolve_pulled, shipment_values, tier_keys,
     tracked_units,
 )
 
