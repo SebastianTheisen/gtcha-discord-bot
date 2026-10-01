@@ -246,18 +246,6 @@ function chart(history) {
   </svg></div>`;
 }
 
-function podium(top) {
-  return `<div class="podium">${top.map((h, i) => `
-    <div class="slot p${i + 1} ${h.state === "pulled" ? "gone" : ""}">
-      <div class="art">
-        <span class="medal">${i + 1}</span>
-        ${h.ship ? `<span class="ship-tag">Versand nur ✈</span>` : ""}
-        ${img(h.image, h.name)}
-      </div>
-      <div class="base"></div>
-      <div class="label">${esc(h.name)}<br><b>${num(h.value)} Coins</b>${h.note ? `<br><span class="muted">${h.state === "pulled" ? "✅" : "❓"} ${esc(h.note)}</span>` : ""}</div>
-    </div>`).join("")}</div>`;
-}
 
 function hitCard(h) {
   return `<div class="hit ${h.state}">
@@ -324,8 +312,7 @@ async function showBanner(id) {
       <span class="price-pill">${coins(b.price)}</span></div>
     <div class="watch-row"><button class="watch-btn" id="watch-btn">🔔 Beobachten</button>
       <a class="hint" href="#/settings">Pushes einstellen ›</a></div>
-    ${hits.length ? `<div class="ribbon">Was du gewinnen kannst</div>${podium(hits.slice(0, 3))}` : ""}
-    ${hits.length ? `<h2>🏅 Gezogen melden <small>wie „T1“ im Discord-Thread</small></h2>
+    ${hits.length ? `<h2>🏆 Hits <small>${open} von ${hits.length} noch drin · antippen zum Melden</small></h2>
       <div class="rows" id="claims"></div>` : ""}
     <h2>📊 Auswertung <small>ID ${b.id}</small></h2>
     <div class="stats">
@@ -575,8 +562,11 @@ async function renderClaims(b) {
         : h.state === "pulled" ? `✅ ${esc(h.note || "gezogen")}` : h.state === "unsure" ? `❓ ${esc(h.note || "")}` : "";
       const btn = !user ? "" : mine ? `<button class="claim undo" data-tier="${h.tier}" data-action="unclaim">Zurücknehmen</button>`
         : !h.medal_user ? `<button class="claim" data-tier="${h.tier}" data-action="claim">Ich hab's gezogen</button>` : "";
-      return `<div class="line claim-row ${h.medal_user || h.state === "pulled" ? "done" : ""}">
-        <span><b>${h.tier}</b> ${esc(h.name)}<br><span class="muted">${num(h.value)} Coins ${status ? "· " + status : ""}</span></span>
+      const gone = h.medal_user || h.state === "pulled";
+      return `<div class="line claim-row ${gone ? "done" : ""} ${h.state === "unsure" ? "unsure" : ""}">
+        <span class="claim-thumb">${img(h.image, h.name)}${gone ? `<span class="thumb-check">✓</span>` : ""}</span>
+        <span class="claim-text"><b>${h.tier}</b> ${esc(h.name)}<br>
+          <span class="claim-value">${num(h.value)} Coins</span>${status ? `<br><span class="muted">${status}</span>` : ""}</span>
         ${btn}</div>`;
     }).join("");
   box.querySelectorAll(".claim").forEach((el) => el.addEventListener("click", async () => {
