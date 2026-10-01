@@ -13,7 +13,7 @@ from database.db import Database
 from utils.banner_info import RANK_ORDER, format_conditions, format_shipping, sale_end_timestamp, to_int
 from utils.card_pool import (
     card_value, estimate, explain_batch, out_of_banner_value, fmt_coins, pool_minimum, relevant_units, resolve_pulled, tier_keys,
-    tracked_units,
+    tracked_units, claimable_units, medal_units,
 )
 from utils.hot_list import min_rank, needs_password, rank_entries
 
@@ -119,7 +119,7 @@ class BannerView:
         """Welche Hits schon raus sind (Versand sicher erkannt oder per Medaille gemeldet), teuerste zuerst."""
         if not pool:
             return {"out": [], "out_unsure": 0}
-        out = [{"name": u["name"], "value": u["value"]} for u in tracked_units(pool)
+        out = [{"name": u["name"], "value": u["value"]} for u in medal_units(pool)
                if u["key"] in sure or u["key"] in winners]
         return {"out": out, "out_unsure": sum(g.get("pulled", 0) for g in open_groups)}
 
@@ -188,13 +188,16 @@ class BannerView:
     @staticmethod
     def _hit_list(pool: Dict, pulled: set, sure: set, winners: Dict, unsure: List[Dict], price: int) -> List[Dict]:
         """Hit-Liste wie im Discord-Thread, mit Status je Karte."""
-        units = relevant_units(pool, price or None) if pool.get('hits') else tracked_units(pool)
+        units = claimable_units(pool, price or None)
+        if not pool.get('hits'):
+            units = max(units, tracked_units(pool), key=len)
         if pool.get('hits') and not units:
             units = tracked_units(pool)[:5]
         result = []
         for rank, u in enumerate(units[:50], 1):
             key = u["key"]
             state, note = "open", None
+            medal_user = winners.get(key)
             if key in winners:
                 state, note = "pulled", "gezogen (Medaille)"
             elif any(key in g["keys"] and g["pulled"] > 0 and not set(g["keys"]) <= pulled for g in unsure):
@@ -204,8 +207,10 @@ class BannerView:
                 state, note = "pulled", "gezogen (erkannt)" if key in sure else "gezogen"
             elif any(key in g["keys"] and g["pulled"] == 0 for g in unsure):
                 state, note = "maybe", "möglicherweise gezogen"
-            result.append({"rank": rank, "key": key, "name": u["name"], "value": u["value"],
-                           "image": u.get("image"), "state": state, "note": note})
+            result.append({"rank": rank, "tier": f"T{rank}", "key": key, "name": u["name"], "value": u["value"],
+                           "image": u.get("image"), "state": state, "note": note,
+                           # Medaille ohne bekannte Person (ältere T1-T3-Markierung) = "0"
+                           "medal_user": str(medal_user) if key in winners else None})
         return result
 
     async def image_urls(self) -> List[str]:

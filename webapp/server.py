@@ -8,6 +8,7 @@ Start: python -m webapp.server
 
 import asyncio
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -16,6 +17,7 @@ from aiohttp import web
 from loguru import logger
 
 from database.db import Database
+from utils.app_bridge import AppBridge
 from webapp.images import ImageCache, content_type
 from webapp.push import DEFAULTS, EVENTS, WATCH_EVENTS, PushService, build_events
 from webapp.view import BannerView
@@ -31,6 +33,8 @@ class App:
         self.view = BannerView(Database(db_path))
         self.push = PushService(data_dir, contact)
         self.images = ImageCache(data_dir)
+        self.bridge = AppBridge(os.path.join(data_dir, "webapp.db"))
+        self._link_fails = []
         self._data = None
         self._updated = 0
         self._lock = asyncio.Lock()
@@ -107,6 +111,57 @@ class App:
         return web.FileResponse(path, headers={"Cache-Control": f"public, max-age={IMAGE_MAX_AGE}, immutable",
                                                "Content-Type": content_type(path)})
 
+    # --- Discord-Verknüpfung und Medaillen ---
+    async def _user(self, request):
+        return await self.bridge.device(request.headers.get("X-Device-Token"))
+
+    async def api_link(self, request):
+        now = time.time()
+        self._link_fails = [t for t in self._link_fails if now - t < 600]
+        if len(self._link_fails) >= 10:
+            raise web.HTTPTooManyRequests(text="Zu viele falsche Codes – bitte 10 Minuten warten")
+        body = await request.json()
+        device = await self.bridge.redeem_code(str(body.get("code", "")))
+        if not device:
+            self._link_fails.append(now)
+            return web.json_response({"error": "Code ungültig oder abgelaufen"}, status=400)
+        logger.info(f"App mit Discord verknüpft: {device['name']}")
+        return web.json_response(device)
+
+    async def api_me(self, request):
+        user = await self._user(request)
+        return web.json_response(user or {}, status=200 if user else 401)
+
+    async def api_unlink(self, request):
+        token = request.headers.get("X-Device-Token")
+        if token:
+            await self.bridge.unlink(token)
+        return web.json_response({"ok": True})
+
+    async def api_medal(self, request):
+        user = await self._user(request)
+        if not user:
+            raise web.HTTPUnauthorized(text="Gerät nicht mit Discord verknüpft")
+        body = await request.json()
+        tier, action = str(body.get("tier", "")).upper(), body.get("action")
+        try:
+            pack_id = int(body.get("pack_id"))
+        except (TypeError, ValueError):
+            raise web.HTTPBadRequest(text="Banner fehlt")
+        if action not in ("claim", "unclaim") or not re.fullmatch(r"T([1-9]\d?)", tier):
+            raise web.HTTPBadRequest(text="Ungültige Meldung")
+        if not await self.view.db.get_banner(pack_id):
+            raise web.HTTPNotFound(text="Banner unbekannt")
+        request_id = await self.bridge.add_request(pack_id, tier, user, action)
+        return web.json_response({"id": request_id})
+
+    async def api_medal_status(self, request):
+        user = await self._user(request)
+        req = await self.bridge.get_request(int(request.match_info["id"]))
+        if not user or not req or req["discord_user_id"] != user["user_id"]:
+            raise web.HTTPNotFound()
+        return web.json_response({"status": req["status"], "reason": req["reason"]})
+
     async def api_push_key(self, request):
         return web.json_response({"key": self.push.public_key(), "events": list(EVENTS),
                                   "defaults": DEFAULTS, "watch_events": list(WATCH_EVENTS)})
@@ -182,6 +237,11 @@ def make_app(app: App) -> web.Application:
         web.get("/api/hot", app.api_hot),
         web.get(r"/api/banner/{id}", app.api_banner),
         web.get("/img", app.image),
+        web.post("/api/link", app.api_link),
+        web.get("/api/me", app.api_me),
+        web.post("/api/unlink", app.api_unlink),
+        web.post("/api/medal", app.api_medal),
+        web.get(r"/api/medal/{id:\d+}", app.api_medal_status),
         web.get("/api/push/key", app.api_push_key),
         web.post("/api/push/subscribe", app.api_push_subscribe),
         web.post("/api/push/unsubscribe", app.api_push_unsubscribe),
@@ -192,6 +252,7 @@ def make_app(app: App) -> web.Application:
 
     async def start_background(_):
         await app.push.init()
+        await app.bridge.init()
         web_app["refresh_task"] = asyncio.create_task(app.refresh_loop())
         web_app["push_task"] = asyncio.create_task(app.push_loop())
 

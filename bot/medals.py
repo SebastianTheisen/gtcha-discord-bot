@@ -141,7 +141,9 @@ class MedalsMixin:
         pool = await self.db.get_card_pool(pack_id) if pack_id else None
         if pool and pool.get('version') == 2:
             price = _int((await self.db.get_banner(pack_id) or {}).get('price_coins')) or None
-            listed = relevant_units(pool, price) if pool.get('hits') else tracked_units(pool)
+            listed = claimable_units(pool, price)
+            if not pool.get('hits'):
+                listed = max(listed, tracked_units(pool), key=len)   # wie bisher mindestens T1-T3
             available = max(1, min(len(tier_keys(pool)), len(listed)))
         else:
             available = len(TIERS)

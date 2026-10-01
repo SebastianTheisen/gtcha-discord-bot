@@ -557,6 +557,15 @@ class Database:
                 )
             await db.commit()
 
+    async def delete_medal(self, thread_id: int, tier: str) -> None:
+        """Nimmt eine Medaille zurück (auch die T1-T3-Markierung am Thread)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("DELETE FROM medals WHERE thread_id = ? AND tier = ?", (thread_id, tier))
+            col_map = {'T1': 't1_claimed', 'T2': 't2_claimed', 'T3': 't3_claimed'}
+            if tier in col_map:
+                await db.execute(f"UPDATE discord_threads SET {col_map[tier]} = 0 WHERE thread_id = ?", (thread_id,))
+            await db.commit()
+
     async def get_thread_by_banner_id(self, banner_id: int) -> Optional[Dict]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row

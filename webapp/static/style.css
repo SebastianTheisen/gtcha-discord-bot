@@ -289,6 +289,16 @@ h2 small { font-size: 13px; color: var(--muted); font-weight: 400; }
 .watch-btn { border: 1px solid var(--blue-dark); color: var(--blue-dark); background: #fff; border-radius: 999px; padding: 8px 16px; font-weight: 700; cursor: pointer; }
 .watch-btn.on { background: var(--blue-dark); color: #fff; }
 
+/* Gezogen melden */
+.claim-row { align-items: center; }
+.claim-row.done b { color: var(--muted); }
+.claim { flex: none; border: 0; border-radius: 999px; padding: 8px 12px; font-weight: 700; color: #fff; cursor: pointer;
+  background: linear-gradient(180deg, #5b9cf0, var(--blue-dark)); }
+.claim.undo { background: var(--surface-2); color: var(--muted); border: 1px solid var(--line); }
+.claim:disabled { opacity: .6; }
+.code-input { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; font-size: 18px;
+  letter-spacing: 3px; text-transform: uppercase; min-width: 0; }
+
 /* Einstellungen */
 .panel { background: var(--surface); border-radius: var(--radius); padding: 14px; display: grid; gap: 12px; margin: 0 10px; box-shadow: var(--shadow); }
 .toggle { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
