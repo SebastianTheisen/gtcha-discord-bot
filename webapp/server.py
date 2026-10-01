@@ -16,11 +16,13 @@ from aiohttp import web
 from loguru import logger
 
 from database.db import Database
+from webapp.images import ImageCache
 from webapp.push import EVENTS, PushService, build_events
 from webapp.view import BannerView
 
 STATIC = Path(__file__).parent / "static"
-CACHE_SECONDS = 20
+REFRESH_SECONDS = 20
+IMAGE_MAX_AGE = 30 * 24 * 3600
 PUSH_CHECK_SECONDS = 60
 
 
@@ -28,22 +30,41 @@ class App:
     def __init__(self, db_path: str, data_dir: str, contact: str):
         self.view = BannerView(Database(db_path))
         self.push = PushService(data_dir, contact)
-        self._cache = (0.0, None)
+        self.images = ImageCache(data_dir)
+        self._data = None
+        self._updated = 0
         self._lock = asyncio.Lock()
 
-    async def banners(self) -> list:
-        """Alle aktiven Banner (kurz zwischengespeichert, damit viele Aufrufe die DB nicht belasten)."""
+    async def _compute(self, only_if_missing: bool = False) -> list:
         async with self._lock:
-            stamp, data = self._cache
-            if data is None or time.monotonic() - stamp > CACHE_SECONDS:
-                data = await self.view.all_banners(with_pool=True)
-                self._cache = (time.monotonic(), data)
-            return data
+            if only_if_missing and self._data is not None:
+                return self._data
+            started = time.monotonic()
+            self._data = await self.view.all_banners(with_pool=True)
+            self._updated = int(time.time())
+            logger.debug(f"Daten neu berechnet in {time.monotonic() - started:.2f}s")
+            return self._data
+
+    async def banners(self) -> list:
+        """Alle aktiven Banner - im Hintergrund vorberechnet, Anfragen warten nie auf die Datenbank."""
+        return self._data if self._data is not None else await self._compute(only_if_missing=True)
+
+    async def refresh_loop(self):
+        """Hält die Daten frisch und lädt neue Banner-Bilder vorab."""
+        while True:
+            try:
+                banners = await self._compute()
+                urls = [b.get("image") for b in banners]
+                urls += [h.get("image") for b in banners for h in (b.get("hits") or [])[:3]]
+                asyncio.create_task(self.images.warm(urls))
+            except Exception as e:
+                logger.warning(f"Daten-Aktualisierung fehlgeschlagen: {type(e).__name__}: {e}")
+            await asyncio.sleep(REFRESH_SECONDS)
 
     # --- API ---
     async def api_banners(self, request):
         lite = [{k: v for k, v in b.items() if k not in ("hits", "hit_keys_detected")} for b in await self.banners()]
-        return web.json_response({"banners": lite, "updated": int(time.time())})
+        return web.json_response({"banners": lite, "updated": self._updated or int(time.time())})
 
     async def api_hot(self, request):
         hot = self.view.hot(await self.banners())
@@ -60,6 +81,13 @@ class App:
             raise web.HTTPNotFound()
         data.pop("hit_keys_detected", None)
         return web.json_response(data)
+
+    async def image(self, request):
+        """Bild aus dem Zwischenspeicher auf dem VPS (beim ersten Mal von GTCHA geladen)."""
+        path = await self.images.get(request.query.get("u", ""))
+        if not path:
+            raise web.HTTPNotFound()
+        return web.FileResponse(path, headers={"Cache-Control": f"public, max-age={IMAGE_MAX_AGE}, immutable"})
 
     async def api_push_key(self, request):
         return web.json_response({"key": self.push.public_key(), "events": list(EVENTS)})
@@ -133,6 +161,7 @@ def make_app(app: App) -> web.Application:
         web.get("/api/banners", app.api_banners),
         web.get("/api/hot", app.api_hot),
         web.get(r"/api/banner/{id}", app.api_banner),
+        web.get("/img", app.image),
         web.get("/api/push/key", app.api_push_key),
         web.post("/api/push/subscribe", app.api_push_subscribe),
         web.post("/api/push/unsubscribe", app.api_push_unsubscribe),
@@ -143,10 +172,13 @@ def make_app(app: App) -> web.Application:
 
     async def start_background(_):
         await app.push.init()
+        web_app["refresh_task"] = asyncio.create_task(app.refresh_loop())
         web_app["push_task"] = asyncio.create_task(app.push_loop())
 
     async def stop_background(_):
+        web_app["refresh_task"].cancel()
         web_app["push_task"].cancel()
+        await app.images.close()
 
     web_app.on_startup.append(start_background)
     web_app.on_cleanup.append(stop_background)
