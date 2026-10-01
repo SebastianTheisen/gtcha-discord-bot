@@ -42,6 +42,13 @@ button { font: inherit; color: inherit; }
 .brand-icon { width: 28px; height: 28px; border-radius: 7px; }
 .brand-name { font-size: 17px; }
 .brand-name b { color: var(--red); }
+.top-actions { display: flex; align-items: center; gap: 8px; }
+.refresh {
+  width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--line); background: var(--surface);
+  font-size: 20px; line-height: 1; color: var(--blue-dark); cursor: pointer; display: grid; place-items: center;
+}
+.refresh.spinning { animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .unofficial {
   font-size: 11px; color: var(--muted); background: var(--surface-2); border: 1px solid var(--line);
   padding: 3px 8px; border-radius: 6px;

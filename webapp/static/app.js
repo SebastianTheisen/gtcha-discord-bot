@@ -552,6 +552,7 @@ async function route() {
   document.querySelectorAll(".tabbar a").forEach((a) => a.classList.toggle("active", a.dataset.tab === tab && !banner));
   const render = banner ? () => showBanner(banner[1]) : tab === "hot" ? showHot : tab === "settings" ? showSettings : showList;
   state.render = tab === "settings" ? null : render;
+  state.current = render;
   if (!view.innerHTML || banner) view.innerHTML = `<div class="loading">Lädt …</div>`;
   try {
     await render();
@@ -577,6 +578,22 @@ document.addEventListener("error", (e) => {
   }
 }, true);
 window.addEventListener("hashchange", route);
+// ↻ in der Kopfzeile: aktuelle Seite neu laden, Scroll-Position bleibt
+const refreshBtn = document.getElementById("refresh");
+refreshBtn?.addEventListener("click", async () => {
+  if (!state.current || refreshBtn.classList.contains("spinning")) return;
+  const y = window.scrollY;
+  refreshBtn.classList.add("spinning");
+  try {
+    await state.current();
+    window.scrollTo({ top: y });
+  } catch (e) {
+    view.insertAdjacentHTML("afterbegin", `<div class="notice">Aktualisieren fehlgeschlagen (${esc(e.message)})</div>`);
+  } finally {
+    setTimeout(() => refreshBtn.classList.remove("spinning"), 300);
+  }
+});
+
 // Zurück aus dem Hintergrund: sofort frische Daten statt bis zu 30 s alte
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && state.render) state.render().catch(() => {});
