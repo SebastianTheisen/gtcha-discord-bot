@@ -18,7 +18,10 @@ TIERS = ("T1", "T2", "T3")
 MAX_MEDALS = 50           # Medaille Tn = Platz n der Hit-Liste
 MAX_SHIPMENT_CARDS = 10   # größere Versand-Sprünge werden nicht exakt zerlegt
 MAX_SHIPMENT_VALUE = 5_000_000
-VALUE_TOLERANCE = 0.05     # Kartenwerte schwanken mit der Zeit
+VALUE_TOLERANCE = 0.01     # nur Rundung (Werte werden ohne Steuer gezählt, siehe TAX_FACTOR)
+# total_sendprice zählt Kartenwerte ohne 10 % japanische Steuer: gezählt = Kartenwert / 1,1
+# (bestätigt: 165.000 -> 150.000, 18.260 -> 16.600, 660 -> 600)
+TAX_FACTOR = 1.1
 
 
 def summarize_cards(cards: List[Dict]) -> Optional[Dict]:
@@ -248,8 +251,8 @@ def match_shipped_hits(pool: Dict, count: int, value: int, pulled_keys: Set[str]
                        tol: float = VALUE_TOLERANCE) -> Dict:
     """Welche Versand-Hits stecken in einer Sendung aus `count` Karten im Wert `value`?
 
-    Kartenwerte ändern sich mit der Zeit, deshalb gilt eine Toleranz: Hits plus genau so viele
-    normale Karten müssen den Versandwert auf ±tol treffen. Hits mit fast gleichem Wert bilden
+    `value` ist der Betrag aus total_sendprice, also ohne Steuer; er wird mit TAX_FACTOR auf
+    Kartenwerte umgerechnet. Hits plus genau so viele normale Karten müssen ihn auf ±tol treffen. Hits mit fast gleichem Wert bilden
     Klassen und sind nicht unterscheidbar. Ergebnis:
       certain: Schlüssel von Hits, die sicher verschickt wurden
       groups:  Hits, von denen sicher `pulled` Stück verschickt wurden, aber unklar welche
@@ -258,6 +261,7 @@ def match_shipped_hits(pool: Dict, count: int, value: int, pulled_keys: Set[str]
     Nicht zerlegbare oder zu große Sendungen liefern nichts.
     """
     result = {"certain": [], "groups": [], "maybe": []}
+    value = round(value * TAX_FACTOR)
     if count <= 0 or value <= 0 or count > MAX_SHIPMENT_CARDS or value > MAX_SHIPMENT_VALUE:
         return result
     open_hits = [u for u in tracked_units(pool) if u["shipping_only"] and u["key"] not in pulled_keys]
