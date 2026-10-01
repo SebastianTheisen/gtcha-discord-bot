@@ -20,8 +20,22 @@ from loguru import logger
 
 from .models import ScrapedBanner
 from config import CATEGORIES, PARALLEL_SCRAPING, PARALLEL_TABS, SCRAPER_PROXY
+from utils.card_pool import summarize_cards
 
 JST = timezone(timedelta(hours=9))
+
+# Lädt Seite 1 der Kartenliste, dann alle weiteren Seiten gleichzeitig, und gibt alle Karten zurück.
+FETCH_CARD_LIST_JS = """async (pid) => {
+    const get = async (n) => {
+        const r = await fetch(`/api/user/pack/card_list/${pid}/${n}`, {headers: {Accept: 'application/json'}});
+        try { return await r.json(); } catch (e) { return {}; }
+    };
+    const first = await get(1);
+    if (!Array.isArray(first.list)) return null;
+    const pages = Math.min(parseInt((first.page || {}).all_page) || 1, 60);
+    const rest = await Promise.all(Array.from({length: pages - 1}, (_, i) => get(i + 2)));
+    return [first, ...rest].flatMap(d => d.list || []);
+}"""
 
 TITLE_SELECTORS = ['.gacha_name', '.gacha-name', '.title', '.name', '.pack-name',
                    '.gacha_title', 'h3', 'h4', '.header .text']
@@ -367,6 +381,36 @@ class GTCHAScraper:
                 logger.warning(f"[PROXY-API] curl Fehler: {err} - Fallback auf direkte Pack-Zahlen")
         except Exception as e:
             logger.warning(f"[PROXY-API] Fehler: {e} - Fallback auf direkte Pack-Zahlen")
+
+    async def fetch_card_pools(self, pack_ids: List[int]) -> Dict[int, Dict]:
+        """Holt die komplette Kartenliste (alle Seiten) je Banner über die Browser-Sitzung (Tor)."""
+        pools: Dict[int, Dict] = {}
+        if not pack_ids:
+            return pools
+        page = await self._context.new_page()
+        try:
+            # Ein Dokument auf der Seiten-Domain, damit fetch() Cookies und Proxy des Browsers nutzt
+            await page.goto(f"{self.base_url}/api/user/point", wait_until="domcontentloaded", timeout=60000)
+            for pid in pack_ids:
+                try:
+                    cards = await page.evaluate(FETCH_CARD_LIST_JS, pid)
+                    if cards is None:
+                        logger.warning(f"[POOL] {pid}: Kartenliste nicht abrufbar - nächster Scrape versucht es erneut")
+                        continue
+                    pool = summarize_cards(cards)
+                    if pool:
+                        logger.info(f"[POOL] {pid}: {len(cards)} Karten, {pool['total_count']} Packs, "
+                                    f"{pool['hits_total']} Hits")
+                    else:
+                        # Banner ohne Karten merken, damit er nicht bei jedem Scrape neu geladen wird
+                        pool = {"total_count": 0, "total_value": 0, "hits_total": 0, "top": []}
+                        logger.info(f"[POOL] {pid}: Banner hat keine Kartenliste")
+                    pools[pid] = pool
+                except Exception as e:
+                    logger.warning(f"[POOL] {pid}: Fehler beim Laden der Kartenliste: {e}")
+        finally:
+            await page.close()
+        return pools
 
     async def scrape_all_banners_parallel(self) -> List[ScrapedBanner]:
         """Scrapet alle Kategorien parallel mit mehreren Browser-Tabs."""

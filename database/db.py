@@ -2,6 +2,8 @@
 Datenbank-Operationen
 """
 
+import json
+
 import aiosqlite
 from pathlib import Path
 from typing import Optional, Dict, Any, List
@@ -118,6 +120,17 @@ class Database:
             except Exception as e:
                 logger.debug(f"Migration Medaillen-Sync: {e}")
 
+            # Migration: Kartenpool (JSON) pro Banner, Top-5-Nachricht und Lohnt-sich-Hinweis pro Thread
+            for table, col in [('banners', 'card_pool TEXT'),
+                               ('discord_threads', 'top5_message_id INTEGER'),
+                               ('discord_threads', 'value_alert_sent INTEGER DEFAULT 0')]:
+                try:
+                    await db.execute(f"ALTER TABLE {table} ADD COLUMN {col}")
+                    await db.commit()
+                    logger.info(f"Migration: {table}.{col.split()[0]} hinzugefügt")
+                except Exception:
+                    pass  # Spalte existiert bereits
+
             # Performance-Indexes hinzufügen (IF NOT EXISTS für idempotente Migration)
             await db.executescript("""
                 CREATE INDEX IF NOT EXISTS idx_banners_is_active ON banners(is_active);
@@ -176,6 +189,43 @@ class Database:
                     VALUES (?, ?, ?, ?)
                 """, (pack_id, old_count, new_count, now))
 
+            await db.commit()
+
+    async def get_banners_without_pool(self, limit: int, prefer_ids: List[int]) -> List[int]:
+        """Aktive Banner mit Thread, deren Kartenpool noch fehlt; prefer_ids (z.B. neue Banner) zuerst."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("""
+                SELECT b.pack_id FROM banners b
+                JOIN discord_threads t ON t.banner_id = b.pack_id AND t.is_expired = 0
+                WHERE b.is_active = 1 AND b.card_pool IS NULL
+            """)
+            ids = [row[0] for row in await cursor.fetchall()]
+        preferred = set(prefer_ids)
+        ids.sort(key=lambda pid: pid not in preferred)
+        return ids[:limit]
+
+    async def save_card_pool(self, pack_id: int, pool: Dict) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE banners SET card_pool = ? WHERE pack_id = ?",
+                             (json.dumps(pool, ensure_ascii=False), pack_id))
+            await db.commit()
+
+    async def get_card_pool(self, pack_id: int) -> Optional[Dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("SELECT card_pool FROM banners WHERE pack_id = ?", (pack_id,))
+            row = await cursor.fetchone()
+        return json.loads(row[0]) if row and row[0] else None
+
+    async def set_top5_message_id(self, thread_id: int, message_id: int) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE discord_threads SET top5_message_id = ? WHERE thread_id = ?",
+                             (message_id, thread_id))
+            await db.commit()
+
+    async def set_value_alert_sent(self, thread_id: int, sent: bool) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE discord_threads SET value_alert_sent = ? WHERE thread_id = ?",
+                             (1 if sent else 0, thread_id))
             await db.commit()
 
     async def update_banner_entries(self, pack_id: int, entries_per_day: int) -> None:

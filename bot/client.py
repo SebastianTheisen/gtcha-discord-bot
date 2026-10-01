@@ -36,6 +36,11 @@ from utils.notifications import (
 from utils.rate_limiter import discord_rate_limiter
 from utils.memory_monitor import memory_monitor
 from utils.cache import banner_cache
+from utils.card_pool import estimate, fmt_coins, fmt_pct, TIERS
+
+
+# Fehlende Kartenpools, die pro Scrape geladen werden (Nachrüsten bestehender Threads)
+POOL_FETCH_PER_SCRAPE = 8
 
 
 def format_end_date_countdown(sale_end_date: str) -> str:
@@ -539,6 +544,7 @@ class GTCHABot(commands.Bot):
 
                 # Sammle Updates für parallele Verarbeitung
                 update_tasks = []
+                new_banner_ids = []
 
                 for banner in banners:
                     try:
@@ -562,6 +568,7 @@ class GTCHABot(commands.Bot):
                             # Neuer Banner - sequentiell verarbeiten (Thread erstellen)
                             await self.db.save_banner(banner)
                             await self._post_banner_to_discord(banner)
+                            new_banner_ids.append(banner.pack_id)
                             new_count += 1
                             logger.info(f"Neu: {banner.pack_id} ({banner.category})")
 
@@ -635,6 +642,21 @@ class GTCHABot(commands.Bot):
                                 logger.info(f"API-Only Pack-Update: {pid} ({old_packs} → {new_packs})")
                     if api_only_count > 0:
                         logger.info(f"API-Only Updates: {api_only_count} Banner außerhalb der gescrapten Kategorien aktualisiert")
+
+                # === KARTENPOOL (Top 5, Ø Rückgabe) ===
+                # Die Kartenliste ändert sich nicht; pro Scrape nur wenige fehlende Pools nachladen
+                # (neue Banner zuerst), damit der Scrape kurz bleibt.
+                missing_pools = await self.db.get_banners_without_pool(
+                    limit=POOL_FETCH_PER_SCRAPE, prefer_ids=new_banner_ids)
+                if missing_pools:
+                    try:
+                        pools = await scraper.fetch_card_pools(missing_pools)
+                    except Exception as e:
+                        logger.warning(f"[POOL] Kartenpools nicht geladen: {e}")
+                        pools = {}
+                    for pid, pool in pools.items():
+                        await self.db.save_card_pool(pid, pool)
+                        await self._refresh_pool_views(pid)
 
                 # Hole alle bekannten Banner aus der DB
                 db_banner_ids = set(await self.db.get_all_active_banner_ids())
@@ -760,7 +782,7 @@ class GTCHABot(commands.Bot):
             return banner.get(key, default)
         return getattr(banner, key, default)
 
-    def _build_banner_embed(self, banner, title_prefix: str = None) -> discord.Embed:
+    def _build_banner_embed(self, banner, title_prefix: str = None, stats: Optional[dict] = None) -> discord.Embed:
         """Erstellt ein Embed für einen Banner (funktioniert mit Objekt oder Dict)."""
         # Helper für Zugriff
         get = lambda key, default=None: self._get_banner_value(banner, key, default)
@@ -807,6 +829,22 @@ class GTCHABot(commands.Bot):
         if get('sale_end_date'):
             countdown = format_end_date_countdown(get('sale_end_date'))
             embed.add_field(name="Ende", value=countdown, inline=True)
+
+        if stats:
+            ev_text = f"{fmt_coins(stats['ev'])} Coins"
+            if stats['ev_pct'] is not None:
+                ev_text += f" ({fmt_pct(stats['ev_pct'])} % vom Preis)"
+            if stats['estimated']:
+                ev_text += "\n*geschätzt aus Kartenpool und Medaillen*"
+            embed.add_field(name="Ø Rückgabe pro Zug", value=ev_text, inline=False)
+
+            open_tiers = " ".join({"T1": "🥇", "T2": "🥈", "T3": "🥉"}[t] for t in stats['open_tiers']) or "keine"
+            embed.add_field(
+                name="Hits",
+                value=(f"{stats['hits_total']} im Pool · T1–T3 noch drin: {open_tiers}\n"
+                       f"Chance auf einen Hit pro Zug: ca. {fmt_pct(stats['hit_chance_pct'], 2)} %"),
+                inline=False,
+            )
 
         embed.set_footer(text=f"Pack ID: {get('pack_id')}")
 
@@ -1094,9 +1132,10 @@ class GTCHABot(commands.Bot):
             logger.debug(f"Fehler bei Titel-Update für {banner.pack_id}: {e}")
 
     async def _update_thread_embed(self, banner):
-        """Aktualisiert das Embed im Thread mit aktuellen Daten (z.B. Countdown)."""
+        """Aktualisiert das Embed im Thread mit aktuellen Daten (z.B. Countdown, Ø Rückgabe)."""
+        pack_id = self._get_banner_value(banner, 'pack_id')
         try:
-            thread_data = await self.db.get_thread_by_banner_id(banner.pack_id)
+            thread_data = await self.db.get_thread_by_banner_id(pack_id)
             if not thread_data:
                 return
 
@@ -1128,21 +1167,113 @@ class GTCHABot(commands.Bot):
             try:
                 message = await thread.fetch_message(int(starter_message_id))
             except (discord.NotFound, Exception):
-                logger.debug(f"Starter-Message für {banner.pack_id} nicht gefunden")
+                logger.debug(f"Starter-Message für {pack_id} nicht gefunden")
                 return
 
-            # Neues Embed erstellen
-            new_embed = self._build_banner_embed(banner)
+            stats = await self._pool_stats(banner, thread_data)
+            new_embed = self._build_banner_embed(banner, stats=stats)
 
             # Message updaten
             await discord_rate_limiter.acquire("message_edit")
             await message.edit(embed=new_embed)
-            logger.debug(f"Embed aktualisiert für Banner {banner.pack_id}")
+            logger.debug(f"Embed aktualisiert für Banner {pack_id}")
+
+            if stats:
+                await self._check_value_alert(thread, thread_data, stats, banner)
 
         except discord.HTTPException as e:
             logger.debug(f"Discord-Fehler bei Embed-Update: {e}")
         except Exception as e:
-            logger.debug(f"Fehler bei Embed-Update für {banner.pack_id}: {e}")
+            logger.debug(f"Fehler bei Embed-Update für {pack_id}: {e}")
+
+    async def _pool_stats(self, banner, thread_data: dict) -> Optional[dict]:
+        """Ø Rückgabe und Hit-Chance aus Kartenpool, Rest-Packs und Medaillen (None ohne Pool)."""
+        get = lambda key: self._get_banner_value(banner, key)
+        pool = await self.db.get_card_pool(get('pack_id'))
+        if not pool:
+            return None
+        claimed = await self.db.get_medal_status(int(thread_data['thread_id']))
+        return estimate(pool, get('current_packs'), get('total_packs'), claimed, get('price_coins'))
+
+    async def _check_value_alert(self, thread: discord.Thread, thread_data: dict, stats: dict, banner):
+        """Einmaliger Hinweis, wenn die Ø Rückgabe über 100 % des Preises steigt."""
+        pct = stats.get('ev_pct')
+        if pct is None:
+            return
+        alert_sent = bool(thread_data.get('value_alert_sent'))
+        if pct > 100 and not alert_sent:
+            price = self._get_banner_value(banner, 'price_coins')
+            mention = "@everyone " if MENTION_ON_PACK_UPDATE else ""
+            await discord_rate_limiter.acquire("message_send")
+            await thread.send(
+                f"{mention}💰 **Lohnt sich gerade:** Ø Rückgabe pro Zug ca. {fmt_coins(stats['ev'])} Coins "
+                f"= {fmt_pct(pct)} % des Preises ({fmt_coins(price)} Coins)"
+            )
+            await self.db.set_value_alert_sent(thread.id, True)
+            logger.info(f"Lohnt-sich-Hinweis gepostet: Thread {thread.id} ({pct:.1f} %)")
+        elif pct < 97 and alert_sent:
+            # Hysterese: erst deutlich unter 100 % zurücksetzen, damit es nicht hin und her springt
+            await self.db.set_value_alert_sent(thread.id, False)
+
+    def _build_top5_embeds(self, pool: dict, claimed: dict) -> list:
+        embeds = []
+        rank_icons = {0: "🥇", 1: "🥈", 2: "🥉"}
+        for i, card in enumerate(pool.get('top', [])):
+            tier = TIERS[i] if i < len(TIERS) else None
+            pulled = bool(tier and claimed.get(tier))
+            description = f"**{fmt_coins(card['value'])} Coins**"
+            if pulled:
+                description += " · ✅ gezogen"
+            embed = discord.Embed(
+                title=f"{rank_icons.get(i, f'{i + 1}.')} {card['name']}"[:256],
+                description=description,
+                color=0x95A5A6 if pulled else 0xFFD700,
+            )
+            if card.get('image'):
+                embed.set_thumbnail(url=card['image'])
+            embeds.append(embed)
+        return embeds
+
+    async def _refresh_pool_views(self, pack_id: int):
+        """Aktualisiert Startbeitrag (Ø Rückgabe, Hits) und Top-5-Nachricht eines Banners."""
+        try:
+            banner = await self.db.get_banner(pack_id)
+            thread_data = await self.db.get_thread_by_banner_id(pack_id)
+            pool = await self.db.get_card_pool(pack_id)
+            if not banner or not thread_data or not pool or thread_data.get('is_expired'):
+                return
+
+            await self._update_thread_embed(banner)
+
+            thread_id = int(thread_data['thread_id'])
+            thread = self.get_channel(thread_id)
+            if not thread:
+                thread = await self.fetch_channel(thread_id)
+            if not isinstance(thread, discord.Thread):
+                return
+
+            claimed = await self.db.get_medal_status(thread_id)
+            embeds = self._build_top5_embeds(pool, claimed)
+            if not embeds:
+                return
+            content = "🏆 **Top 5 Karten** (Coin-Wert)"
+
+            msg_id = thread_data.get('top5_message_id')
+            if msg_id:
+                try:
+                    msg = await thread.fetch_message(int(msg_id))
+                    await discord_rate_limiter.acquire("message_edit")
+                    await msg.edit(content=content, embeds=embeds)
+                    return
+                except discord.NotFound:
+                    pass
+
+            await discord_rate_limiter.acquire("message_send")
+            msg = await thread.send(content=content, embeds=embeds)
+            await self.db.set_top5_message_id(thread_id, msg.id)
+            logger.info(f"Top-5-Nachricht gepostet: Banner {pack_id}")
+        except Exception as e:
+            logger.warning(f"Fehler bei Top-5/Ø-Update für {pack_id}: {e}")
 
     async def _get_medals_from_reactions(self, thread, starter_message_id: int) -> list:
         """Liest Medaillen von Discord-Reaktionen auf der Starter-Message."""
@@ -1508,6 +1639,7 @@ class GTCHABot(commands.Bot):
 
                 # Wahrscheinlichkeit im Original-Thread aktualisieren
                 await self._update_probability_message(original_thread_id, pack_id)
+                await self._refresh_pool_views(pack_id)
 
             else:
                 # Normaler Thread
@@ -1545,6 +1677,7 @@ class GTCHABot(commands.Bot):
                 banner_id = thread_data.get('banner_id')
                 if banner_id:
                     await self._update_probability_message(thread_id, banner_id)
+                    await self._refresh_pool_views(banner_id)
 
         except Exception as e:
             logger.error(f"Fehler bei Medaillen-Vergabe: {e}")
