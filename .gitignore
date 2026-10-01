@@ -54,3 +54,6 @@ data/heartbeat
 data/*.txt
 data/*.tar.gz
 data/*.csv
+
+# Web-App: Push-Schlüssel und Abos
+data/webapp_vapid.pem

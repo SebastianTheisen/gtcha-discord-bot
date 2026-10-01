@@ -41,3 +41,26 @@ services:
       timeout: 10s
       start_period: 20m
       retries: 1
+
+  # Web-App "GTCHA Tracker": nur auf 127.0.0.1, erreichbar über Tailscale (siehe README)
+  gtcha-app:
+    build:
+      context: .
+      dockerfile: Dockerfile.webapp
+    container_name: gtcha-app
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - gtcha-bot
+    env_file:
+      - .env
+    environment:
+      - WEBAPP_HOST=127.0.0.1
+      - WEBAPP_PORT=${WEBAPP_PORT:-8080}
+    volumes:
+      - ./data:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "2"

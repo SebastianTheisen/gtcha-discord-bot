@@ -1,0 +1,171 @@
+"""GTCHA Tracker - Web-App (PWA) mit den Daten des Bots.
+
+Läuft als eigener Container neben dem Bot, liest dessen Datenbank nur und lauscht nur auf
+127.0.0.1 - erreichbar ist die App ausschließlich über Tailscale (tailscale serve), nicht offen im Internet.
+
+Start: python -m webapp.server
+"""
+
+import asyncio
+import os
+import sys
+import time
+from pathlib import Path
+
+from aiohttp import web
+from loguru import logger
+
+from database.db import Database
+from webapp.push import EVENTS, PushService, build_events
+from webapp.view import BannerView
+
+STATIC = Path(__file__).parent / "static"
+CACHE_SECONDS = 20
+PUSH_CHECK_SECONDS = 60
+
+
+class App:
+    def __init__(self, db_path: str, data_dir: str, contact: str):
+        self.view = BannerView(Database(db_path))
+        self.push = PushService(data_dir, contact)
+        self._cache = (0.0, None)
+        self._lock = asyncio.Lock()
+
+    async def banners(self) -> list:
+        """Alle aktiven Banner (kurz zwischengespeichert, damit viele Aufrufe die DB nicht belasten)."""
+        async with self._lock:
+            stamp, data = self._cache
+            if data is None or time.monotonic() - stamp > CACHE_SECONDS:
+                data = await self.view.all_banners(with_pool=True)
+                self._cache = (time.monotonic(), data)
+            return data
+
+    # --- API ---
+    async def api_banners(self, request):
+        lite = [{k: v for k, v in b.items() if k not in ("hits", "hit_keys_detected")} for b in await self.banners()]
+        return web.json_response({"banners": lite, "updated": int(time.time())})
+
+    async def api_hot(self, request):
+        hot = self.view.hot(await self.banners())
+        return web.json_response({"hot": [{k: v for k, v in b.items() if k not in ("hits", "hit_keys_detected")}
+                                          for b in hot]})
+
+    async def api_banner(self, request):
+        try:
+            pack_id = int(request.match_info["id"])
+        except ValueError:
+            raise web.HTTPBadRequest()
+        data = await self.view.detail(pack_id)
+        if not data:
+            raise web.HTTPNotFound()
+        data.pop("hit_keys_detected", None)
+        return web.json_response(data)
+
+    async def api_push_key(self, request):
+        return web.json_response({"key": self.push.public_key(), "events": list(EVENTS)})
+
+    async def api_push_subscribe(self, request):
+        body = await request.json()
+        sub = body.get("subscription") or {}
+        if not str(sub.get("endpoint", "")).startswith("https://") or not sub.get("keys"):
+            raise web.HTTPBadRequest(text="ungültiges Abo")
+        await self.push.subscribe(sub, body.get("prefs") or {})
+        return web.json_response({"ok": True})
+
+    async def api_push_unsubscribe(self, request):
+        body = await request.json()
+        await self.push.unsubscribe(str(body.get("endpoint", "")))
+        return web.json_response({"ok": True})
+
+    async def api_push_prefs(self, request):
+        body = await request.json()
+        return web.json_response({"prefs": await self.push.prefs(str(body.get("endpoint", "")))})
+
+    async def api_push_test(self, request):
+        body = await request.json()
+        await self.push.send("test", "🔔 Test", "Push-Benachrichtigungen funktionieren.",
+                             only=str(body.get("endpoint", "")))
+        return web.json_response({"ok": True})
+
+    # --- Seiten ---
+    async def index(self, request):
+        return web.FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})
+
+    async def service_worker(self, request):
+        return web.FileResponse(STATIC / "sw.js", headers={"Cache-Control": "no-cache",
+                                                          "Content-Type": "application/javascript"})
+
+    async def manifest(self, request):
+        return web.FileResponse(STATIC / "manifest.webmanifest",
+                                headers={"Content-Type": "application/manifest+json"})
+
+    # --- Push-Überwachung ---
+    async def push_loop(self):
+        while True:
+            try:
+                banners = await self.banners()
+                state = await self.push.load_state()
+                messages, new_state = build_events(banners, self.view.hot(banners), state)
+                for event, title, body, banner_id in messages:
+                    logger.info(f"Push: {title} - {body}")
+                    await self.push.send(event, title, body, banner_id)
+                await self.push.save_state(new_state)
+            except Exception as e:
+                logger.warning(f"Push-Prüfung fehlgeschlagen: {type(e).__name__}: {e}")
+            await asyncio.sleep(PUSH_CHECK_SECONDS)
+
+
+@web.middleware
+async def security_headers(request, handler):
+    response = await handler(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    return response
+
+
+def make_app(app: App) -> web.Application:
+    web_app = web.Application(middlewares=[security_headers], client_max_size=64 * 1024)
+    web_app.add_routes([
+        web.get("/", app.index),
+        web.get("/sw.js", app.service_worker),
+        web.get("/manifest.webmanifest", app.manifest),
+        web.get("/api/banners", app.api_banners),
+        web.get("/api/hot", app.api_hot),
+        web.get(r"/api/banner/{id}", app.api_banner),
+        web.get("/api/push/key", app.api_push_key),
+        web.post("/api/push/subscribe", app.api_push_subscribe),
+        web.post("/api/push/unsubscribe", app.api_push_unsubscribe),
+        web.post("/api/push/prefs", app.api_push_prefs),
+        web.post("/api/push/test", app.api_push_test),
+    ])
+    web_app.router.add_static("/static", STATIC)
+
+    async def start_background(_):
+        await app.push.init()
+        web_app["push_task"] = asyncio.create_task(app.push_loop())
+
+    async def stop_background(_):
+        web_app["push_task"].cancel()
+
+    web_app.on_startup.append(start_background)
+    web_app.on_cleanup.append(stop_background)
+    return web_app
+
+
+def main():
+    from utils.banner_info import berlin_time
+    logger.remove()
+    logger.configure(patcher=lambda r: r["extra"].update(berlin=f"{berlin_time(r['time'].timestamp()):%H:%M:%S}"))
+    logger.add(sys.stderr, level=os.getenv("LOG_LEVEL", "INFO").upper(),
+               format="{extra[berlin]} | {level: <7} | {message}")
+    data_dir = os.getenv("WEBAPP_DATA_DIR", "data")
+    app = App(os.getenv("DATABASE_PATH", os.path.join(data_dir, "gtcha_bot.db")), data_dir,
+              os.getenv("WEBAPP_CONTACT", "https://github.com"))
+    host, port = os.getenv("WEBAPP_HOST", "127.0.0.1"), int(os.getenv("WEBAPP_PORT", "8080"))
+    logger.info(f"GTCHA Tracker läuft auf http://{host}:{port}")
+    web.run_app(make_app(app), host=host, port=port, print=None, access_log=None)
+
+
+if __name__ == "__main__":
+    main()
