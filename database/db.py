@@ -124,6 +124,9 @@ class Database:
             for table, col in [('banners', 'card_pool TEXT'),
                                ('banners', 'decided_value INTEGER'),
                                ('banners', 'detected_tiers TEXT'),
+                               ('banners', 'ship_count INTEGER'),
+                               ('banners', 'ship_value INTEGER'),
+                               ('banners', 'pulled_cards TEXT'),
                                ('discord_threads', 'top5_message_id INTEGER'),
                                ('discord_threads', 'value_alert_sent INTEGER DEFAULT 0')]:
                 try:
@@ -199,7 +202,7 @@ class Database:
             cursor = await db.execute("""
                 SELECT b.pack_id FROM banners b
                 JOIN discord_threads t ON t.banner_id = b.pack_id AND t.is_expired = 0
-                WHERE b.is_active = 1 AND b.card_pool IS NULL
+                WHERE b.is_active = 1 AND (b.card_pool IS NULL OR b.card_pool NOT LIKE '%"version": 2%')
             """)
             ids = [row[0] for row in await cursor.fetchall()]
         preferred = set(prefer_ids)
@@ -218,20 +221,25 @@ class Database:
             row = await cursor.fetchone()
         return json.loads(row[0]) if row and row[0] else None
 
-    async def get_pull_tracking(self, pack_id: int) -> tuple:
-        """(zuletzt gesehener entschiedener Wert oder None, Liste erkannter Tiers)."""
+    async def get_pull_tracking(self, pack_id: int) -> Dict:
+        """Zuletzt gesehene Zähler (None = noch nie gesehen) und als gezogen erkannte Karten."""
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
-                "SELECT decided_value, detected_tiers FROM banners WHERE pack_id = ?", (pack_id,))
+                "SELECT decided_value, ship_count, ship_value, pulled_cards FROM banners WHERE pack_id = ?",
+                (pack_id,))
             row = await cursor.fetchone()
         if not row:
-            return None, []
-        return row[0], [t for t in (row[1] or "").split(",") if t]
+            return {"decided_value": None, "ship_count": None, "ship_value": None, "pulled": []}
+        return {"decided_value": row[0], "ship_count": row[1], "ship_value": row[2],
+                "pulled": json.loads(row[3]) if row[3] else []}
 
-    async def set_pull_tracking(self, pack_id: int, decided_value: int, detected: List[str]) -> None:
+    async def set_pull_tracking(self, pack_id: int, decided_value: Optional[int], ship_count: Optional[int],
+                                ship_value: Optional[int], pulled: List[str]) -> None:
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("UPDATE banners SET decided_value = ?, detected_tiers = ? WHERE pack_id = ?",
-                             (decided_value, ",".join(detected), pack_id))
+            await db.execute(
+                "UPDATE banners SET decided_value = ?, ship_count = ?, ship_value = ?, pulled_cards = ? "
+                "WHERE pack_id = ?",
+                (decided_value, ship_count, ship_value, json.dumps(pulled), pack_id))
             await db.commit()
 
     async def set_top5_message_id(self, thread_id: int, message_id: int) -> None:
