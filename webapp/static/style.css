@@ -283,7 +283,7 @@ h2 small { font-size: 13px; color: var(--muted); font-weight: 400; }
 /* Einstellungen */
 .panel { background: var(--surface); border-radius: var(--radius); padding: 14px; display: grid; gap: 12px; margin: 0 10px; box-shadow: var(--shadow); }
 .toggle { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-.toggle input { width: 24px; height: 24px; accent-color: var(--blue-dark); }
+.toggle input { width: 24px; height: 24px; flex: none; accent-color: var(--blue-dark); }
 .btn { padding: 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface-2); font-weight: 700; cursor: pointer; }
 .btn.primary { background: linear-gradient(180deg, #5b9cf0, var(--blue-dark)); color: #fff; border: 0; }
 .hint { font-size: 13px; color: var(--muted); }

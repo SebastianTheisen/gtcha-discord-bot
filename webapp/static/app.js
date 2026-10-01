@@ -375,10 +375,16 @@ function b64ToBytes(b64) {
 }
 
 const EVENT_LABELS = {
-  value: ["💰 Lohnt sich", "Irgendein Banner steigt neu über 100 % Ø Rückgabe"],
-  hit: ["📦 Hit verschickt", "Bei irgendeinem Banner wurde ein Hit-Versand erkannt"],
   new: ["🆕 Neuer Banner", "Ein neuer Banner ist online"],
+  value: ["💰 Lohnt sich", "Ein ziehbarer Banner steigt neu über 100 % Ø Rückgabe (wie Top 10)"],
+  hit: ["🎯 Hit raus", "Bei irgendeinem Banner ist ein Hit raus (Versand erkannt oder Medaille)"],
+  packs: ["📉 Pack-Bewegung", "Packs weniger – alle Banner zusammen in einem Push pro Minute"],
+  ship: ["📦 Versand", "Neuer Versandschub bei irgendeinem Banner"],
+  low: ["⚡ Endspurt", "Ein Banner hat nur noch wenige Packs"],
+  end: ["🏁 Beendet", "Ein Banner ist ausverkauft oder nicht mehr online"],
 };
+// Vorgaben wie auf dem Server (DEFAULTS in webapp/push.py)
+const EVENT_DEFAULTS = { new: true, value: true, hit: true, packs: false, ship: false, low: true, end: false };
 const WATCH_LABELS = {
   hit: "🎯 Hit raus", packs: "📉 Packs weniger", ship: "📦 Versand",
   ev: "💰 Über 100 %", low: "⚡ Endspurt", end: "🏁 Beendet",
@@ -422,7 +428,7 @@ async function showSettings() {
       <div class="hint"><b>Für alle Banner</b></div>
       ${Object.entries(EVENT_LABELS).map(([k, [label, hint]]) => `
         <label class="toggle"><span>${label}<br><span class="hint">${hint}</span></span>
-        <input type="checkbox" data-event="${k}" ${prefs[k] !== false ? "checked" : ""}></label>`).join("")}
+        <input type="checkbox" data-event="${k}" ${(prefs[k] ?? EVENT_DEFAULTS[k]) ? "checked" : ""}></label>`).join("")}
       ${!supported ? `<div class="hint">Dieses Gerät/dieser Browser unterstützt keine Push-Benachrichtigungen.</div>`
         : sub ? `<button class="btn" id="test">Test-Push senden</button>
                  <button class="btn" id="off">Pushes ausschalten</button>`
@@ -438,7 +444,8 @@ async function showSettings() {
           </select>
           <button class="btn primary" id="watch-add-btn">Hinzufügen</button>
         </div>
-        <div class="hint">Pro Banner beliebig viele Ereignisse antippen. Gleiche Meldungen kommen nur einmal.</div>
+        <div class="hint">Pro Banner beliebig viele Ereignisse antippen – sie kommen einzeln, zusätzlich zu den
+          Schaltern oben. Gleiche Meldungen kommen nur einmal.</div>
         ${watched.length ? watched.sort((a, b) => b - a).map((id) => watchCard(id, prefs.watch[id], byId[id])).join("")
           : `<div class="hint">Noch kein Banner beobachtet. Auch auf jeder Banner-Seite über „🔔 Beobachten“.</div>`}
       </div>` : ""}
