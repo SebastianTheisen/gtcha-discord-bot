@@ -129,6 +129,8 @@ class Database:
                                ('banners', 'pulled_cards TEXT'),
                                ('banners', 'unsure_cards TEXT'),
                                ('discord_threads', 'hit_message_ids TEXT'),
+                               ('discord_threads', 'endspurt_sent INTEGER DEFAULT 0'),
+                               ('banners', 'conditions TEXT'),
                                ('discord_threads', 'top5_message_id INTEGER'),
                                ('discord_threads', 'value_alert_sent INTEGER DEFAULT 0')]:
                 try:
@@ -245,6 +247,33 @@ class Database:
                 (decided_value, ship_count, ship_value, json.dumps(pulled), json.dumps(unsure), pack_id))
             await db.commit()
 
+    async def get_sales_since(self, pack_id: int, since: datetime) -> tuple:
+        """(verkaufte Packs seit `since`, Zeitpunkt der ersten Änderung in diesem Zeitraum oder None)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT COALESCE(SUM(old_count - new_count), 0), MIN(changed_at) FROM pack_history "
+                "WHERE banner_id = ? AND changed_at >= ? AND new_count < old_count",
+                (pack_id, since.isoformat()))
+            sold, first = await cursor.fetchone()
+        return int(sold or 0), datetime.fromisoformat(first) if first else None
+
+    async def set_endspurt_sent(self, thread_id: int) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE discord_threads SET endspurt_sent = 1 WHERE thread_id = ?", (thread_id,))
+            await db.commit()
+
+    async def update_conditions(self, pack_id: int, conditions: Dict) -> bool:
+        """Speichert die Kaufbedingungen; True, wenn sie sich geändert haben."""
+        new = json.dumps(conditions, sort_keys=True, ensure_ascii=False)
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("SELECT conditions FROM banners WHERE pack_id = ?", (pack_id,))
+            row = await cursor.fetchone()
+            if not row or row[0] == new:
+                return False
+            await db.execute("UPDATE banners SET conditions = ? WHERE pack_id = ?", (new, pack_id))
+            await db.commit()
+        return True
+
     async def set_hit_message_ids(self, thread_id: int, message_ids: List[int]) -> None:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("UPDATE discord_threads SET hit_message_ids = ?, top5_message_id = ? WHERE thread_id = ?",
@@ -323,6 +352,19 @@ class Database:
             )
             row = await cursor.fetchone()
             return dict(row) if row else None
+
+    async def get_medals(self, thread_id: int) -> Dict[str, int]:
+        """Alle vergebenen Medaillen eines Threads: Stufe (T1-T10) -> Discord-User-ID (0 = unbekannt)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("SELECT tier, user_id FROM medals WHERE thread_id = ?", (thread_id,))
+            medals = {row[0]: row[1] or 0 for row in await cursor.fetchall()}
+            cursor = await db.execute(
+                "SELECT t1_claimed, t2_claimed, t3_claimed FROM discord_threads WHERE thread_id = ?", (thread_id,))
+            row = await cursor.fetchone()
+        for tier, claimed in zip(("T1", "T2", "T3"), row or ()):
+            if claimed:
+                medals.setdefault(tier, 0)
+        return medals
 
     async def save_medal(self, thread_id: int, tier: str, user_id: int) -> None:
         now = datetime.now().isoformat()

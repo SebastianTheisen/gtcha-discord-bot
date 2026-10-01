@@ -44,6 +44,60 @@ from utils.card_pool import (
 )
 
 
+# Endspurt-Alarm, sobald höchstens so viel Prozent der Packs übrig sind und noch Hits drin sind
+ENDSPURT_PERCENT = float(os.getenv("ENDSPURT_PERCENT") or "10")
+# Zeitraum für das Abverkaufs-Tempo
+SALES_WINDOW_HOURS = 2
+RANK_ORDER = ("white", "bronze", "silver", "gold", "rainbow", "black")
+RANK_NAMES = {"white": "Weiß", "bronze": "Bronze", "silver": "Silber", "gold": "Gold",
+              "rainbow": "Rainbow", "black": "Black"}
+
+
+def banner_conditions(item: dict) -> dict:
+    """Kaufbedingungen eines Banners aus pack/list."""
+    badges = item.get("badges") or []
+    return {
+        "ranks": badges if isinstance(badges, list) else [],
+        "min_charge": _int(item.get("min_charge_amount")),
+        "password": bool(item.get("password_flag")),
+    }
+
+
+def format_conditions(raw: Optional[str]) -> Optional[str]:
+    """Kaufbedingungen als Text für den Startbeitrag (None, solange keine Daten da sind)."""
+    if not raw:
+        return None
+    cond = json.loads(raw)
+    lines = []
+    ranks = [r for r in cond.get("ranks", []) if r in RANK_ORDER]
+    if "all" in cond.get("ranks", []) or not ranks or min(RANK_ORDER.index(r) for r in ranks) == 0:
+        lines.append("Alle Mitgliedsränge")
+    else:
+        lowest = min(ranks, key=RANK_ORDER.index)
+        lines.append(f"Ab Mitgliedsrang **{RANK_NAMES[lowest]}**")
+    if cond.get("min_charge"):
+        lines.append(f"Mindest-Aufladung: {fmt_coins(cond['min_charge'])} Coins im Monat")
+    if cond.get("password"):
+        lines.append("🔒 Nur mit Passwort")
+    return "\n".join(lines)
+
+
+# Zugzahlen für die Hit-Chance in der 🎯-Nachricht
+HIT_CHANCE_PULLS = (1, 10, 50)
+
+
+def chance_at_least_one(packs: int, hits: int, pulls: int) -> float:
+    """Wahrscheinlichkeit in %, bei `pulls` Zügen aus `packs` Packs mindestens einen der `hits` zu ziehen."""
+    if hits <= 0 or packs <= 0:
+        return 0.0
+    if pulls > packs - hits:
+        return 100.0
+    none = 1.0
+    for i in range(pulls):
+        none *= (packs - hits - i) / (packs - i)
+    return (1 - none) * 100
+
+
 # Fehlende Kartenpools, die pro Scrape geladen werden (Nachrüsten bestehender Threads)
 POOL_FETCH_PER_SCRAPE = 8
 # Normale Scrapes laufen nur über pack/list; Tabs werden höchstens so oft komplett durchgeklickt
@@ -52,6 +106,11 @@ FULL_SCRAPE_EVERY_MINUTES = 15
 NOT_FOUND_DELETE_AFTER = 2
 # Meldung im Admin-Kanal nach so vielen fehlerhaften Scrapes in Folge
 SCRAPE_PROBLEM_ALERT_AFTER = 3
+
+
+MEDAL_EMOJIS = {"T1": "🥇", "T2": "🥈", "T3": "🥉", "T4": "4️⃣", "T5": "5️⃣", "T6": "6️⃣",
+                "T7": "7️⃣", "T8": "8️⃣", "T9": "9️⃣", "T10": "🔟"}
+EMOJI_TO_MEDAL = {emoji: tier for tier, emoji in MEDAL_EMOJIS.items()}
 
 
 def _int(value) -> int:
@@ -430,21 +489,13 @@ class GTCHABot(commands.Bot):
                     # Medaillen von Reaktionen lesen
                     reaction_medals = await self._get_medals_from_reactions(thread, starter_message_id)
 
-                    if reaction_medals:
-                        # Prüfen welche Medaillen noch nicht in DB gesetzt sind
-                        for tier in reaction_medals:
-                            col_map = {'T1': 't1_claimed', 'T2': 't2_claimed', 'T3': 't3_claimed'}
-                            col = col_map.get(tier)
-                            if col and not thread_row[col]:
-                                # Medaille ist auf Discord aber nicht in DB - synchronisieren
-                                async with aiosqlite.connect(self.db.db_path) as db:
-                                    await db.execute(
-                                        f"UPDATE discord_threads SET {col} = 1 WHERE thread_id = ?",
-                                        (thread_id,)
-                                    )
-                                    await db.commit()
-                                synced_count += 1
-                                logger.debug(f"Medaille {tier} für Thread {thread_id} synchronisiert")
+                    known = await self.db.get_medals(thread_id)
+                    for tier in reaction_medals:
+                        if tier not in known:
+                            # Medaille ist auf Discord, aber nicht in der DB (Gewinner unbekannt)
+                            await self.db.save_medal(thread_id, tier, 0)
+                            synced_count += 1
+                            logger.debug(f"Medaille {tier} für Thread {thread_id} synchronisiert")
 
                 except discord.NotFound:
                     logger.debug(f"Thread {thread_id} nicht mehr gefunden")
@@ -718,6 +769,13 @@ class GTCHABot(commands.Bot):
                 # === HIT-ERKENNUNG über die Rückgabe-Zähler aus pack/list ===
                 await self._detect_pulled_hits(getattr(scraper, '_api_pack_data', {}) or {})
 
+                # === KAUFBEDINGUNGEN (Rang, Aufladung, Passwort) aus pack/list ===
+                for pid, item in (getattr(scraper, '_api_pack_data', {}) or {}).items():
+                    if await self.db.update_conditions(pid, banner_conditions(item)):
+                        row = await self.db.get_banner(pid)
+                        if row and row.get('is_active'):
+                            await self._update_thread_embed(row)
+
                 # Hole alle bekannten Banner aus der DB
                 db_banner_ids = set(await self.db.get_all_active_banner_ids())
 
@@ -907,7 +965,8 @@ class GTCHABot(commands.Bot):
             return banner.get(key, default)
         return getattr(banner, key, default)
 
-    def _build_banner_embed(self, banner, title_prefix: str = None, stats: Optional[dict] = None) -> discord.Embed:
+    def _build_banner_embed(self, banner, title_prefix: str = None, stats: Optional[dict] = None,
+                            tempo: Optional[str] = None, conditions: Optional[str] = None) -> discord.Embed:
         """Erstellt ein Embed für einen Banner (funktioniert mit Objekt oder Dict)."""
         # Helper für Zugriff
         get = lambda key, default=None: self._get_banner_value(banner, key, default)
@@ -936,12 +995,12 @@ class GTCHABot(commands.Bot):
 
         # Felder hinzufügen
         if get('price_coins'):
-            embed.add_field(name="Preis", value=f"{get('price_coins'):,} Coins", inline=True)
+            embed.add_field(name="Preis", value=f"{fmt_coins(get('price_coins'))} Coins", inline=True)
 
         if get('current_packs') is not None and get('total_packs'):
             embed.add_field(
                 name="Packs",
-                value=f"{get('current_packs')} / {get('total_packs')}",
+                value=f"{fmt_coins(get('current_packs'))} / {fmt_coins(get('total_packs'))}",
                 inline=True
             )
 
@@ -963,13 +1022,17 @@ class GTCHABot(commands.Bot):
                 ev_text += "\n*geschätzt aus Kartenpool und Medaillen*"
             embed.add_field(name="Ø Rückgabe pro Zug", value=ev_text, inline=False)
 
-            open_tiers = " ".join({"T1": "🥇", "T2": "🥈", "T3": "🥉"}[t] for t in stats['open_tiers']) or "keine"
-            embed.add_field(
-                name="Hits",
-                value=(f"{stats['hits_open']} von {stats['hits_total']} noch drin · T1–T3: {open_tiers}\n"
-                       f"Chance auf einen Hit pro Zug: ca. {fmt_pct(stats['hit_chance_pct'], 2)} %"),
-                inline=False,
-            )
+            open_tiers = " ".join(MEDAL_EMOJIS[t] for t in stats['open_tiers']) or "keine"
+            if stats['tracked_hits']:
+                hits_text = f"{stats['hits_open']} von {stats['hits_total']} noch drin · T1–T3: {open_tiers}"
+            else:
+                hits_text = f"Top 3 noch drin: {open_tiers}"
+            embed.add_field(name="Hits", value=hits_text, inline=False)
+
+        if tempo:
+            embed.add_field(name="Abverkauf", value=tempo, inline=False)
+        if conditions:
+            embed.add_field(name="Kaufbedingungen", value=conditions, inline=False)
 
         embed.set_footer(text=f"Pack ID: {get('pack_id')}")
 
@@ -1296,7 +1359,9 @@ class GTCHABot(commands.Bot):
                 return
 
             stats = await self._pool_stats(banner, thread_data)
-            new_embed = self._build_banner_embed(banner, stats=stats)
+            tempo = await self._sales_tempo(pack_id, _int(self._get_banner_value(banner, 'current_packs')))
+            conditions = format_conditions((await self.db.get_banner(pack_id) or {}).get('conditions'))
+            new_embed = self._build_banner_embed(banner, stats=stats, tempo=tempo, conditions=conditions)
 
             # Message updaten
             await discord_rate_limiter.acquire("message_edit")
@@ -1308,11 +1373,37 @@ class GTCHABot(commands.Bot):
                 # (Medaillen oft nie gesetzt) - dann nur scharf schalten, nicht posten.
                 silent = initial_pool and stats['estimated']
                 await self._check_value_alert(thread, thread_data, stats, banner, silent=silent)
+                await self._check_endspurt(thread, thread_data, stats, banner, silent=initial_pool)
 
         except discord.HTTPException as e:
             logger.debug(f"Discord-Fehler bei Embed-Update: {e}")
         except Exception as e:
             logger.debug(f"Fehler bei Embed-Update für {pack_id}: {e}")
+
+    async def _hit_chance_text(self, banner: dict, thread_data: Optional[dict], thread_id: int) -> str:
+        """Text der 🎯-Nachricht: Chance auf mindestens einen Hit bei 1 / 10 / 50 Zügen."""
+        remaining = _int(banner.get('current_packs'))
+        pool = await self.db.get_card_pool(banner['pack_id'])
+        if pool and pool.get('version') == 2 and pool.get('hits') and thread_data:
+            stats = await self._pool_stats(banner, thread_data)
+            hits_open, label = stats['hits_open'], f"{stats['hits_open']} von {stats['hits_total']} Hits noch drin"
+        else:
+            claimed = await self._claimed_tiers(thread_id, banner['pack_id'])
+            hits_open = sum(1 for t in TIERS if not claimed.get(t))
+            label = f"{hits_open} von 3 Top-Karten noch drin"
+        if hits_open <= 0:
+            return "🎯 **Hit-Chance:** Alle Hits wurden gezogen!"
+        parts = []
+        for pulls in HIT_CHANCE_PULLS:
+            if pulls > remaining:
+                break
+            pct = chance_at_least_one(remaining, hits_open, pulls)
+            parts.append(f"{pulls} {'Zug' if pulls == 1 else 'Züge'}: {fmt_pct(pct, 2 if pct < 10 else 1)} %")
+        text = "🎯 **Hit-Chance:** " + (" · ".join(parts) if parts else "100 %")
+        text += f"\n{label} · {fmt_coins(remaining)} Packs übrig"
+        if banner.get('entries_per_day'):
+            text += f"\n*Max. {banner['entries_per_day']} Züge pro Tag*"
+        return text
 
     async def _pool_stats(self, banner, thread_data: dict) -> Optional[dict]:
         """Ø Rückgabe und Hit-Chance aus Kartenpool, Rest-Packs, Medaillen und erkannten Hits."""
@@ -1320,29 +1411,83 @@ class GTCHABot(commands.Bot):
         pool = await self.db.get_card_pool(get('pack_id'))
         if not pool:
             return None
-        pulled, _ = await self._pulled_cards(int(thread_data['thread_id']), get('pack_id'), pool)
+        pulled, _, _ = await self._pulled_cards(int(thread_data['thread_id']), get('pack_id'), pool)
         return estimate(pool, get('current_packs'), get('total_packs'), pulled, get('price_coins'))
 
     async def _pulled_cards(self, thread_id: int, pack_id: int, pool: dict) -> tuple:
-        """(alle als gezogen bekannten Karten-Schlüssel, davon automatisch erkannte).
+        """(alle als gezogen bekannten Karten-Schlüssel, davon nur automatisch erkannte, Gewinner).
 
-        Medaillen T1-T3 zählen für die drei wertvollsten verfolgten Karten.
+        Medaille Tn zählt für Platz n der Hit-Liste; Gewinner = Schlüssel -> Discord-User-ID.
         """
-        medals = await self.db.get_medal_status(int(thread_id))
+        medals = await self.db.get_medals(int(thread_id))
         detected = set((await self.db.get_pull_tracking(pack_id))["pulled"])
         keys = tier_keys(pool)
-        by_medal = {keys[t] for t in TIERS if t in keys and medals.get(t)}
-        return detected | by_medal, detected - by_medal
+        winners = {keys[t]: user for t, user in medals.items() if t in keys}
+        return detected | set(winners), detected - set(winners), winners
+
+    async def _invalid_medal_reason(self, pack_id: Optional[int], tier: str) -> Optional[str]:
+        """Fehlertext, wenn es die Medaille bei diesem Banner nicht gibt, sonst None."""
+        pool = await self.db.get_card_pool(pack_id) if pack_id else None
+        available = len(tier_keys(pool)) if pool and pool.get('version') == 2 else len(TIERS)
+        if int(tier[1:]) > available:
+            return (f"❌ Diesen Banner gibt es nur mit T1–T{available}. "
+                    f"Die Nummer entspricht dem Platz in der Hit-Liste.")
+        return None
 
     async def _claimed_tiers(self, thread_id: int, pack_id: int) -> dict:
         """T1-T3 als gezogen (Medaille oder automatisch erkannt) für die 🎯-Nachricht."""
-        medals = await self.db.get_medal_status(int(thread_id))
+        medals = await self.db.get_medals(int(thread_id))
         pool = await self.db.get_card_pool(pack_id)
         if not pool:
-            return medals
+            return {t: t in medals for t in TIERS}
         detected = set((await self.db.get_pull_tracking(pack_id))["pulled"])
         keys = tier_keys(pool)
-        return {t: bool(medals.get(t)) or keys.get(t) in detected for t in TIERS}
+        return {t: t in medals or keys.get(t) in detected for t in TIERS}
+
+    async def _check_endspurt(self, thread: discord.Thread, thread_data: dict, stats: dict, banner, silent: bool):
+        """Einmaliger Alarm, wenn nur noch wenige Packs übrig und noch Hits drin sind."""
+        if thread_data.get('endspurt_sent'):
+            return
+        get = lambda key: self._get_banner_value(banner, key)
+        remaining, total = _int(get('current_packs')), _int(get('total_packs'))
+        open_hits = [u for u in stats['open_units'] if u.get('hit', u['shipping_only'])] or (
+            [] if stats['tracked_hits'] else stats['open_units'])
+        if not total or remaining <= 0 or remaining > total * ENDSPURT_PERCENT / 100 or not open_hits:
+            return
+        await self.db.set_endspurt_sent(thread.id)
+        if silent:
+            return
+        units = tracked_units(await self.db.get_card_pool(get('pack_id')))
+        rank = {u['key']: i for i, u in enumerate(units, 1)}
+        top = ", ".join(f"{self._rank_icon(rank[u['key']])} {u['name']} ({fmt_coins(u['value'])})"
+                        for u in open_hits[:3])
+        more = f" und {len(open_hits) - 3} weitere" if len(open_hits) > 3 else ""
+        chance = chance_at_least_one(remaining, len(open_hits), min(10, remaining))
+        mention = "@everyone " if MENTION_ON_PACK_UPDATE else ""
+        await discord_rate_limiter.acquire("message_send")
+        await thread.send(
+            f"{mention}⚡ **Endspurt:** nur noch {fmt_coins(remaining)} von {fmt_coins(total)} Packs!\n"
+            f"Noch drin: {top}{more}\n"
+            f"Chance auf mindestens einen Hit bei {min(10, remaining)} Zügen: {fmt_pct(chance)} %"
+        )
+        logger.info(f"Endspurt-Alarm gepostet: Banner {get('pack_id')} ({remaining}/{total})")
+
+    async def _sales_tempo(self, pack_id: int, remaining: int) -> Optional[str]:
+        """'~150 Packs/Std. · ausverkauft in ca. 3 Std.' aus dem Pack-Verlauf der letzten Stunden."""
+        now = datetime.now()
+        sold, first = await self.db.get_sales_since(pack_id, now - timedelta(hours=SALES_WINDOW_HOURS))
+        if not sold or not first or remaining <= 0:
+            return None
+        hours = max((now - first).total_seconds() / 3600, 0.25)
+        rate = sold / hours
+        eta = remaining / rate
+        if eta < 1:
+            eta_text = "in unter 1 Std."
+        elif eta < 48:
+            eta_text = f"in ca. {round(eta)} Std."
+        else:
+            eta_text = f"in ca. {round(eta / 24)} Tagen"
+        return f"~{fmt_coins(rate)} Packs/Std. · ausverkauft {eta_text}"
 
     async def _check_value_alert(self, thread: discord.Thread, thread_data: dict, stats: dict, banner,
                                  silent: bool = False):
@@ -1418,8 +1563,8 @@ class GTCHABot(commands.Bot):
                             f"wertgleich {match['groups']}, möglich {match['maybe']}")
                 thread_id = int(thread_data['thread_id'])
                 if not first_look:
-                    medals = await self.db.get_medal_status(thread_id)
-                    medal_keys = {k for t, k in tier_keys(pool).items() if medals.get(t)}
+                    medals = await self.db.get_medals(thread_id)
+                    medal_keys = {k for t, k in tier_keys(pool).items() if t in medals}
                     certain = [k for k in match["certain"] if k not in medal_keys]
                     if certain or match["groups"] or match["maybe"]:
                         await self._announce_detected_hits(thread_id, pool, certain, match["groups"], match["maybe"])
@@ -1457,6 +1602,14 @@ class GTCHABot(commands.Bot):
             names = " oder ".join(label[k] for k in group["keys"])
             lines.append(f"❓ **Möglicher Hit:** Eine Karte mit {fmt_coins(group['value'])} Coins wurde verschickt. "
                          f"Das kann {names} sein, aber auch eine normale Karte mit gleichem Wert.")
+        key_tier = {k: t for t, k in tier_keys(pool).items()}
+        asks = [f"**{key_tier[k]}**" for k in certain if k in key_tier]
+        for group in list(groups) + list(maybe):
+            tiers = [f"**{key_tier[k]}**" for k in group["keys"] if k in key_tier]
+            if tiers:
+                asks.append(" oder ".join(tiers))
+        if asks:
+            lines.append(f"Warst du's? Schreib {' bzw. '.join(asks)} hier rein und hol dir deine Medaille 🏅")
         if all(u["shipping_only"] for u in units):
             lines.append("*Automatisch erkannt: die Karte wurde gerade zum Versand angefordert.*")
         else:
@@ -1470,8 +1623,10 @@ class GTCHABot(commands.Bot):
         return {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"{rank}.")
 
     @staticmethod
-    def _card_status(key: str, pulled: set, detected: set, unsure: list) -> tuple:
+    def _card_status(key: str, pulled: set, detected: set, unsure: list, winners: dict) -> tuple:
         """(Text, Farbe) für eine Karte in der Hit-Liste; None-Text = noch drin."""
+        if winners.get(key):
+            return f"✅ gezogen von <@{winners[key]}>", 0x95A5A6
         for group in unsure:
             if key in group["keys"] and group["pulled"] > 0 and not set(group["keys"]) <= pulled:
                 amount = "eine" if group["pulled"] == 1 else str(group["pulled"])
@@ -1483,7 +1638,8 @@ class GTCHABot(commands.Bot):
                 return "❓ möglicherweise gezogen (gleicher Wert wie eine normale Karte)", 0xE67E22
         return None, 0xFFD700
 
-    def _build_hit_messages(self, pool: dict, pulled: set, detected: set, unsure: list) -> list:
+    def _build_hit_messages(self, pool: dict, pulled: set, detected: set, unsure: list,
+                            winners: Optional[dict] = None) -> list:
         """[(Überschrift, Embeds), ...]: alle Versand-Hits in Nachrichten zu je 10, sonst die Top 5."""
         units = tracked_units(pool)
         if pool.get('hits'):
@@ -1496,7 +1652,7 @@ class GTCHABot(commands.Bot):
             header = "🏆 **Top 5 Karten** (Coin-Wert)"
         embeds = []
         for rank, card in enumerate(entries, 1):
-            status, color = self._card_status(card.get("key"), pulled, detected, unsure)
+            status, color = self._card_status(card.get("key"), pulled, detected, unsure, winners or {})
             description = f"**{fmt_coins(card['value'])} Coins**" + (f" · {status}" if status else "")
             embed = discord.Embed(title=f"{self._rank_icon(rank)} {card['name']}"[:256],
                                   description=description, color=color)
@@ -1527,9 +1683,9 @@ class GTCHABot(commands.Bot):
             if not isinstance(thread, discord.Thread):
                 return
 
-            pulled, detected = await self._pulled_cards(thread_id, pack_id, pool)
+            pulled, detected, winners = await self._pulled_cards(thread_id, pack_id, pool)
             unsure = (await self.db.get_pull_tracking(pack_id))["unsure"]
-            messages = self._build_hit_messages(pool, pulled, detected, unsure)
+            messages = self._build_hit_messages(pool, pulled, detected, unsure, winners)
             if not messages:
                 return
 
@@ -1571,12 +1727,9 @@ class GTCHABot(commands.Bot):
 
             starter_msg = await thread.fetch_message(int(starter_message_id))
             for reaction in starter_msg.reactions:
-                if str(reaction.emoji) == '🥇':
-                    medals.append('T1')
-                elif str(reaction.emoji) == '🥈':
-                    medals.append('T2')
-                elif str(reaction.emoji) == '🥉':
-                    medals.append('T3')
+                tier = EMOJI_TO_MEDAL.get(str(reaction.emoji))
+                if tier:
+                    medals.append(tier)
         except Exception as e:
             logger.debug(f"Fehler beim Lesen der Reaktionen: {e}")
         return medals
@@ -1619,83 +1772,8 @@ class GTCHABot(commands.Bot):
             thread_data = await self.db.get_thread_by_banner_id(banner_id)
             starter_message_id = thread_data.get('starter_message_id') if thread_data else None
 
-            # Medaillen-Status holen (aus den neuen Spalten in discord_threads)
             thread_id_int = int(thread_id)
-            medal_status = await self.db.get_medal_status(thread_id_int)
-            logger.debug(f"Probability Update - Thread: {thread_id_int}, Banner: {banner_id}, Medal Status: {medal_status}")
-
-            # Fallback: Wenn alle Medaillen als nicht-vergeben markiert sind, prüfe Discord-Reaktionen
-            if not any(medal_status.values()) and starter_message_id:
-                # Thread holen für Reaktions-Check
-                thread = self.get_channel(thread_id_int)
-                if not thread:
-                    try:
-                        thread = await self.fetch_channel(thread_id_int)
-                    except (discord.NotFound, Exception):
-                        thread = None
-
-                if thread and isinstance(thread, discord.Thread):
-                    reaction_medals = await self._get_medals_from_reactions(thread, starter_message_id)
-                    if reaction_medals:
-                        logger.info(f"Medaillen aus Reaktionen gelesen für Thread {thread_id_int}: {reaction_medals}")
-                        # Sync: Medaillen in DB speichern (setzt auch die claimed-Spalten)
-                        for tier in reaction_medals:
-                            existing = await self.db.get_medal(thread_id_int, tier)
-                            if not existing:
-                                await self.db.save_medal(thread_id_int, tier, 0)
-                                logger.debug(f"Medaille {tier} für Thread {thread_id_int} in DB nachgetragen")
-                        # Status neu laden
-                        medal_status = await self.db.get_medal_status(thread_id_int)
-
-            # Automatisch erkannte Hits (Versand-/Rückgabe-Zähler) zählen wie vergebene Medaillen
-            claimed_tiers = await self._claimed_tiers(thread_id_int, banner_id)
-            medal_status = {t: bool(medal_status.get(t)) or bool(claimed_tiers.get(t)) for t in TIERS}
-
-            # Anzahl vergebener Medaillen zählen
-            claimed_count = sum(1 for claimed in medal_status.values() if claimed)
-            hits_remaining = 3 - claimed_count
-            logger.debug(f"Finale Medal Status für Thread {thread_id_int}: {medal_status}, Hits remaining: {hits_remaining}")
-
-            if hits_remaining <= 0:
-                # Alle Hits gezogen - keine Wahrscheinlichkeit mehr
-                probability_text = "🎯 **Hit-Chance:** Alle Hits wurden gezogen!"
-            elif pulls_per_day is None or pulls_per_day <= 0:
-                # Unbegrenzte Pulls - zeige einfache Wahrscheinlichkeit pro Pull
-                probability = (hits_remaining / current_packs) * 100
-                probability_text = f"🎯 **Hit-Chance:** {probability:.2f}% pro Pull ({hits_remaining} Hits / {current_packs} Packs)"
-            else:
-                # Hypergeometrische Verteilung: P(X ≥ 1) = 1 - P(X = 0)
-                # P(X = 0) = C(N-n, k) / C(N, k)
-                # N = current_packs, n = hits_remaining, k = pulls_per_day
-                N = current_packs
-                n = hits_remaining
-                k = min(pulls_per_day, N)  # k kann nicht größer als N sein
-
-                # Wenn k > N-n, dann ist mindestens 1 Hit garantiert
-                if k > N - n:
-                    probability = 100.0
-                else:
-                    # P(X = 0) = C(N-n, k) / C(N, k)
-                    p_zero = comb(N - n, k) / comb(N, k)
-                    probability = (1 - p_zero) * 100
-
-                probability_text = f"🎯 **Hit-Chance:** {probability:.2f}% bei {k} Pulls ({hits_remaining} Hits / {current_packs} Packs)\n*(gilt bei max. Anzahl der möglichen Züge pro Tag)*"
-
-            # Medal-Status anzeigen (nur verfügbare Medaillen zeigen)
-            available_medals = []
-            if not medal_status['T1']:
-                available_medals.append("🥇")
-            if not medal_status['T2']:
-                available_medals.append("🥈")
-            if not medal_status['T3']:
-                available_medals.append("🥉")
-
-            if available_medals:
-                medal_line = f"Verbleibend: {' '.join(available_medals)}"
-                full_message = f"{probability_text}\n{medal_line}"
-            else:
-                # Alle Medaillen vergeben
-                full_message = probability_text
+            full_message = await self._hit_chance_text(banner, thread_data, thread_id_int)
 
             # Thread holen (falls nicht schon im Fallback geholt)
             thread = self.get_channel(thread_id_int)
@@ -1866,17 +1944,17 @@ class GTCHABot(commands.Bot):
         # Suche nach T1, T2 oder T3 im Text (case insensitive)
         # Matcht: "T1", "t1 + 4b", "t1+4b", "T2 test", etc.
         content = message.content.strip().upper()
-        tier_match = re.search(r'\b(T[123])\b', content)
+        tier_match = re.search(r'\b(T(?:10|[1-9]))\b', content)
         if not tier_match:
             return
 
-        tier = tier_match.group(1)  # "T1", "T2" oder "T3"
+        tier = tier_match.group(1)  # "T1" bis "T10"
         logger.debug(f"T-Nachricht erkannt: {tier} von {message.author.name} in Thread {message.channel.id}")
 
         try:
             user_id = message.author.id
             thread_id = message.channel.id
-            emoji = {'T1': '🥇', 'T2': '🥈', 'T3': '🥉'}[tier]
+            emoji = MEDAL_EMOJIS[tier]
 
             # Prüfe ob Thread im Hot-Banner Channel ist
             is_hot_banner = (message.channel.parent_id == HOT_BANNER_CHANNEL_ID)
@@ -1898,6 +1976,10 @@ class GTCHABot(commands.Bot):
                     return
 
                 original_thread_id = original_thread_data.get('thread_id')
+                problem = await self._invalid_medal_reason(pack_id, tier)
+                if problem:
+                    await message.reply(problem)
+                    return
 
                 # Prüfe ob Medaille schon vergeben (im Original-Thread)
                 existing = await self.db.get_medal(original_thread_id, tier)
@@ -1937,6 +2019,11 @@ class GTCHABot(commands.Bot):
                 thread_data = await self.db.get_thread_by_id(thread_id)
                 if not thread_data:
                     logger.debug(f"Thread {thread_id} nicht in DB gefunden")
+                    return
+
+                problem = await self._invalid_medal_reason(thread_data.get('banner_id'), tier)
+                if problem:
+                    await message.reply(problem)
                     return
 
                 # Pruefe ob Medaille schon vergeben

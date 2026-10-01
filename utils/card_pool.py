@@ -15,6 +15,7 @@ HIT_ACTION_TYPE = 2       # "Versand nur" (Flugzeug-Symbol auf der Seite)
 EMBEDS_PER_MESSAGE = 10   # Discord erlaubt 10 Embeds pro Nachricht
 MAX_LISTED = 50           # Obergrenze für die Hit-Liste (5 Nachrichten)
 TIERS = ("T1", "T2", "T3")
+MAX_MEDALS = 10           # Medaillen T1-T10 = Platz 1-10 der Hit-Liste
 MAX_SHIPMENT_CARDS = 10   # größere Versand-Sprünge werden nicht exakt zerlegt
 MAX_SHIPMENT_VALUE = 5_000_000
 
@@ -74,8 +75,8 @@ def tracked_units(pool: Dict) -> List[Dict]:
 
 
 def tier_keys(pool: Dict) -> Dict[str, str]:
-    """Zuordnung T1-T3 -> Schlüssel der drei wertvollsten verfolgten Einheiten."""
-    return {tier: unit["key"] for tier, unit in zip(TIERS, tracked_units(pool))}
+    """Zuordnung T1-T10 -> Schlüssel der wertvollsten verfolgten Einheiten (Platz in der Hit-Liste)."""
+    return {f"T{i}": unit["key"] for i, unit in enumerate(tracked_units(pool)[:MAX_MEDALS], 1)}
 
 
 def estimate(pool: Dict, remaining: Optional[int], total_packs: Optional[int],
@@ -118,6 +119,8 @@ def estimate(pool: Dict, remaining: Optional[int], total_packs: Optional[int],
         "hits_left": hits_left,
         "hit_chance_pct": min(100.0, hits_left / remaining * 100),
         "open_tiers": [t for t in TIERS if t in keys and keys[t] not in pulled_keys],
+        "tracked_hits": bool(pool.get("hits")),
+        "open_units": open_units,
     }
 
 
