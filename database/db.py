@@ -60,6 +60,15 @@ class Database:
                     UNIQUE(thread_id, tier)
                 );
 
+                CREATE TABLE IF NOT EXISTS shipment_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    banner_id INTEGER,
+                    old_cards INTEGER, new_cards INTEGER,
+                    old_coins INTEGER, new_coins INTEGER,
+                    old_players INTEGER, new_players INTEGER,
+                    changed_at TEXT
+                );
+
                 CREATE TABLE IF NOT EXISTS bot_meta (
                     key TEXT PRIMARY KEY,
                     value TEXT
@@ -309,6 +318,17 @@ class Database:
             if not row or row[0] == new:
                 return False
             await db.execute("UPDATE banners SET site_stats = ? WHERE pack_id = ?", (new, pack_id))
+            old = json.loads(row[0]) if row[0] else None
+            if old and (old.get("cards"), old.get("coins")) != (stats.get("cards"), stats.get("coins")):
+                await db.execute("""
+                    INSERT INTO shipment_history (banner_id, old_cards, new_cards, old_coins, new_coins,
+                                                  old_players, new_players, changed_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (pack_id, old.get("cards"), stats.get("cards"), old.get("coins"), stats.get("coins"),
+                      old.get("players"), stats.get("players"), datetime.now().isoformat()))
+                delta = f"{(stats.get('coins') or 0) - (old.get('coins') or 0):,}".replace(",", ".")
+                logger.info(f"[VERSAND] {pack_id}: {old.get('cards')} -> {stats.get('cards')} Karten "
+                            f"(+{delta} Coins, {old.get('players')} -> {stats.get('players')} Spieler)")
             await db.commit()
         return True
 
