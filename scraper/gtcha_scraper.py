@@ -166,7 +166,6 @@ class GTCHAScraper:
         # API-Response abfangen: /api/user/pack/list enthält echte Pack-Zahlen.
         # Listener am Kontext-Level → gilt für alle Pages (main + parallel).
         self._api_pack_data: Dict[int, dict] = {}
-        self._logged_country_urls: Set[str] = set()
 
         async def _capture_pack_api(response):
             try:
@@ -175,10 +174,6 @@ class GTCHAScraper:
                 ct = response.headers.get('content-type', '')
                 if 'json' not in ct:
                     return
-                if '/api/user/country' in response.url and response.url not in self._logged_country_urls:
-                    self._logged_country_urls.add(response.url)
-                    body = (await response.text())[:300]
-                    logger.info(f"[LAND] {response.url.split('/api/user/')[-1]}: {body}")
                 if 'pack/list' in response.url:
                     data = await response.json()
                     items = data.get('list', [])
