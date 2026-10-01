@@ -159,7 +159,8 @@ class ThreadsMixin:
     def _build_banner_embed(self, banner, title_prefix: str = None, stats: Optional[dict] = None,
                             tempo: Optional[str] = None, conditions: Optional[str] = None,
                             shipped: Optional[str] = None, minimum: Optional[str] = None,
-                            starts_at: Optional[int] = None) -> discord.Embed:
+                            starts_at: Optional[int] = None,
+                            pool_value: Optional[str] = None) -> discord.Embed:
         """Erstellt ein Embed für einen Banner (funktioniert mit Objekt oder Dict)."""
         # Helper für Zugriff
         get = lambda key, default=None: self._get_banner_value(banner, key, default)
@@ -230,6 +231,8 @@ class ThreadsMixin:
 
         if minimum:
             embed.add_field(name="Mindestens zurück pro Zug", value=minimum, inline=False)
+        if pool_value:
+            embed.add_field(name="Gesamtwert", value=pool_value, inline=False)
         if tempo:
             embed.add_field(name="Abverkauf", value=tempo, inline=False)
         if shipped:
@@ -404,9 +407,11 @@ class ThreadsMixin:
             row = await self.db.get_banner(pack_id) or {}
             conditions = format_conditions(row.get('conditions'))
             shipped = format_shipping(row.get('site_stats'))
-            minimum = self._minimum_text(await self.db.get_card_pool(pack_id), row.get('price_coins'))
+            pool = await self.db.get_card_pool(pack_id)
+            minimum = self._minimum_text(pool, row.get('price_coins'))
+            pool_value = self._pool_value_text(pool, row.get('price_coins'), row.get('total_packs'))
             new_embed = self._build_banner_embed(banner, stats=stats, tempo=tempo, conditions=conditions,
-                                                 shipped=shipped, minimum=minimum)
+                                                 shipped=shipped, minimum=minimum, pool_value=pool_value)
 
             # Message updaten
             await discord_rate_limiter.acquire("message_edit")
@@ -459,6 +464,19 @@ class ThreadsMixin:
         elif low.get('copies'):
             text += f" · {fmt_coins(low['copies'])} Karten mit diesem Wert"
         return text
+
+    @staticmethod
+    def _pool_value_text(pool: Optional[dict], price, total_packs) -> Optional[str]:
+        """Summe aller Kartenwerte im Banner und was alle Packs zusammen kosten."""
+        if not pool or not pool.get('total_value'):
+            return None
+        total = _int(pool['total_value'])
+        lines = [f"Alle Karten: {fmt_coins(total)} Coins"]
+        cost = _int(price) * _int(total_packs or pool.get('total_count'))
+        if cost:
+            lines.append(f"Alle Packs kaufen: {fmt_coins(cost)} Coins "
+                         f"({fmt_pct(total / cost * 100)} % zurück)")
+        return "\n".join(lines)
 
     async def _sales_tempo(self, pack_id: int, remaining: int) -> Optional[str]:
         """'~150 Packs/Std. · ausverkauft in ca. 3 Std.' aus dem Pack-Verlauf der letzten Stunden."""
