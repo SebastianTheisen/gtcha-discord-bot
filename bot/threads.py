@@ -160,7 +160,8 @@ class ThreadsMixin:
                             tempo: Optional[str] = None, conditions: Optional[str] = None,
                             shipped: Optional[str] = None, minimum: Optional[str] = None,
                             starts_at: Optional[int] = None,
-                            pool_value: Optional[str] = None) -> discord.Embed:
+                            pool_value: Optional[str] = None,
+                            hit_link: Optional[str] = None) -> discord.Embed:
         """Erstellt ein Embed für einen Banner (funktioniert mit Objekt oder Dict)."""
         # Helper für Zugriff
         get = lambda key, default=None: self._get_banner_value(banner, key, default)
@@ -228,6 +229,8 @@ class ThreadsMixin:
             if stats.get('cost_to_hit'):
                 hits_text += f"\nØ Kosten bis zum nächsten Hit: ca. {fmt_coins(stats['cost_to_hit'])} Coins"
             embed.add_field(name="Hits", value=hits_text, inline=False)
+        if hit_link:
+            embed.add_field(name="Hit-Liste", value=f"[🏆 Zur Hit-Liste springen]({hit_link})", inline=False)
 
         if minimum:
             embed.add_field(name="Mindestens zurück pro Zug", value=minimum, inline=False)
@@ -361,7 +364,7 @@ class ThreadsMixin:
         except discord.NotFound:
             pass
         except Exception as e:
-            logger.debug(f"Fehler bei Titel-Update für {pack_id}: {e}")
+            logger.warning(f"Thread-Titel von {pack_id} nicht aktualisiert: {type(e).__name__}: {e}")
 
     async def _update_thread_embed(self, banner, initial_pool: bool = False):
         """Aktualisiert das Embed im Thread mit aktuellen Daten (z.B. Countdown, Ø Rückgabe)."""
@@ -375,6 +378,7 @@ class ThreadsMixin:
             starter_message_id = thread_data.get('starter_message_id')
 
             if not thread_id or not starter_message_id:
+                logger.warning(f"Startbeitrag von {pack_id}: Thread- oder Nachrichten-ID fehlt in der DB")
                 return
 
             # Thread holen
@@ -382,7 +386,8 @@ class ThreadsMixin:
             if not thread:
                 try:
                     thread = await self.fetch_channel(int(thread_id))
-                except (discord.NotFound, Exception):
+                except Exception as e:
+                    logger.warning(f"Startbeitrag von {pack_id}: Thread {thread_id} nicht abrufbar: {e}")
                     return
 
             if not isinstance(thread, discord.Thread):
@@ -392,14 +397,15 @@ class ThreadsMixin:
                 try:
                     await discord_rate_limiter.acquire("thread_edit")
                     await thread.edit(archived=False)
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"Startbeitrag von {pack_id}: Thread nicht reaktivierbar: {e}")
                     return
 
             # Starter-Message holen
             try:
                 message = await thread.fetch_message(int(starter_message_id))
-            except (discord.NotFound, Exception):
-                logger.debug(f"Starter-Message für {pack_id} nicht gefunden")
+            except Exception as e:
+                logger.warning(f"Startbeitrag für {pack_id} nicht gefunden: {e}")
                 return
 
             stats = await self._pool_stats(banner, thread_data)
@@ -410,8 +416,13 @@ class ThreadsMixin:
             pool = await self.db.get_card_pool(pack_id)
             minimum = self._minimum_text(pool, row.get('price_coins'))
             pool_value = self._pool_value_text(pool, row.get('price_coins'), row.get('total_packs'))
+            hit_ids = json.loads(thread_data.get('hit_message_ids') or 'null') or (
+                [thread_data['top5_message_id']] if thread_data.get('top5_message_id') else [])
+            hit_link = (f"https://discord.com/channels/{thread.guild.id}/{thread.id}/{hit_ids[0]}"
+                        if hit_ids else None)
             new_embed = self._build_banner_embed(banner, stats=stats, tempo=tempo, conditions=conditions,
-                                                 shipped=shipped, minimum=minimum, pool_value=pool_value)
+                                                 shipped=shipped, minimum=minimum, pool_value=pool_value,
+                                                 hit_link=hit_link)
 
             # Message updaten
             await discord_rate_limiter.acquire("message_edit")
@@ -425,10 +436,8 @@ class ThreadsMixin:
                 await self._check_value_alert(thread, thread_data, stats, banner, silent=silent)
                 await self._check_endspurt(thread, thread_data, stats, banner, silent=initial_pool)
 
-        except discord.HTTPException as e:
-            logger.debug(f"Discord-Fehler bei Embed-Update: {e}")
         except Exception as e:
-            logger.debug(f"Fehler bei Embed-Update für {pack_id}: {e}")
+            logger.warning(f"Startbeitrag von {pack_id} nicht aktualisiert: {type(e).__name__}: {e}")
 
     async def _refresh_all_embeds_once(self):
         """Aktualisiert alle Startbeiträge einmal, wenn neue Felder dazugekommen sind."""
@@ -444,7 +453,7 @@ class ThreadsMixin:
         logger.info(f"Neue Felder im Startbeitrag: aktualisiere {len(rows)} Threads einmalig...")
         for pid, row in rows.items():
             if row.get('card_pool'):
-                await self._refresh_pool_views(pid)
+                await self._refresh_pool_views(pid, force=True)
             else:
                 await self._update_thread_embed(row)
         await self.db.set_meta('embed_version', str(EMBED_VERSION))

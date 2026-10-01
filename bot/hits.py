@@ -296,11 +296,13 @@ class HitsMixin:
         return [(f"{header} · Teil 1/{len(chunks)}" if i == 0 else f"🏆 **Hits im Pool** · Teil {i + 1}/{len(chunks)}",
                  chunk) for i, chunk in enumerate(chunks)]
 
-    async def _refresh_pool_views(self, pack_id: int, initial_pool: bool = False, embed: bool = True):
+    async def _refresh_pool_views(self, pack_id: int, initial_pool: bool = False, embed: bool = True,
+                                  force: bool = False):
         """Aktualisiert Startbeitrag (Ø Rückgabe, Hits) und die Hit-Nachricht(en) eines Banners.
 
         Die Hit-Nachrichten werden nur bearbeitet, wenn sich ihr Inhalt gegenüber dem zuletzt
-        geposteten Stand geändert hat (Signatur in der DB).
+        geposteten Stand geändert hat (Signatur in der DB) oder force gesetzt ist.
+        Die erste Hit-Nachricht wird angeheftet, der Startbeitrag verlinkt auf sie.
         """
         try:
             banner = await self.db.get_banner(pack_id)
@@ -331,7 +333,7 @@ class HitsMixin:
             sig = json.dumps([[c, [[e.title, e.description, e.color.value if e.color else None,
                                     e.thumbnail.url if e.thumbnail else None] for e in em]]
                               for c, em in messages], ensure_ascii=False)
-            if old_ids and thread_data.get('hit_list_sig') == sig:
+            if old_ids and thread_data.get('hit_list_sig') == sig and not force:
                 return
             new_ids = []
             for i, (content, embeds) in enumerate(messages):
@@ -347,6 +349,8 @@ class HitsMixin:
                     await discord_rate_limiter.acquire("message_send")
                     msg = await thread.send(content=content, embeds=embeds)
                     logger.info(f"Hit-Nachricht {i + 1}/{len(messages)} gepostet: Banner {pack_id}")
+                if i == 0:
+                    await self._pin_hit_message(msg, pack_id)
                 new_ids.append(msg.id)
             for extra_id in old_ids[len(messages):]:
                 try:
@@ -357,11 +361,25 @@ class HitsMixin:
                     pass
             if new_ids != old_ids:
                 await self.db.set_hit_message_ids(thread_id, new_ids)
+                if embed and (not old_ids or new_ids[0] != old_ids[0]):
+                    await self._update_thread_embed(banner)   # Link zur neuen Hit-Liste
             await self.db.set_hit_list_sig(thread_id, sig)
             if old_ids:
                 logger.info(f"Hit-Liste aktualisiert: Banner {pack_id} ({len(messages)} Nachricht(en))")
         except Exception as e:
             logger.warning(f"Fehler bei Hit-Nachricht/Ø-Update für {pack_id}: {e}")
+
+    async def _pin_hit_message(self, msg: discord.Message, pack_id: int):
+        """Heftet die Hit-Liste an, damit sie über 'Angeheftete Nachrichten' direkt erreichbar ist."""
+        if msg.pinned:
+            return
+        try:
+            await discord_rate_limiter.acquire("message_edit")
+            await msg.pin(reason="Hit-Liste")
+        except discord.Forbidden:
+            logger.warning(f"Hit-Liste von {pack_id} nicht angeheftet: Bot fehlt die Berechtigung 'Nachrichten anheften'")
+        except discord.HTTPException as e:
+            logger.warning(f"Hit-Liste von {pack_id} nicht angeheftet: {e}")
 
     async def _find_existing_probability_message(self, thread: discord.Thread) -> Optional[discord.Message]:
         """
