@@ -98,3 +98,39 @@ def test_bot_applies_app_medals(tmp_path, monkeypatch):
         assert (await bridge.get_request(r5))["status"] == "ok" and await db.get_medal(700, "T2") is None
 
     asyncio.run(run())
+
+
+def test_medal_migration_keeps_medals_on_the_same_card(tmp_path, monkeypatch):
+    monkeypatch.setenv("DISCORD_TOKEN", "x")
+    monkeypatch.setenv("GUILD_ID", "1")
+    from bot.medals import MedalsMixin
+    from database.db import Database
+    from utils.card_pool import summarize_cards
+
+    class Bot(MedalsMixin):
+        user = None
+        def __init__(self, db): self.db = db
+        def get_channel(self, _id): raise RuntimeError("kein Discord im Test")
+
+    async def run():
+        db = Database(str(tmp_path / "bot.db"))
+        await db.init()
+        # alt (Hits zuerst): T1 = Hit 50.000, T2 = Hit 30.000, T3 = normale Karte 90.000
+        # neu (nach Wert):   T1 = normale Karte 90.000, T2 = Hit 50.000, T3 = Hit 30.000
+        pool = summarize_cards([{"id": 1, "name": "Hit A", "buy_point": 50000, "duplication": 1, "action_type": 2},
+                                {"id": 2, "name": "Hit B", "buy_point": 30000, "duplication": 1, "action_type": 2},
+                                {"id": 7, "name": "Normal", "buy_point": 90000, "duplication": 1, "action_type": 0}])
+        async with aiosqlite.connect(db.db_path) as conn:
+            await conn.execute("INSERT INTO banners (pack_id, is_active, card_pool) VALUES (5, 1, ?)", (json.dumps(pool),))
+            await conn.execute("INSERT INTO discord_threads (banner_id, thread_id) VALUES (5, 500)")
+            await conn.commit()
+        await db.save_medal(500, "T1", 11)     # war Hit A
+        await db.save_medal(500, "T3", 22)     # war die normale Karte
+        bot = Bot(db)
+        await bot._migrate_medal_order()
+        assert await db.get_medals(500) == {"T2": 11, "T1": 22}
+        await db.save_medal(500, "T3", 33)
+        await bot._migrate_medal_order()       # nur einmal
+        assert await db.get_medals(500) == {"T2": 11, "T1": 22, "T3": 33}
+
+    asyncio.run(run())

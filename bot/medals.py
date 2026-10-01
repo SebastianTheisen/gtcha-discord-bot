@@ -157,6 +157,58 @@ class MedalsMixin:
                     f"Die Nummer entspricht dem Platz in der Hit-Liste.")
         return None
 
+    async def _migrate_then_sync_medals(self):
+        await self._migrate_medal_order()
+        await self._sync_medals_from_discord()
+
+    async def _migrate_medal_order(self):
+        """Einmalig: Medaillen-Plätze von "Versand-Hits zuerst" auf "streng nach Wert" umschreiben.
+
+        Jede Medaille bleibt bei derselben Karte, nur ihre Nummer ändert sich. Die Reaktion am
+        Startbeitrag wird mit umgestellt, sonst würde der Abgleich die alte Nummer wieder eintragen.
+        """
+        if await self.db.get_meta('medal_order') == 'value':
+            return
+        moved = 0
+        try:
+            async with aiosqlite.connect(self.db.db_path) as db:
+                cursor = await db.execute(
+                    "SELECT thread_id, banner_id, starter_message_id FROM discord_threads WHERE is_expired = 0")
+                threads = await cursor.fetchall()
+            for thread_id, banner_id, starter_id in threads:
+                pool = await self.db.get_card_pool(banner_id)
+                if not pool or not pool.get('hits') or not pool.get('cards'):
+                    continue   # ohne Versand-Hits war die Reihenfolge schon nach Wert
+                medals = await self.db.get_medals(thread_id)
+                old = {u["tier"]: u["key"] for u in medal_units_hits_first(pool)}
+                new = {u["key"]: u["tier"] for u in medal_units(pool)}
+                changes = [(tier, user, new[old[tier]]) for tier, user in medals.items()
+                           if tier in old and old[tier] in new and new[old[tier]] != tier]
+                if not changes:
+                    continue
+                for tier, _, _ in changes:
+                    await self.db.delete_medal(thread_id, tier)
+                for _, user, new_tier in changes:
+                    await self.db.save_medal(thread_id, new_tier, user)
+                moved += len(changes)
+                logger.info(f"Medaillen umgestellt (Banner {banner_id}): "
+                            + ", ".join(f"{t} -> {n}" for t, _, n in changes))
+                try:
+                    thread = self.get_channel(int(thread_id)) or await self.fetch_channel(int(thread_id))
+                    starter = await thread.fetch_message(int(starter_id)) if starter_id else None
+                    for tier, _, new_tier in changes if starter else []:
+                        if tier in MEDAL_EMOJIS:
+                            await starter.remove_reaction(MEDAL_EMOJIS[tier], self.user)
+                    for _, _, new_tier in changes if starter else []:
+                        await starter.add_reaction(MEDAL_EMOJIS.get(new_tier, MEDAL_EMOJI_DEFAULT))
+                except Exception as e:
+                    logger.debug(f"Reaktionen für {banner_id} nicht umgestellt: {e}")
+            await self.db.set_meta('medal_order', 'value')
+            if moved:
+                logger.info(f"Medaillen-Reihenfolge nach Wert: {moved} Medaille(n) umgestellt")
+        except Exception as e:
+            logger.error(f"Umstellung der Medaillen-Reihenfolge fehlgeschlagen: {e}")
+
     async def _get_medals_from_reactions(self, thread, starter_message_id: int) -> list:
         """Liest Medaillen von Discord-Reaktionen auf der Starter-Message."""
         medals = []

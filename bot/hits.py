@@ -302,7 +302,9 @@ class HitsMixin:
             entries = entries[:5]
             header = "🏆 **Top 5 Karten** (Coin-Wert)"
         embeds = []
-        for rank, card in enumerate(entries, 1):
+        for position, card in enumerate(entries, 1):
+            # Platz = Medaille (streng nach Wert über alle Karten), nicht die Position in dieser Liste
+            rank = int(card["tier"][1:]) if card.get("tier") else position
             status, color = self._card_status(card.get("key"), pulled, detected, unsure, winners or {})
             description = f"**{fmt_coins(card['value'])} Coins**" + (f" · {status}" if status else "")
             embed = discord.Embed(title=f"{self._rank_icon(rank)} {card['name']}"[:256],
