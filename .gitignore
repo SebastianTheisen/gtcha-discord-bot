@@ -57,3 +57,4 @@ data/*.csv
 
 # Web-App: Push-Schlüssel und Abos
 data/webapp_vapid.pem
+data/img_cache/

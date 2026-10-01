@@ -1,5 +1,5 @@
 // Service Worker: App-Hülle offline verfügbar halten, Push-Benachrichtigungen anzeigen.
-const CACHE = "gtcha-tracker-v2";
+const CACHE = "gtcha-tracker-v3";
 const SHELL = ["/", "/static/style.css", "/static/app.js", "/static/icon-180.png", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
@@ -15,7 +15,7 @@ self.addEventListener("activate", (event) => {
 // Daten immer frisch vom Server, nur die App-Hülle aus dem Cache (wenn offline)
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
-  if (event.request.method !== "GET" || url.origin !== location.origin || url.pathname.startsWith("/api/")) return;
+  if (event.request.method !== "GET" || url.origin !== location.origin || url.pathname.startsWith("/api/") || url.pathname === "/img") return;
   event.respondWith(fetch(event.request)
     .then((res) => {
       const copy = res.clone();
