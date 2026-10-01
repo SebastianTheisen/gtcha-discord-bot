@@ -130,37 +130,50 @@ class HitsMixin:
 
                 state = await self.db.get_pull_tracking(pid)
                 pulled, unsure = list(state["pulled"]), list(state["unsure"])
-                # Ausgeschlossen sind nur schon als verschickt erkannte Karten. Per Medaille gemeldete
-                # Karten sind gezogen, aber noch nicht verschickt: sie bleiben Kandidaten (sogar bevorzugt).
                 medals = await self.db.get_medals(int(thread_data['thread_id']))
                 claimed = {k for t, k in tier_keys(pool).items() if t in medals}
-                known, _, _ = resolve_pulled(pulled, unsure, set())
-                expected = claimed - known
                 ships = shipment_values(item) or (None, None)
                 value = decided_value(item)
                 match = {"certain": [], "groups": [], "maybe": []}
                 first_look, reason = False, ""
 
                 if pool.get('hits'):
+                    # Alle Versand-Schübe gemeinsam auswerten: jeder Hit kann nur einmal verschickt
+                    # werden, spätere Schübe klären so frühere ❓ auf. Gespeichert wird immer das
+                    # Gesamtergebnis; gemeldet wird nur, was gegenüber vorher neu ist.
                     count, ship_value = ships
                     prev_count, prev_value = state["ship_count"], state["ship_value"]
+                    batches = state["batches"]
+                    changed = False
                     if count is None:
                         pass
-                    elif prev_count is None:
-                        # Erste Messung: bisherige Sendungen nur auswerten, soweit es eindeutig ist
-                        match = prefer_claimed(match_shipped_hits(pool, count, ship_value, known), expected)
-                        first_look, reason = True, f"bisher {count} Karten / {ship_value:,} Coins verschickt"
+                    elif batches is None or prev_count is None:
+                        batches = await self.db.rebuild_ship_batches(pid, count, ship_value)
+                        first_look, changed = True, True
+                        reason = f"bisher {count} Karten / {ship_value:,} Coins in {len(batches)} Schüben verschickt"
                     elif count > prev_count and ship_value > prev_value:
-                        match = prefer_claimed(
-                            match_shipped_hits(pool, count - prev_count, ship_value - prev_value, known), expected)
+                        batches = batches + [[count - prev_count, ship_value - prev_value]]
+                        changed = True
                         reason = f"{count - prev_count} Karte(n) / {ship_value - prev_value:,} Coins verschickt"
-                elif value is not None and state["decided_value"] is not None and value > state["decided_value"]:
-                    match["certain"] = detect_jump_pulls(pool, value - state["decided_value"], known)
-                    reason = f"Anstieg {value - state['decided_value']:,} Coins"
-
-                await self.db.set_pull_tracking(pid, value, ships[0], ships[1],
-                                                pulled + match["certain"],
-                                                unsure + match["groups"] + match["maybe"])
+                    if not changed:
+                        await self.db.set_pull_tracking(pid, value, ships[0], ships[1], pulled, unsure)
+                        continue
+                    joint = match_shipment_history(pool, batches, claimed)
+                    old_groups = {(frozenset(g["keys"]), g["pulled"]) for g in unsure}
+                    match = {
+                        "certain": [k for k in joint["certain"] if k not in set(pulled)],
+                        "groups": [g for g in joint["groups"] if (frozenset(g["keys"]), g["pulled"]) not in old_groups],
+                        "maybe": [],
+                    }
+                    await self.db.set_pull_tracking(pid, value, ships[0], ships[1],
+                                                    joint["certain"], joint["groups"], batches)
+                else:
+                    known, _, _ = resolve_pulled(pulled, unsure, set())
+                    if value is not None and state["decided_value"] is not None and value > state["decided_value"]:
+                        match["certain"] = detect_jump_pulls(pool, value - state["decided_value"], known)
+                        reason = f"Anstieg {value - state['decided_value']:,} Coins"
+                    await self.db.set_pull_tracking(pid, value, ships[0], ships[1],
+                                                    pulled + match["certain"], unsure)
                 if not (match["certain"] or match["groups"] or match["maybe"]):
                     continue
 

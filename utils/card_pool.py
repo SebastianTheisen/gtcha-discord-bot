@@ -261,38 +261,20 @@ def _any_bit(mask: int, lo: int, hi: int) -> bool:
     return (mask >> lo) & ((1 << (hi - lo + 1)) - 1) != 0
 
 
-def match_shipped_hits(pool: Dict, count: int, value: int, pulled_keys: Set[str],
-                       tol: float = VALUE_TOLERANCE) -> Dict:
-    """Welche Versand-Hits stecken in einer Sendung aus `count` Karten im Wert `value`?
+def _batch_options(pool: Dict, classes: List[Dict], count: int, value: int, tol: float) -> Optional[List[tuple]]:
+    """Alle Aufteilungen eines Schubs (count Karten, Kartenwert `value`) als Hits je Klasse.
 
-    `value` ist der Betrag aus total_sendprice, also ohne Steuer; er wird mit TAX_FACTOR auf
-    Kartenwerte umgerechnet. Hits plus genau so viele normale Karten müssen ihn auf ±tol treffen. Hits mit fast gleichem Wert bilden
-    Klassen und sind nicht unterscheidbar. Ergebnis:
-      certain: Schlüssel von Hits, die sicher verschickt wurden
-      groups:  Hits, von denen sicher `pulled` Stück verschickt wurden, aber unklar welche
-               (value/value_max: Wertspanne der Gruppe)
-      maybe:   Einzelsendung, die zu Hits passt, aber auch zu einer normalen Karte (nicht sicher)
-    Nicht zerlegbare oder zu große Sendungen liefern nichts.
+    Rest muss aus genau so vielen normalen Karten bestehen. None = zu viele Möglichkeiten.
     """
-    result = {"certain": [], "groups": [], "maybe": []}
-    value = round(value * TAX_FACTOR)
-    if count <= 0 or value <= 0 or count > MAX_SHIPMENT_CARDS or value > MAX_SHIPMENT_VALUE:
-        return result
-    open_hits = [u for u in tracked_units(pool) if u["shipping_only"] and u["key"] not in pulled_keys]
-    if not open_hits:
-        return result
-    classes = _value_classes(open_hits, tol)
     upper = int(value / (1 - tol)) + 2
     sums = _normal_sums(pool, count, upper)
-
     possible: List[tuple] = []
 
     def walk(i: int, taken: List[int], lo: float, hi: float, n: int):
-        if lo > upper:
+        if lo > upper or len(possible) > 50000:
             return
         if i == len(classes):
-            # Jede Karte darf um ±tol von ihrem gespeicherten Wert abweichen:
-            # hits_lo + N·(1-tol) <= value <= hits_hi + N·(1+tol)  ->  Spanne für die Normal-Summe N
+            # Jede Karte darf um ±tol abweichen: hits_lo + N·(1-tol) <= value <= hits_hi + N·(1+tol)
             k = count - n
             if _any_bit(sums[k], int((value - hi) / (1 + tol)), int((value - lo) / (1 - tol)) + 1):
                 possible.append(tuple(taken))
@@ -300,14 +282,15 @@ def match_shipped_hits(pool: Dict, count: int, value: int, pulled_keys: Set[str]
         cls = classes[i]
         for m in range(0, min(len(cls["keys"]), count - n) + 1):
             walk(i + 1, taken + [m], lo + m * cls["min"] * (1 - tol), hi + m * cls["max"] * (1 + tol), n + m)
-            if len(possible) > 50000:
-                return
 
     walk(0, [], 0.0, 0.0, 0)
-    if not possible or len(possible) > 50000:
-        return result
+    return None if len(possible) > 50000 else possible
 
-    unit_by_key = {u["key"]: u for u in open_hits}
+
+def _summarize_options(classes: List[Dict], possible: List[tuple], units: List[Dict]) -> Dict:
+    """Was in jeder möglichen Aufteilung gilt: sichere Hits und ❓-Gruppen."""
+    result = {"certain": [], "groups": [], "maybe": []}
+    unit_by_key = {u["key"]: u for u in units}
 
     def identical(keys):
         # Mehrere Exemplare derselben Karte: egal welches verschickt wurde
@@ -324,20 +307,90 @@ def match_shipped_hits(pool: Dict, count: int, value: int, pulled_keys: Set[str]
         else:
             result["groups"].append({"value": cls["min"], "value_max": cls["max"], "keys": cls["keys"], "pulled": n})
 
-    # Mindestens so viele Hits stecken in jeder möglichen Zerlegung, auch wenn die Klasse offen ist
+    # Mindestens so viele Hits stecken in jeder möglichen Aufteilung, auch wenn die Klasse offen ist
     extra = min(sum(t) for t in possible) - sum(certain_per_class)
     if extra > 0:
-        involved = [cls for i, cls in enumerate(classes)
-                    if any(t[i] > certain_per_class[i] for t in possible)]
+        involved = [cls for i, cls in enumerate(classes) if any(t[i] > certain_per_class[i] for t in possible)]
         result["groups"].append({
             "value": min(c["min"] for c in involved), "value_max": max(c["max"] for c in involved),
             "keys": [k for c in involved for k in c["keys"]], "pulled": extra,
         })
-    elif count == 1 and not result["certain"] and not result["groups"]:
+    return result
+
+
+def match_shipped_hits(pool: Dict, count: int, value: int, pulled_keys: Set[str],
+                       tol: float = VALUE_TOLERANCE) -> Dict:
+    """Welche Versand-Hits stecken in einer einzelnen Sendung aus `count` Karten im Wert `value`?
+
+    `value` ist der Betrag aus total_sendprice, also ohne Steuer; er wird mit TAX_FACTOR auf
+    Kartenwerte umgerechnet. Hits plus genau so viele normale Karten müssen ihn auf ±tol treffen.
+    Hits mit fast gleichem Wert bilden Klassen und sind nicht unterscheidbar. Ergebnis:
+      certain: Schlüssel von Hits, die sicher verschickt wurden
+      groups:  Hits, von denen sicher `pulled` Stück verschickt wurden, aber unklar welche
+               (value/value_max: Wertspanne der Gruppe)
+      maybe:   Einzelsendung, die zu Hits passt, aber auch zu einer normalen Karte (nicht sicher)
+    Nicht zerlegbare oder zu große Sendungen liefern nichts.
+    """
+    result = {"certain": [], "groups": [], "maybe": []}
+    value = round(value * TAX_FACTOR)
+    if count <= 0 or value <= 0 or count > MAX_SHIPMENT_CARDS or value > MAX_SHIPMENT_VALUE:
+        return result
+    open_hits = [u for u in tracked_units(pool) if u["shipping_only"] and u["key"] not in pulled_keys]
+    if not open_hits:
+        return result
+    classes = _value_classes(open_hits, tol)
+    possible = _batch_options(pool, classes, count, value, tol)
+    if not possible:
+        return result
+    result = _summarize_options(classes, possible, open_hits)
+    if count == 1 and not result["certain"] and not result["groups"]:
         for i, cls in enumerate(classes):
             if any(t[i] for t in possible):
                 result["maybe"].append({"value": cls["min"], "value_max": cls["max"],
                                         "keys": cls["keys"], "pulled": 0})
+    return result
+
+
+def match_shipment_history(pool: Dict, batches: List[List[int]], claimed: Set[str] = frozenset(),
+                           tol: float = VALUE_TOLERANCE) -> Dict:
+    """Wertet alle Versand-Schübe eines Banners gemeinsam aus.
+
+    batches: [[Anzahl Karten, Betrag aus total_sendprice], ...] je Schub. Jeder Versand-Hit kann
+    insgesamt nur einmal verschickt werden; deshalb schließen spätere Schübe Möglichkeiten aus
+    früheren aus. Schübe, die zu groß oder gar nicht erklärbar sind, werden übergangen (das macht
+    das Ergebnis nur vorsichtiger, nie falsch). Medaillen-Karten (claimed) lösen ❓-Gruppen auf.
+    Ergebnis wie match_shipped_hits, plus "used_batches".
+    """
+    result = {"certain": [], "groups": [], "maybe": [], "used_batches": 0}
+    hits = [u for u in tracked_units(pool) if u["shipping_only"]]
+    if not hits:
+        return result
+    classes = _value_classes(hits, tol)
+    sizes = [len(c["keys"]) for c in classes]
+    states = {tuple([0] * len(classes))}
+    for count, net in batches:
+        value = round(net * TAX_FACTOR)
+        if count <= 0 or value <= 0 or count > MAX_SHIPMENT_CARDS or value > MAX_SHIPMENT_VALUE:
+            continue
+        options = _batch_options(pool, classes, count, value, tol)
+        if not options:
+            continue
+        combined = set()
+        for st in states:
+            for opt in options:
+                cand = tuple(x + y for x, y in zip(st, opt))
+                if all(c <= sz for c, sz in zip(cand, sizes)):
+                    combined.add(cand)
+            if len(combined) > 50000:
+                return result
+        if not combined:
+            continue  # widerspricht den anderen Schüben: übergehen statt falsch zuordnen
+        states = combined
+        result["used_batches"] += 1
+    if not result["used_batches"]:
+        return result
+    summary = _summarize_options(classes, list(states), hits)
+    result.update(prefer_claimed(summary, set(claimed)))
     return result
 
 

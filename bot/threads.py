@@ -318,8 +318,14 @@ class ThreadsMixin:
         stats = await self._pool_stats(row, thread_data)
         if stats:
             if stats['tracked_hits'] and stats['hits_total'] and not stats['hits_open']:
-                return "hits_out"
-            if not stats['tracked_hits'] and not stats['open_tiers']:
+                # "Hits raus" nur, wenn jeder Hit sicher raus ist (Medaille oder eindeutig erkannt),
+                # nicht schon, wenn ❓-Stellvertreter die Rechnung auffüllen
+                pool = await self.db.get_card_pool(row['pack_id'])
+                _, sure, winners, _ = await self._pulled_cards(int(thread_data['thread_id']), row['pack_id'], pool)
+                price = _int(row.get('price_coins')) or None
+                if all(u['key'] in sure or u['key'] in winners for u in relevant_units(pool, price)):
+                    return "hits_out"
+            elif not stats['tracked_hits'] and not stats['open_tiers']:
                 return "hits_out"
         if thread_data.get('endspurt_sent'):
             return "endspurt"

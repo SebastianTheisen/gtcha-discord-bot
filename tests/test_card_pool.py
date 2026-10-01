@@ -197,3 +197,35 @@ def test_medal_claimed_card_is_preferred_for_a_shipment():
     assert raw["certain"] == [] and len(raw["groups"]) == 1        # ohne Medaille: Glurak oder Lugia
     result = prefer_claimed(raw, {keys["Lugia"]})
     assert result["certain"] == [keys["Lugia"]] and result["groups"] == []
+
+
+def _glurak_pool():
+    return summarize_cards([card(1, 36740, hit=True, name="Glurak"), card(2, 35420, hit=True, name="Lugia"),
+                            card(3, 17710, hit=True, name="Pikachu"), card(4, 1980, copies=20),
+                            card(5, 660, copies=200), card(6, 330, copies=300)])
+
+
+def test_history_later_batch_resolves_earlier_ambiguity():
+    from utils.card_pool import match_shipment_history
+    pool = _glurak_pool()
+    keys = keys_by_name(pool)
+    first = [[8, 37900]]                                   # Glurak oder Lugia
+    alone = match_shipment_history(pool, first)
+    assert alone["certain"] == [] and len(alone["groups"]) == 1
+    # Späterer Einzelversand mit 33.400 (= Glurak / 1,1): Glurak ist jetzt weg -> erster Schub war Lugia
+    both = match_shipment_history(pool, first + [[1, 33400]])
+    assert sorted(both["certain"]) == sorted([keys["Glurak"], keys["Lugia"]]) and both["groups"] == []
+
+
+def test_history_skips_unexplainable_and_huge_batches():
+    from utils.card_pool import match_shipment_history
+    pool = _glurak_pool()
+    result = match_shipment_history(pool, [[1, 14900], [80, 999999], [1, 16100]])
+    assert result["certain"] == [keys_by_name(pool)["Pikachu"]] and result["used_batches"] == 1
+
+
+def test_history_uses_medal_to_resolve_group():
+    from utils.card_pool import match_shipment_history
+    pool = _glurak_pool()
+    result = match_shipment_history(pool, [[8, 37900]], claimed={keys_by_name(pool)["Lugia"]})
+    assert result["certain"] == [keys_by_name(pool)["Lugia"]] and result["groups"] == []
