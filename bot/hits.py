@@ -173,15 +173,14 @@ class HitsMixin:
                     groups = [g for g in match["groups"] if set(g["keys"]) & worth]
                     maybe = [g for g in match["maybe"] if set(g["keys"]) & worth]
                     if certain or groups or maybe:
-                        await self._announce_detected_hits(thread_id, pool, certain, groups, maybe,
-                                                           likely=match.get("likely", False))
+                        await self._announce_detected_hits(thread_id, pool, certain, groups, maybe)
                 await self._refresh_pool_views(pid)
                 await self._update_probability_message(thread_id, pid)
             except Exception as e:
                 logger.warning(f"[HIT] Fehler bei Banner {pid}: {e}")
 
     async def _announce_detected_hits(self, thread_id: int, pool: dict, certain: list,
-                                      groups: list = (), maybe: list = (), likely: bool = False):
+                                      groups: list = (), maybe: list = ()):
         thread = self.get_channel(thread_id) or await self.fetch_channel(thread_id)
         if not isinstance(thread, discord.Thread):
             return
@@ -196,7 +195,7 @@ class HitsMixin:
             unit = units[rank[key] - 1]
             card_text = f"{label[key]} ({fmt_coins(unit['value'])} Coins)"
             if unit["shipping_only"]:
-                lines.append(f"🔥 **Hit gezogen{' (sehr wahrscheinlich)' if likely else ''}:** {card_text}")
+                lines.append(f"🔥 **Hit gezogen:** {card_text}")
             elif rank[key] == 1:
                 lines.append(f"🔥 **T1 gezogen:** {card_text}")
             else:

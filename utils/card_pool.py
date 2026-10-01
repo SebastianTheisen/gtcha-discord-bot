@@ -255,11 +255,9 @@ def match_shipped_hits(pool: Dict, count: int, value: int, pulled_keys: Set[str]
       groups:  Hits, von denen sicher `pulled` Stück verschickt wurden, aber unklar welche
                (value/value_max: Wertspanne der Gruppe)
       maybe:   Einzelsendung, die zu Hits passt, aber auch zu einer normalen Karte (nicht sicher)
-      likely:  True, wenn das Ergebnis auf der Erklärung mit den wenigsten Hits beruht und es
-               daneben Zerlegungen mit mehr Hits gäbe
     Nicht zerlegbare oder zu große Sendungen liefern nichts.
     """
-    result = {"certain": [], "groups": [], "maybe": [], "likely": False}
+    result = {"certain": [], "groups": [], "maybe": []}
     if count <= 0 or value <= 0 or count > MAX_SHIPMENT_CARDS or value > MAX_SHIPMENT_VALUE:
         return result
     open_hits = [u for u in tracked_units(pool) if u["shipping_only"] and u["key"] not in pulled_keys]
@@ -290,14 +288,6 @@ def match_shipped_hits(pool: Dict, count: int, value: int, pulled_keys: Set[str]
     walk(0, [], 0.0, 0.0, 0)
     if not possible or len(possible) > 50000:
         return result
-
-    # Hits sind selten: die Erklärung mit den wenigsten Hits ist die wahrscheinlichste. Gibt es
-    # daneben Zerlegungen mit mehr Hits, ist das Ergebnis nur "wahrscheinlich" statt sicher.
-    fewest = min(sum(t) for t in possible)
-    if fewest > 0:
-        likely = [t for t in possible if sum(t) == fewest]
-        result["likely"] = len(likely) < len(possible)
-        possible = likely
 
     certain_per_class = [min(t[i] for t in possible) for i in range(len(classes))]
     for cls, n in zip(classes, certain_per_class):
