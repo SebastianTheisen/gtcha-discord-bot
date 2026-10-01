@@ -16,7 +16,7 @@ from aiohttp import web
 from loguru import logger
 
 from database.db import Database
-from webapp.images import ImageCache
+from webapp.images import ImageCache, content_type
 from webapp.push import EVENTS, PushService, build_events
 from webapp.view import BannerView
 
@@ -104,7 +104,8 @@ class App:
         path = await self.images.get(request.query.get("u", ""))
         if not path:
             raise web.HTTPNotFound()
-        return web.FileResponse(path, headers={"Cache-Control": f"public, max-age={IMAGE_MAX_AGE}, immutable"})
+        return web.FileResponse(path, headers={"Cache-Control": f"public, max-age={IMAGE_MAX_AGE}, immutable",
+                                               "Content-Type": content_type(path)})
 
     async def api_push_key(self, request):
         return web.json_response({"key": self.push.public_key(), "events": list(EVENTS)})
