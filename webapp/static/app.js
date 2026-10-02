@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 37;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 38;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -49,7 +49,7 @@ const IMG_VERSION = 2;
 const imgSrc = (u) => (/^https:\/\/([\w-]+\.)*gtchaxonline\.com\//.test(u)
   ? `/img?v=${IMG_VERSION}&u=${encodeURIComponent(u)}` : u);
 const img = (u, alt = "", eager = false) => (safeUrl(u)
-  ? `<img src="${esc(imgSrc(u))}" data-orig="${esc(u)}" alt="${esc(alt)}" loading="eager" decoding="async">` : "");
+  ? `<img src="${esc(imgSrc(u))}" data-orig="${esc(u)}" alt="${esc(alt)}" loading="eager">` : "");
 const evClass = (p) => (p == null ? "" : p >= 100 ? "good" : p >= 70 ? "ok" : "");
 const time = (t) => new Date(t * 1000).toLocaleString("de-DE", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 const coins = (n) => `<span class="coin"></span>${n ? num(n) : "Gratis"}`;
@@ -142,7 +142,6 @@ function row(b, rank) {
       ${flags(b)}
       <div class="row-card ${b.status === "hits_out" ? "done" : ""}" data-href="#/banner/${b.id}">
         <div class="media">
-          ${safeUrl(b.image) ? `<img class="media-bg" src="${esc(imgSrc(b.image))}" data-orig="${esc(b.image)}" alt="" aria-hidden="true">` : ""}
           ${img(b.image, b.title)}
           ${b.status !== "running" ? `<span class="status ${b.status}">${icon} ${label}</span>` : ""}
           <span class="price-pill">${coins(b.price)}</span>
