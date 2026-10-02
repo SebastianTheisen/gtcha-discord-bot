@@ -432,3 +432,10 @@ details.section > summary small { font-size: 13px; color: var(--muted); font-wei
 
 .gt-links { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .gt-links .btn { text-align: center; }
+
+/* Mein Verlauf (Reiter "Ich") */
+.hist-stats { margin-bottom: 6px; }
+.hint.pad { padding: 4px 14px 8px; }
+.sub-title { font-size: 14px; margin: 12px 14px 6px; color: var(--muted); font-weight: 700; }
+.sub-details { margin: 12px 0 0; }
+.sub-details > summary { font-size: 14px; font-weight: 700; color: var(--muted); padding: 4px 14px 8px; cursor: pointer; }

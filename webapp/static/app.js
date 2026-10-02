@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 47;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 48;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -594,7 +594,9 @@ async function showSettings() {
   const watched = Object.keys(prefs.watch);
   const options = banners.filter((b) => !prefs.watch[b.id]).sort((a, b) => b.id - a.id);
   const user = await me();
-  const medals = user ? await authApi("/api/me/medals").then((r) => r.medals).catch(() => []) : [];
+  const [medals, hist] = user ? await Promise.all([
+    authApi("/api/me/medals").then((r) => r.medals).catch(() => []),
+    authApi("/api/me/history").catch(() => null)]) : [[], null];
   view.innerHTML = `
     <div class="section-title">👤 ${user ? esc(user.name) : "Ich"}</div>
     ${linkPanel(user)}
@@ -607,6 +609,7 @@ async function showSettings() {
             <span class="muted"> · Banner ${m.banner_id}${m.t ? " · " + time(m.t) : ""}</span></span>
           <span class="muted">›</span></a>`).join("")
         : `<div class="line muted">Noch nichts gemeldet – auf einer Banner-Seite unter „Karten“ eine Karte antippen.</div>`}</div>` : ""}
+    ${user ? historySection(hist) : ""}
     <h2>🎖️ Mein Mitgliedsrang</h2>
     <div class="panel">
       <div class="add-watch">
@@ -929,7 +932,7 @@ async function speedTest(out) {
 
 // Abschnitte im Reiter "Ich" auf-/zuklappbar; offen/zu wird pro Abschnitt gemerkt
 function makeCollapsible(root) {
-  const open = JSON.parse(load("openSections", '["Discord verknüpfen","Meine gemeldeten Hits"]'));
+  const open = JSON.parse(load("openSections", '["Discord verknüpfen","Meine gemeldeten Hits","Mein Verlauf"]'));
   [...root.querySelectorAll(":scope > h2")].forEach((h2) => {
     const title = h2.textContent.replace(/^\W+/u, "").replace(/\s+\d.*$/, "").trim();
     const det = document.createElement("details");
@@ -991,7 +994,7 @@ const box=document.createElement('div');box.style.cssText='position:fixed;z-inde
 const say=t=>{box.textContent='GTCHA Tracker: '+t};
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const fr=document.createElement('iframe');fr.style.cssText='position:fixed;left:-3000px;top:0;width:420px;height:900px';document.body.appendChild(fr);
-const keep=/[¥￥]|coin|münz|rang|rank|\\d{4}[\\/.-]\\d{1,2}[\\/.-]\\d{1,2}|^[\\d.,\\s]+$/i;
+const keep=/[¥￥円]|coin|münz|ausgaben|rang|rank|20\\d{2}[\\/.-]\\d{1,2}[\\/.-]\\d{1,2}|^[\\d.,]{1,9}$/i;
 const grab=d=>({text:(d.location.pathname.includes('change-member')?d.body.innerText.split('\\n').filter(l=>keep.test(l)).join('\\n'):d.body.innerText).slice(0,40000),images:[...d.querySelectorAll('img')].map(i=>i.getAttribute('src')).filter(s=>s&&s.includes('/card/')).slice(0,400)});
 const settle=async()=>{let last='',same=0;for(let i=0;i<40;i++){await sleep(400);const d=fr.contentDocument;const t=d&&d.body?d.body.innerText:'';if(t&&t===last){if(++same>=6)return}else same=0;last=t}};
 const isNum=x=>x.children.length===0&&/^\\d+$/.test(x.textContent.trim());
@@ -1013,11 +1016,61 @@ f.appendChild(i);document.body.appendChild(f);f.submit()})()`;
   return "javascript:" + src.replace(/\n/g, "");
 }
 
+// --- Mein Verlauf (aus "Alles übertragen") ---
+const signed = (n) => `<span class="ev ${n > 0 ? "good" : n < 0 ? "bad" : ""}">${n > 0 ? "+" : ""}${num(n)}</span>`;
+const CLAIM_STATUS = { ok: "✅ gemeldet", rejected: "❌ abgelehnt", pending: "⏳ wird gemeldet" };
+
+function cardLine(c) {
+  return `<div class="line claim-row"><span class="claim-thumb">${img(c.image, c.name, false, 320)}</span>
+    <span class="claim-text"><b>${esc(c.name)}</b>${c.rarity ? ` <span class="muted">${esc(c.rarity)}</span>` : ""}<br>
+    <span class="muted">${esc(c.number || "")}${c.date ? " · " + esc(c.date.split("-").reverse().join(".")) : ""}</span></span></div>`;
+}
+
+function historySection(h) {
+  if (!h || h.empty) {
+    return `<h2>📊 Mein Verlauf</h2><div class="panel"><div class="hint">Noch keine Daten – unten bei „Eigene GTCHA-Daten“
+      das Lesezeichen „Alles übertragen“ einrichten und auf gtchaxonline.com antippen.</div></div>`;
+  }
+  const s = h.summary, t = s.total, m = h.member || {};
+  const banners = s.banners.map((b) => `
+    <a class="line claim-row" href="#/banner/${b.banner}">
+      <span class="claim-thumb">${img(b.image, "", false, 320)}</span>
+      <span class="claim-text"><b>${esc(b.title || "Banner " + b.banner)}</b><br>
+        <span class="muted">${b.pulls} Züge · ${num(b.spent)} rein · ${num(b.returned)} zurück</span></span>
+      <span>${signed(b.balance)}</span></a>`).join("");
+  const days = s.days.slice(0, 14).map((d) => `
+    <div class="line"><span>${esc(d.day.split("-").reverse().join("."))} <span class="muted">· ${d.opens} Öffnungen</span></span>
+      <span>${signed(d.balance)}</span></div>`).join("");
+  const claims = (h.auto_claims || []).map((c) => `
+    <a class="line" href="#/banner/${c.pack_id}"><span><b>${esc(c.tier)}</b> ${esc(c.title || "Banner " + c.pack_id)}
+      ${c.reason ? `<br><span class="muted">${esc(c.reason)}</span>` : ""}</span>
+      <span class="muted">${CLAIM_STATUS[c.status] || esc(c.status || "")}</span></a>`).join("");
+  return `<h2>📊 Mein Verlauf <small>Stand ${esc(h.saved_at.replace("T", " "))}</small></h2>
+    <div class="stats hist-stats">
+      ${m.spent_month_yen != null ? stat("Ausgaben diesen Monat", num(m.spent_month_yen) + " ¥", "laut Kontoseite") : ""}
+      ${m.coins != null ? stat("Coin-Stand", num(m.coins) + " Coins") : ""}
+      ${stat("Bilanz", signed(t.balance) + " Coins", `${num(t.spent)} ausgegeben · ${num(t.returned)} zurück`)}
+      ${t.bought ? stat("Coins gekauft", num(t.bought), num(t.bought_yen) + " ¥") : ""}
+    </div>
+    <div class="hint pad">Münzverlauf seit ${esc((s.since || "").split(" ")[0].split("-").reverse().join("."))} · ${t.opens} Öffnungen.
+      Zurück = in Münzen umgewandelte Karten (angeforderte Karten zählen nicht mit).</div>
+    ${banners ? `<h3 class="sub-title">Pro Banner</h3><div class="rows">${banners}</div>` : ""}
+    ${s.unassigned_opens ? `<div class="hint pad">${s.unassigned_opens} Öffnungen nicht zugeordnet – nur eindeutige Fälle
+      (Preis, Pack-Bewegung, Kartenwert) werden einem Banner zugerechnet.</div>` : ""}
+    ${days ? `<h3 class="sub-title">Pro Tag</h3><div class="rows">${days}</div>` : ""}
+    ${h.pending.length ? `<h3 class="sub-title">Angefordert, noch nicht verschickt (${h.pending.length})</h3>
+      <div class="rows">${h.pending.map(cardLine).join("")}</div>` : ""}
+    ${claims ? `<h3 class="sub-title">Automatisch gemeldete Medaillen</h3><div class="rows">${claims}</div>` : ""}
+    ${h.shipped.length ? `<details class="sub-details"><summary>Verschickt (${h.shipped.length})</summary>
+      <div class="rows">${h.shipped.map(cardLine).join("")}</div></details>` : ""}`;
+}
+
 function showImportDone(query) {
   const q = new URLSearchParams(query);
   view.innerHTML = `<div class="section-title">📥 Übertragen</div><div class="panel"><div class="hint">${q.get("error")
     ? "Dieses Lesezeichen gehört zu keinem verknüpften Gerät mehr – bitte im Reiter „Ich“ neu kopieren."
-    : `✅ ${esc(q.get("areas"))} Bereiche mit zusammen ${esc(q.get("pages"))} Seiten übertragen. Die Daten liegen nur auf deinem VPS.`}</div></div>`;
+    : `✅ ${esc(q.get("areas"))} Bereiche mit zusammen ${esc(q.get("pages"))} Seiten übertragen. Die Daten liegen nur auf deinem VPS.`
+      + (Number(q.get("claims")) ? `<br>🏅 ${esc(q.get("claims"))} Medaille(n) automatisch gemeldet – siehe „Mein Verlauf“.` : "")}</div></div>`;
   history.replaceState(null, "", "#/settings");
 }
 

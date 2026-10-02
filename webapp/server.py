@@ -13,12 +13,14 @@ import re
 import sys
 import time
 from pathlib import Path
+from typing import Dict
 
 from aiohttp import web
 from loguru import logger
 
 from database.db import Database
 from utils.app_bridge import MAX_IMPORT_BYTES, AppBridge
+from webapp.history import JST_OFFSET, build_history, parse_cards, parse_coins, plan_claims
 from webapp.images import ImageCache, content_type
 from webapp.push import DEFAULTS, EVENTS, WATCH_EVENTS, PushService, build_events
 from webapp.view import BannerView
@@ -185,7 +187,44 @@ class App:
             saved += 1
             pages += len(entry.get("pages") or [])
         logger.info(f"Sync von {user['name']}: {saved} Bereiche, {pages} Seiten")
-        raise web.HTTPSeeOther(f"/#/import-done?areas={saved}&pages={pages}")
+        claims = 0
+        try:
+            claims = len(await self.auto_claim(user))
+        except Exception as e:
+            logger.warning(f"Automatische Medaillen fehlgeschlagen: {type(e).__name__}: {e}")
+        raise web.HTTPSeeOther(f"/#/import-done?areas={saved}&pages={pages}&claims={claims}")
+
+    async def auto_claim(self, user: Dict) -> list:
+        """Angeforderte Karten (noch nicht verschickt) automatisch als Medaille melden, wenn eindeutig."""
+        areas = await self.bridge.latest_sync(user["user_id"])
+        cards = parse_cards((areas.get("pending-detail") or {}).get("pages") or [])
+        if not cards:
+            return []
+        banners, _ = await self.view.history_context(None)
+        planned = plan_claims(cards, banners, await self.view.claim_targets(), user["user_id"],
+                              await self.bridge.auto_claim_keys(user["user_id"]))
+        for p in planned:
+            await self.bridge.add_auto_claim(user, p["key"], p["pack_id"], p["tier"])
+            logger.info(f"Automatische Medaille für {user['name']}: {p['card']} -> {p['pack_id']} {p['tier']}")
+        return planned
+
+    async def api_my_history(self, request):
+        """Eigener Verlauf aus dem letzten "Alles übertragen" (nur für die verknüpfte Person)."""
+        user = await self._user(request)
+        if not user:
+            raise web.HTTPUnauthorized(text="Gerät nicht mit Discord verknüpft")
+        areas = await self.bridge.latest_sync(user["user_id"])
+        if not areas:
+            return web.json_response({"empty": True})
+        events = parse_coins((areas.get("buy-point-history") or {}).get("pages") or [])
+        since = min((e["t"] for e in events), default=None)
+        banners, moves = await self.view.history_context(since - JST_OFFSET if since else None)
+        data = build_history(areas, banners, moves)
+        data["saved_at"] = max(a.get("saved_at") or "" for a in areas.values())[:16]
+        data["auto_claims"] = await self.bridge.auto_claims(user["user_id"])
+        for c in data["auto_claims"]:
+            c["title"] = (banners.get(c["pack_id"]) or {}).get("title")
+        return web.json_response(data)
 
     async def api_unlink(self, request):
         token = request.headers.get("X-Device-Token")
@@ -299,6 +338,7 @@ def make_app(app: App) -> web.Application:
         web.post("/api/link", app.api_link),
         web.get("/api/me", app.api_me),
         web.get("/api/me/medals", app.api_my_medals),
+        web.get("/api/me/history", app.api_my_history),
         web.post("/api/unlink", app.api_unlink),
         web.post("/api/import", app.api_import),
         web.post("/api/import-form", app.api_import_form),

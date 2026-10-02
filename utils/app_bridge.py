@@ -8,6 +8,7 @@ Ablauf:
 """
 
 import hashlib
+import json
 import secrets
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
@@ -28,6 +29,9 @@ CREATE TABLE IF NOT EXISTS medal_requests (
     action TEXT, status TEXT DEFAULT 'pending', reason TEXT, created_at TEXT, done_at TEXT);
 CREATE TABLE IF NOT EXISTS user_imports (
     id INTEGER PRIMARY KEY AUTOINCREMENT, discord_user_id TEXT, kind TEXT, url TEXT, data TEXT, created_at TEXT);
+CREATE TABLE IF NOT EXISTS auto_claims (
+    discord_user_id TEXT, card_key TEXT, pack_id INTEGER, tier TEXT, request_id INTEGER, created_at TEXT,
+    PRIMARY KEY (discord_user_id, card_key));
 """
 MAX_IMPORT_BYTES = 8_000_000
 KEEP_IMPORTS = 100   # je Person
@@ -103,6 +107,45 @@ class AppBridge:
                 (user["user_id"], user["user_id"], KEEP_IMPORTS))
             await db.commit()
             return cur.lastrowid
+
+    async def latest_sync(self, user_id: str) -> Dict:
+        """Neuester Stand je Bereich aus "Alles übertragen": path -> {pages, ..., saved_at}."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute(
+                "SELECT url, data, created_at FROM user_imports WHERE id IN (SELECT max(id) FROM user_imports "
+                "WHERE discord_user_id = ? AND kind = 'sync' GROUP BY url)", (str(user_id),))
+            rows = await cur.fetchall()
+        areas = {}
+        for url, data, created in rows:
+            try:
+                areas[url.rsplit("/", 1)[-1]] = {**json.loads(data), "saved_at": created}
+            except ValueError:
+                continue
+        return areas
+
+    # --- Automatische Medaillen aus den angeforderten Karten (jede Karte nur einmal) ---
+    async def auto_claim_keys(self, user_id: str) -> set:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT card_key FROM auto_claims WHERE discord_user_id = ?", (str(user_id),))
+            return {r[0] for r in await cur.fetchall()}
+
+    async def add_auto_claim(self, user: Dict, card_key: str, pack_id: int, tier: str) -> int:
+        request_id = await self.add_request(pack_id, tier, user, "claim")
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("INSERT OR IGNORE INTO auto_claims (discord_user_id, card_key, pack_id, tier, request_id, "
+                             "created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                             (user["user_id"], card_key, pack_id, tier, request_id, _now()))
+            await db.commit()
+        return request_id
+
+    async def auto_claims(self, user_id: str) -> List[Dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT a.card_key, a.pack_id, a.tier, a.created_at, r.status, r.reason FROM auto_claims a "
+                "LEFT JOIN medal_requests r ON r.id = a.request_id WHERE a.discord_user_id = ? "
+                "ORDER BY a.created_at DESC LIMIT 50", (str(user_id),))
+            return [dict(r) for r in await cur.fetchall()]
 
     # --- Medaillen-Meldungen (App legt an, Bot arbeitet ab) ---
     async def add_request(self, pack_id: int, tier: str, user: Dict, action: str) -> int:
