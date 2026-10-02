@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 35;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 36;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -49,7 +49,7 @@ const IMG_VERSION = 2;
 const imgSrc = (u) => (/^https:\/\/([\w-]+\.)*gtchaxonline\.com\//.test(u)
   ? `/img?v=${IMG_VERSION}&u=${encodeURIComponent(u)}` : u);
 const img = (u, alt = "", eager = false) => (safeUrl(u)
-  ? `<img src="${esc(imgSrc(u))}" data-orig="${esc(u)}" alt="${esc(alt)}" loading="${eager ? "eager" : "lazy"}" decoding="async">` : "");
+  ? `<img src="${esc(imgSrc(u))}" data-orig="${esc(u)}" alt="${esc(alt)}" loading="eager" decoding="async">` : "");
 const evClass = (p) => (p == null ? "" : p >= 100 ? "good" : p >= 70 ? "ok" : "");
 const time = (t) => new Date(t * 1000).toLocaleString("de-DE", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 const coins = (n) => `<span class="coin"></span>${n ? num(n) : "Gratis"}`;
@@ -65,6 +65,14 @@ function buyHref(url) {
 }
 const openLink = (b, label = "Öffnen ↗") => (safeUrl(b.buy_url)
   ? `<a class="open-btn" href="${esc(buyHref(b.buy_url))}" target="_blank" rel="noopener noreferrer" data-stop>${label}</a>` : "");
+
+// HTML nur ersetzen, wenn es sich geändert hat - sonst laden alle Bilder neu (alle 30 s, beim Start doppelt)
+function setHtml(el, html) {
+  if (!el || el.__html === html) return false;
+  el.innerHTML = html;
+  el.__html = html;
+  return true;
+}
 
 // Bilder im Hintergrund in den Gerätespeicher holen (Service Worker), damit sie beim Blättern schon da sind
 function preloadImages(urls) {
@@ -280,14 +288,15 @@ function drawList() {
   view.querySelectorAll(".qf").forEach((el) => el.classList.toggle("on", active.includes(el.dataset.qf)));
   view.querySelector("#view-toggle").textContent = state.listView === "big" ? "☰ Kompakt" : "▦ Groß";
   view.querySelector("#count").textContent = q ? `${shown.length} Treffer für „${q}“` : `${shown.length} Banner`;
-  view.querySelector("#results").innerHTML = `
+  const changed = setHtml(view.querySelector("#results"), `
     ${shown.length ? (state.listView === "compact"
       ? `<div class="clist">${shown.map(compactRow).join("")}</div>`
       : `<div class="list">${shown.map((b) => row(b)).join("")}</div>`)
       : `<div class="empty">${q ? "Kein aktiver Banner gefunden – mit Enter die ID direkt öffnen"
         : active.length ? "Keine Banner für diese Filter" : "Keine Banner"}</div>`}
-    <div class="updated">Stand ${time(updated)}</div>`;
-  wireRows();
+    <div class="updated" id="updated"></div>`);
+  view.querySelector("#updated").textContent = `Stand ${time(updated)}`;
+  if (changed) wireRows();
 }
 
 async function showHot() {
@@ -393,7 +402,7 @@ function renderCards(b) {
   const page = Math.min(state.cardPage[b.id] || 1, pages);
   const shown = list.slice((page - 1) * perPage, page * perPage);
   const meId = state.me?.user_id || null;
-  box.innerHTML = `<div class="card-tools">
+  if (!setHtml(box, `<div class="card-tools">
       <div class="seg">${Object.entries(CARD_FILTERS).map(([k, label]) =>
         `<button class="seg-btn ${k === filter ? "on" : ""}" data-filter="${k}">${label}</button>`).join("")}</div>
       <button class="seg-btn size" data-size="${state.cardSize === "5" ? "4" : "5"}" aria-label="Kachelgröße">
@@ -401,7 +410,7 @@ function renderCards(b) {
     </div>
     ${list.length ? `<div class="tiles ${state.cardSize === "5" ? "small" : ""}">${shown.map((c) =>
       cardTile(c, b.price, unitsOf(b, c), meId)).join("")}</div>${pager(page, pages)}`
-      : `<div class="empty">Keine Karten für diesen Filter</div>`}`;
+      : `<div class="empty">Keine Karten für diesen Filter</div>`}`)) return;
   box.querySelectorAll("[data-filter]").forEach((el) => el.addEventListener("click", () => {
     state.cardFilter = el.dataset.filter; save("cardFilter", state.cardFilter); state.cardPage[b.id] = 1; renderCards(b);
   }));
@@ -454,6 +463,9 @@ async function showBanner(id) {
   const open = hits.filter((h) => h.state === "open").length;
   const left = b.total ? Math.max(0, Math.min(100, (b.remaining / b.total) * 100)) : 0;
   const tab = state.detailTab[b.id] || "overview";
+  const sig = JSON.stringify(b);
+  if (state.detailSig === sig && view.querySelector(".dtabs")) return;   // unverändert: Bilder nicht neu laden
+  state.detailSig = sig;
   view.innerHTML = `
     <a class="back" href="javascript:history.back()">‹ Zurück</a>
     ${flags(b)}
