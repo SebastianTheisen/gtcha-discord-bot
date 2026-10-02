@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 54;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 55;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -1033,7 +1033,8 @@ const CLAIM_STATUS = { ok: "✅ gemeldet", rejected: "❌ abgelehnt", pending: "
 function cardLine(c) {
   return `<div class="line claim-row"><span class="claim-thumb">${img(c.image, c.name, false, 320)}</span>
     <span class="claim-text"><b>${esc(c.name)}</b>${c.rarity ? ` <span class="muted">${esc(c.rarity)}</span>` : ""}<br>
-    <span class="muted">${esc(c.number || "")}${c.date ? " · " + esc(c.date.split("-").reverse().join(".")) : ""}</span></span></div>`;
+    <span class="muted">${esc(c.number || "")}${c.date ? " · " + esc(c.date.split("-").reverse().join(".")) : ""}</span>
+    ${c.value ? `<br><span class="claim-value">${num(c.value)} Coins</span>` : ""}</span></div>`;
 }
 
 function historySection(h) {
@@ -1046,8 +1047,14 @@ function historySection(h) {
     <a class="line claim-row" href="#/banner/${b.banner}">
       <span class="claim-thumb">${img(b.image, "", false, 320)}</span>
       <span class="claim-text"><b>${esc(b.title || "Banner " + b.banner)}</b><br>
-        <span class="muted">${b.pulls} Züge · ${num(b.spent)} rein · ${num(b.returned)} zurück</span></span>
-      <span>${signed(b.balance)}</span></a>`).join("");
+        <span class="muted">${b.pulls} Züge · ${num(b.spent)} rein · ${num(b.returned)} zurück${b.hits_value
+          ? ` · ${b.hits} Hit${b.hits > 1 ? "s" : ""} ${num(b.hits_value)}` : ""}</span>
+        ${b.luck_pct != null ? `<br><span class="pill ${b.luck_pct >= 100 ? "good" : ""}">${b.luck_pct >= 100 ? "🍀 Glück" : "🌧 Pech"} ${b.luck_pct} %</span>` : ""}</span>
+      <span>${signed(b.balance + (b.hits_value || 0))}</span></a>`).join("");
+  const monthName = (m) => new Date(m + "-01T00:00:00").toLocaleDateString("de-DE", { month: "long", year: "numeric" });
+  const monthRows = (s.months || []).map((m) => `
+    <div class="line"><span>${esc(monthName(m.month))} <span class="muted">· ${m.opens} Öffnungen${m.bought_yen
+      ? ` · ${num(m.bought_yen)} ¥ aufgeladen` : ""}</span></span><span>${signed(m.balance)}</span></div>`).join("");
   const days = s.days.slice(0, 14).map((d) => `
     <div class="line"><span>${esc(d.day.split("-").reverse().join("."))} <span class="muted">· ${d.opens} Öffnungen</span></span>
       <span>${signed(d.balance)}</span></div>`).join("");
@@ -1059,15 +1066,19 @@ function historySection(h) {
     <div class="stats hist-stats">
       ${m.spent_month_yen != null ? stat("Ausgaben diesen Monat", num(m.spent_month_yen) + " ¥", "laut Kontoseite") : ""}
       ${m.coins != null ? stat("Coin-Stand", num(m.coins) + " Coins") : ""}
-      ${stat("Bilanz", signed(t.balance) + " Coins", `${num(t.spent)} ausgegeben · ${num(t.returned)} zurück`)}
+      ${stat("Bilanz inkl. Hits", signed(t.balance_with_hits ?? t.balance) + " Coins",
+        `${num(t.spent)} rein · ${num(t.returned)} umgewandelt${t.hits ? ` · ${num(t.hits_value)} in ${t.hits} Hits` : ""}`)}
+      ${t.hits ? stat("Nur Coins", signed(t.balance) + " Coins", "ohne angeforderte/verschickte Karten") : ""}
       ${t.bought ? stat("Coins gekauft", num(t.bought), num(t.bought_yen) + " ¥") : ""}
     </div>
     ${h.gap ? `<div class="notice warn">⚠️ Im Verlauf fehlt evtl. etwas – einmal das Lesezeichen „Komplett übertragen“ benutzen.</div>` : ""}
     <div class="hint pad">Münzverlauf seit ${esc((s.since || "").split(" ")[0].split("-").reverse().join("."))} · ${t.opens} Öffnungen.
-      Zurück = in Münzen umgewandelte Karten (angeforderte Karten zählen nicht mit).</div>
+      Hits = angeforderte und verschickte Karten seit dann, mit ihrem Kartenwert. Glück/Pech: was du aus einem
+      Banner bekommen hast gegenüber dem Durchschnitt (Züge × Ø Wert je Pack).</div>
     ${banners ? `<h3 class="sub-title">Pro Banner</h3><div class="rows">${banners}</div>` : ""}
     ${s.unassigned_opens ? `<div class="hint pad">${s.unassigned_opens} Öffnungen nicht zugeordnet – nur eindeutige Fälle
       (Preis, Pack-Bewegung, Kartenwert) werden einem Banner zugerechnet.</div>` : ""}
+    ${monthRows ? `<h3 class="sub-title">Pro Monat</h3><div class="rows">${monthRows}</div>` : ""}
     ${days ? `<h3 class="sub-title">Pro Tag</h3><div class="rows">${days}</div>` : ""}
     ${h.pending.length ? `<h3 class="sub-title">Angefordert, noch nicht verschickt (${h.pending.length})</h3>
       <div class="rows">${h.pending.map(cardLine).join("")}</div>` : ""}
