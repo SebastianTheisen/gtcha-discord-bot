@@ -1,5 +1,5 @@
 // Service Worker: App-Hülle offline verfügbar halten, Push-Benachrichtigungen anzeigen.
-const CACHE = "gtcha-tracker-v32";
+const CACHE = "gtcha-tracker-v33";
 // Bilder dauerhaft auf dem Gerät halten (iOS leert den normalen Browser-Cache installierter Apps oft)
 const IMG_CACHE = "gtcha-img-v1";
 const IMG_MAX = 4000;
@@ -27,9 +27,36 @@ async function cachedImage(request) {
   }
   return res;
 }
+// Vorladen auf Wunsch der Seite: fehlende Bilder im Hintergrund holen (höchstens 6 gleichzeitig)
+let preloadQueue = [];
+let preloadRunning = 0;
+async function preloadNext() {
+  if (preloadRunning >= 6 || !preloadQueue.length) return;
+  const url = preloadQueue.shift();
+  preloadRunning++;
+  try {
+    const cache = await caches.open(IMG_CACHE);
+    if (!(await cache.match(url))) {
+      const res = await fetch(url);
+      if (res.ok) await cache.put(url, res);
+    }
+  } catch (e) { /* nächstes Bild */ }
+  preloadRunning--;
+  preloadNext();
+}
+self.addEventListener("message", (event) => {
+  if (event.data?.type !== "preload") return;
+  const urls = (event.data.urls || []).filter((u) => typeof u === "string" && u.startsWith("/img?"));
+  // neue Wünsche zuerst (die gerade geöffnete Seite)
+  preloadQueue = [...new Set([...urls, ...preloadQueue])].slice(0, 3000);
+  for (let i = 0; i < 6; i++) preloadNext();
+  trimImages(caches.open(IMG_CACHE));
+});
+
 let trimming = false;
-async function trimImages(cache) {
+async function trimImages(cachePromise) {
   if (trimming) return;
+  const cache = await cachePromise;
   trimming = true;
   try {
     const keys = await cache.keys();
