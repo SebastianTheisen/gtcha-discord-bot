@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 59;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 60;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -989,6 +989,7 @@ const SYNC_PAGES = ["undecided-detail", "pending-detail", "shipped-detail", "dow
 // Nur Neues: Das Lesezeichen merkt sich (im Speicher von gtchaxonline.com auf diesem Gerät) den neuesten
 // Eintrag je Verlaufsbereich und hört auf zu blättern, sobald eine Seite ihn enthält. Der VPS hängt dann
 // nur das Neue an. Alle 30 Tage (oder mit "komplett") wird wieder alles übertragen.
+const SYNC_VERSION = 3;    // mit BOOKMARKLET_VERSION in webapp/server.py erhöhen, wenn sich das Lesezeichen ändert
 const SYNC_PARALLEL = 4;   // Bereiche gleichzeitig (je ein unsichtbares Fenster)
 const SYNC_INCREMENTAL = ["buy-point-history", "shipped-detail", "ticket-history", "purchase-history", "downloaded-detail"];
 function bookmarkletSync(token, full = false) {
@@ -1026,7 +1027,7 @@ say('lade '+P.length+' Bereiche gleichzeitig …');
 let next=0;await Promise.all(Array.from({length:PAR},async()=>{while(next<P.length){const i=next++;await area(P[i],i)}}));
 say('sende …');try{localStorage.setItem(LS,JSON.stringify(NM))}catch(e){}
 const f=document.createElement('form');f.method='POST';f.action=${JSON.stringify(location.origin)}+'/api/import-form';
-const i=document.createElement('input');i.type='hidden';i.name='d';i.value=JSON.stringify({t:${JSON.stringify(token)},at:new Date().toISOString(),ms:Date.now()-T0,pages:out.filter(Boolean)});
+const i=document.createElement('input');i.type='hidden';i.name='d';i.value=JSON.stringify({t:${JSON.stringify(token)},v:${SYNC_VERSION},at:new Date().toISOString(),ms:Date.now()-T0,pages:out.filter(Boolean)});
 f.appendChild(i);document.body.appendChild(f);f.submit()})()`;
   return "javascript:" + src.replace(/\n/g, "");
 }

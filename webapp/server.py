@@ -29,6 +29,7 @@ from webapp.view import BannerView, banner_label
 
 STATIC = Path(__file__).parent / "static"
 REFRESH_SECONDS = 20
+BOOKMARKLET_VERSION = 3   # = SYNC_VERSION in app.js; ältere Lesezeichen bekommen einen Hinweis
 POOL_KEYS = ("hits", "hit_keys_detected", "cards_brief", "out_ids")   # nur intern / Detailseite
 SEARCH_LIMIT = 40
 
@@ -284,6 +285,9 @@ class App:
             lines.append(f"🪙 Münzverlauf: {max(0, added['coins'])} neue Buchung(en).")
         if "shipped" in added:
             lines.append(f"📦 Versand: {max(0, added['shipped'])} neue Karte(n).")
+        if int(data.get("v") or 0) < BOOKMARKLET_VERSION:
+            lines.append("🔁 Dein Lesezeichen ist veraltet – in der App unter „Ich“ → „Eigene GTCHA-Daten“ neu "
+                         "kopieren und im Safari-Lesezeichen ersetzen.")
         if failed:
             lines.append(f"⚠️ Nicht geladen: {', '.join(AREA_NAMES.get(p, p) for p in failed)} – der gespeicherte Stand "
                          f"bleibt erhalten. Einfach noch einmal übertragen.")

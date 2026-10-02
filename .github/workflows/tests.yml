@@ -14,6 +14,8 @@ jobs:
           python-version: "3.11"
       - name: Abhängigkeiten installieren
         run: pip install -r requirements.txt -r requirements-dev.txt -r requirements-webapp.txt
+      - name: Browser für den Oberflächen-Test
+        run: python -m playwright install --with-deps chromium
       - name: Tests
         run: python -m pytest -q tests
       - name: Syntax aller Module prüfen

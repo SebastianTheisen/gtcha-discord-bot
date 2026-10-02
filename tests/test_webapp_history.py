@@ -272,3 +272,12 @@ def test_failed_area_keeps_stored_history(tmp_path):
         await client.close()
 
     asyncio.run(run())
+
+
+def test_bookmarklet_version_matches_app():
+    import re as _re
+    from pathlib import Path
+
+    from webapp.server import BOOKMARKLET_VERSION
+    js = (Path(__file__).parent.parent / "webapp" / "static" / "app.js").read_text()
+    assert int(_re.search(r"const SYNC_VERSION = (\d+);", js).group(1)) == BOOKMARKLET_VERSION
