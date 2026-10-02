@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 36;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 37;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -858,6 +858,20 @@ async function speedTest(out) {
   out.textContent = "Messe …";
   const ms = (t) => `${Math.round(performance.now() - t)} ms`;
   const lines = [];
+  // Echte Bilder seit dem App-Start (vor dem Test): wann angefordert, wie lange unterwegs
+  const real = performance.getEntriesByType("resource").filter((e) => e.name.includes("/img?") && !e.name.includes("nosw"));
+  const data = performance.getEntriesByType("resource").find((e) => e.name.includes("/api/banners"));
+  if (real.length) {
+    const r = (n) => Math.round(n);
+    const starts = real.map((e) => e.startTime), ends = real.map((e) => e.responseEnd), durs = real.map((e) => e.duration);
+    lines.push(`— Seit App-Start: ${real.length} Bilder —`);
+    if (data) lines.push(`Daten fertig nach: ${r(data.responseEnd)} ms`);
+    lines.push(`Erstes Bild angefordert nach: ${r(Math.min(...starts))} ms`);
+    lines.push(`Erstes Bild fertig nach: ${r(Math.min(...ends))} ms`);
+    lines.push(`Letztes Bild fertig nach: ${r(Math.max(...ends))} ms`);
+    lines.push(`Dauer pro Bild: Ø ${r(durs.reduce((a, b) => a + b, 0) / durs.length)} ms, max ${r(Math.max(...durs))} ms`);
+    lines.push("— Test jetzt —");
+  }
   let t = performance.now();
   const { banners } = await api("/api/banners");
   lines.push(`Daten (Bannerliste): ${ms(t)}`);
