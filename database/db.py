@@ -19,14 +19,17 @@ PACK_HISTORY_DAYS = 90
 
 
 def archive_pool(pool_json) -> tuple:
-    """(Kartenwerte, Karten-IDs) eines Kartenpools als JSON für banner_archive."""
+    """(Kartenwerte + Ø je Pack, Karten-ID -> Wert) eines Kartenpools als JSON für banner_archive."""
     try:
         pool = json.loads(pool_json) if pool_json else {}
     except ValueError:
         pool = {}
     cards = (pool.get("cards") or []) + (pool.get("hits") or [])
     values = sorted({int(c["value"]) for c in pool.get("cards") or [] if c.get("value")})
-    return json.dumps(values), json.dumps(sorted({str(c.get("id")) for c in cards if c.get("id") is not None}))
+    total, count = pool.get("total_value"), pool.get("total_count")
+    avg = round(int(total) / int(count)) if total and count else None
+    ids = {str(c.get("id")): int(c.get("value") or 0) for c in cards if c.get("id") is not None}
+    return json.dumps({"values": values, "avg": avg}), json.dumps(ids)
 
 class Database:
     def __init__(self, db_path: str = DATABASE_PATH):

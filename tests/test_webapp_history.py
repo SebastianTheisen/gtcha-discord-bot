@@ -68,8 +68,8 @@ def test_attribution_unique_only():
     s = data["summary"]
     assert s["total"]["spent"] == 3010 and s["total"]["returned"] == 1980 and s["total"]["bought_yen"] == 8000
     assert s["unassigned_opens"] == 1
-    assert s["banners"][0] == {"banner": 1, "spent": 3000, "pulls": 3, "returned": 1980, "balance": -1020,
-                               "title": "A", "image": None, "price": 1000}
+    assert {k: s["banners"][0][k] for k in ("banner", "spent", "pulls", "returned", "balance", "title", "price")} == {
+        "banner": 1, "spent": 3000, "pulls": 3, "returned": 1980, "balance": -1020, "title": "A", "price": 1000}
 
 
 def test_plan_claims_only_when_unique_and_free():
@@ -201,3 +201,27 @@ def test_archive_keeps_ended_banners_for_history(tmp_path):
         assert not banners[5]["active"] and len(moves[5]) == 1
 
     asyncio.run(run())
+
+
+def test_real_balance_with_hits_luck_and_months():
+    from webapp.history import build_from_stored
+    page = {"text": COINS}
+    stored = ingest({}, [{"path": "buy-point-history", "pages": [page]},
+                         {"path": "pending-detail", "pages": [{"text": PENDING, "images": [IMG.format(1), IMG.format(2), IMG.format(3)]}]}])
+    # Banner 1: Ø 800 je Pack, enthält Karte 1 (Pikachu, 45.000) - Anfragedatum 28.09. liegt aber vor dem Münzverlauf
+    # (ab 30.09.), Karte 2 (Buggy) ist in keinem Banner -> zählt nicht
+    banners = {1: {"price": 1000, "values": {660}, "title": "A", "created": "2026-09-01", "avg": 800,
+                   "card_ids": {"1"}, "card_values": {"1": 45000}}}
+    utc = lambda h, m: datetime(2026, 10, 1, h - 9, m, 30)
+    h = build_from_stored(stored, banners, {1: [utc(21, 6), utc(21, 9)]})
+    t = h["summary"]["total"]
+    assert t["hits"] == 0 and t["balance_with_hits"] == t["balance"]
+    assert h["pending"][0]["value"] == 45000 and h["pending"][1]["value"] is None
+    # gleiche Karte, aber angefordert am 01.10. (im Münzverlauf) -> zählt als Hit von Banner 1
+    stored["pending"]["items"][0]["date"] = "2026-10-01"
+    h = build_from_stored(stored, banners, {1: [utc(21, 6), utc(21, 9)]})
+    t, row = h["summary"]["total"], h["summary"]["banners"][0]
+    assert t["hits"] == 1 and t["balance_with_hits"] == t["balance"] + 45000
+    assert row["hits_value"] == 45000 and row["luck_pct"] == round((row["returned"] + 45000) / (row["pulls"] * 800) * 100)
+    m = {x["month"]: x for x in h["summary"]["months"]}
+    assert m["2026-10"]["bought_yen"] == 8000 and m["2026-09"]["spent"] == 10 and m["2026-10"]["opens"] == 2

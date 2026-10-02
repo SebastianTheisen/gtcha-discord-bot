@@ -356,19 +356,78 @@ def stored_events(stored: Dict[str, Dict]) -> List[Dict]:
     return [{**e, "t": datetime.strptime(e["t"], TIME_FMT)} for e in (stored.get("coins") or {}).get("items") or []]
 
 
+def card_worth(card: Dict, banners: Dict[int, Dict]) -> Optional[int]:
+    """Kartenwert (Coins beim Umwandeln) einer gezogenen Karte: aus dem jüngsten Banner, der beim Ziehen
+    schon lief und die Karte enthält (gleiche Karte kann je Banner etwas anders bewertet sein)."""
+    cid, date = card.get("card_id"), card.get("date") or ""
+    found = [(b.get("created") or "", b["card_values"][cid]) for b in banners.values()
+             if cid and cid in (b.get("card_values") or {}) and (b.get("created") or "") <= date]
+    return max(found)[1] if found else None
+
+
+def add_hits(summary: Dict, cards: List[Dict], banners: Dict[int, Dict]) -> None:
+    """Gezogene Karten (angefordert/verschickt) seit Beginn des Münzverlaufs als Wert in die Bilanz;
+    einem Banner zugerechnet, wenn sie in genau einem der Banner steckt, aus denen gezogen wurde.
+    Dazu Glück/Pech je Banner: (zurück + Hits) gegenüber Züge × Ø Wert je Pack."""
+    since = (summary.get("since") or "")[:10]
+    pulled_from = {row["banner"]: row for row in summary["banners"]}
+    count = value = 0
+    for card in cards:
+        if not since or (card.get("date") or "") < since:
+            continue
+        worth = card_worth(card, banners)
+        if worth is None:
+            continue
+        count += 1
+        value += worth
+        hits = [pid for pid in pulled_from if card.get("card_id") in (banners.get(pid) or {}).get("card_ids", ())]
+        if len(hits) == 1:
+            row = pulled_from[hits[0]]
+            row["hits"] = row.get("hits", 0) + 1
+            row["hits_value"] = row.get("hits_value", 0) + worth
+    total = summary["total"]
+    total.update(hits=count, hits_value=value, balance_with_hits=total["balance"] + value)
+    for row in summary["banners"]:
+        avg = (banners.get(row["banner"]) or {}).get("avg")
+        got = row["returned"] + row.get("hits_value", 0)
+        row["luck_pct"] = round(got / (row["pulls"] * avg) * 100) if avg and row["pulls"] else None
+
+
+def months(events: List[Dict]) -> List[Dict]:
+    """Monatsübersicht (JST): Coins rein/zurück, gekaufte Coins und Yen."""
+    out = defaultdict(lambda: {"spent": 0, "returned": 0, "opens": 0, "bought": 0, "bought_yen": 0})
+    for e in events:
+        m = out[e["t"].strftime("%Y-%m")]
+        if e["kind"] == "open" and e["amount"] < 0:
+            m["spent"] += -e["amount"]
+            m["opens"] += 1
+        elif e["kind"] == "convert" and e["amount"] > 0:
+            m["returned"] += e["amount"]
+        elif e["kind"] == "buy":
+            m["bought"] += e["amount"]
+            m["bought_yen"] += e["yen"]
+    return [{"month": k, **v, "balance": v["returned"] - v["spent"]} for k, v in sorted(out.items(), reverse=True)]
+
+
 def build_from_stored(stored: Dict[str, Dict], banners: Dict[int, Dict], moves: Dict[int, List[datetime]]) -> Dict:
     """Auswertung aus dem gespeicherten (zusammengeführten) Verlauf."""
     events = stored_events(stored)
     attribute_opens(events, banners, moves)
     summary = summarize(events)
+    pending = (stored.get("pending") or {}).get("items") or []
+    shipped = (stored.get("shipped") or {}).get("items") or []
+    add_hits(summary, pending + shipped, banners)
+    summary["months"] = months(events)
     for row in summary["banners"]:
         b = banners.get(row["banner"]) or {}
         row.update(title=b.get("title"), image=b.get("image"), price=b.get("price"))
+    for card in pending + shipped:
+        card["value"] = card_worth(card, banners)
     return {
         "member": (stored.get("member") or {}).get("info") or {"coins": None, "spent_month_yen": None},
         "summary": summary,
-        "pending": (stored.get("pending") or {}).get("items") or [],
-        "shipped": (stored.get("shipped") or {}).get("items") or [],
+        "pending": pending,
+        "shipped": shipped,
         "gap": any((stored.get(a) or {}).get("gap") for a in ("coins", "shipped")),
         "events": [{k: v for k, v in {**e, "t": e["t"].strftime(TIME_FMT)}.items() if k != "candidates"}
                    for e in events[:300]],

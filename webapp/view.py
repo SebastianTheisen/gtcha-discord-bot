@@ -49,20 +49,29 @@ def _history_banners(rows, archived) -> Dict[int, Dict]:
     banners = {}
     for pid, title, category, best_hit, price, image, created, ended, values, ids in archived:
         try:
-            values, ids = set(json.loads(values or "[]")), set(json.loads(ids or "[]"))
+            values, ids = json.loads(values or "[]"), json.loads(ids or "[]")
         except ValueError:
-            values, ids = set(), set()
+            values, ids = [], []
+        # ältere Einträge: Liste der Werte / Liste der IDs; neuere: {"values", "avg"} / {ID: Wert}
+        avg = values.get("avg") if isinstance(values, dict) else None
+        values = set(values.get("values") or []) if isinstance(values, dict) else set(values)
+        card_values = ids if isinstance(ids, dict) else {}
         banners[pid] = {"price": to_int(price), "title": banner_label(title, best_hit, category, price), "image": image,
-                        "active": False, "created": (created or "")[:10], "values": values, "card_ids": ids}
+                        "active": False, "created": (created or "")[:10], "values": values, "card_ids": set(ids),
+                        "card_values": card_values, "avg": avg}
     for pid, title, category, best_hit, price, image, active, created, pool_json in rows:
         try:
             pool = json.loads(pool_json) if pool_json else {}
         except ValueError:
             pool = {}
+        cards = (pool.get("cards") or []) + (pool.get("hits") or [])
+        total, count = pool.get("total_value"), pool.get("total_count")
         banners[pid] = {"price": to_int(price), "title": banner_label(title, best_hit, category, price), "image": image,
                         "active": bool(active), "created": (created or "")[:10],
                         "values": {int(c["value"]) for c in pool.get("cards") or [] if c.get("value")},
-                        "card_ids": {str(c.get("id")) for c in (pool.get("cards") or []) + (pool.get("hits") or [])}}
+                        "card_ids": {str(c.get("id")) for c in cards if c.get("id") is not None},
+                        "card_values": {str(c.get("id")): to_int(c.get("value")) for c in cards if c.get("id") is not None},
+                        "avg": round(to_int(total) / to_int(count)) if total and count else None}
     return banners
 
 
