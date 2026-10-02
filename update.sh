@@ -4,6 +4,17 @@
 set -e
 cd "$(dirname "$0")"
 
+# .env vorab prüfen: jede Zeile NAME=Wert (ohne Leerzeichen im Namen) - zeigt nur Zeilennummer und Namen, nie Werte
+if [ -f .env ]; then
+  bad=$(grep -nvE '^[[:space:]]*(#.*)?$|^[A-Za-z_][A-Za-z0-9_]*=' .env | cut -d= -f1 | cut -c1-40)
+  if [ -n "$bad" ]; then
+    echo "❌ Die .env hat ungültige Zeilen (erwartet NAME=Wert, ohne Leerzeichen um das =):"
+    echo "$bad" | sed 's/^/   Zeile /'
+    echo "   Korrigieren mit:  nano .env"
+    exit 1
+  fi
+fi
+
 old=$(git rev-parse HEAD)
 git pull --ff-only origin main
 new=$(git rev-parse HEAD)
