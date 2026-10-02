@@ -351,3 +351,14 @@ def test_medal_places_strictly_by_value():
     pool = summarize_cards([card(1, 50000, hit=True), card(7, 90000), card(2, 30000, hit=True)])
     assert [u["key"] for u in claimable_units(pool, 1000)] == ["7", "1", "2"]
     assert [(u["key"], u["tier"]) for u in tracked_units(pool)] == [("1", "T2"), ("2", "T3")]
+
+
+def test_medal_units_stay_fast_for_huge_pools():
+    # Wie 24060: über 100.000 Exemplare - es dürfen nur die nötigen Einheiten erzeugt werden
+    import time
+    from utils.card_pool import medal_units
+    pool = summarize_cards([card(i, 100 + i, copies=1000) for i in range(116)])
+    started = time.perf_counter()
+    for _ in range(20):
+        units = medal_units(pool)
+    assert len(units) == 50 and time.perf_counter() - started < 0.5
