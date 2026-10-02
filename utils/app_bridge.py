@@ -226,6 +226,17 @@ class AppBridge:
             await db.commit()
             return cur.lastrowid
 
+    async def raw_import_users(self) -> List[str]:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT DISTINCT discord_user_id FROM user_imports")
+            return [r[0] for r in await cur.fetchall()]
+
+    async def delete_raw_imports(self):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("DELETE FROM user_imports")
+            await db.commit()
+            await db.execute("VACUUM")
+
     async def latest_sync(self, user_id: str) -> Dict:
         """Neuester Stand je Bereich aus "Alles übertragen": path -> {pages, ..., saved_at}."""
         async with aiosqlite.connect(self.db_path) as db:

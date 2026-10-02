@@ -33,6 +33,10 @@ from webapp.view import BannerView, banner_label
 STATIC = Path(__file__).parent / "static"
 REFRESH_SECONDS = 20
 BOOKMARKLET_VERSION = 3   # = SYNC_VERSION in app.js; ältere Lesezeichen bekommen einen Hinweis
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+       "img-src 'self' data: https://gtchaxonline.com https://*.gtchaxonline.com; connect-src 'self'; "
+       "manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; "
+       "form-action 'self'")
 POOL_KEYS = ("hits", "hit_keys_detected", "cards_brief", "out_ids")   # nur intern / Detailseite
 SEARCH_LIMIT = 40
 
@@ -308,8 +312,6 @@ class App:
                 # Bereich nicht geladen: nichts überschreiben (ein leerer Münzverlauf würde sonst alles ersetzen)
                 report.append((path, None, str(entry.get("error") or "keine Seite")))
                 continue
-            await self.bridge.add_import(user, "sync", f"https://gtchaxonline.com/{path}",
-                                         json.dumps(entry, ensure_ascii=False))
             entries.append({"path": path, "pages": entry.get("pages") or [], "partial": bool(entry.get("partial"))})
             report.append((path, n, "nur Neues" if entry.get("partial") else "komplett"))
             saved += 1
@@ -367,6 +369,19 @@ class App:
             await self.bridge.add_auto_claim(user, p["key"], p["pack_id"], p["tier"])
             logger.info(f"Automatische Medaille für {user['name']}: {p['card']} -> {p['pack_id']} {p['tier']}")
         return planned
+
+    async def migrate_raw_imports(self):
+        """Einmalig: alte Rohdaten der Lesezeichen in den ausgewerteten Verlauf übernehmen (falls noch nicht
+        geschehen) und dann löschen - gespeichert wird nur noch der Verlauf."""
+        try:
+            users = await self.bridge.raw_import_users()
+            for user_id in users:
+                await self.history({"user_id": user_id})
+            if users:
+                await self.bridge.delete_raw_imports()
+                logger.info(f"Rohdaten der Lesezeichen gelöscht ({len(users)} Nutzer, Verlauf bleibt)")
+        except Exception as e:
+            logger.warning(f"Rohdaten nicht aufgeräumt: {e}")
 
     async def history(self, user: Dict) -> Dict:
         """Gespeicherter Verlauf; beim ersten Mal aus dem letzten vollständigen Lauf übernommen."""
@@ -532,8 +547,10 @@ class App:
 
     async def api_push_test(self, request):
         body = await request.json()
-        await self.push.send("test", "🔔 Test", "Push-Benachrichtigungen funktionieren.",
-                             only=str(body.get("endpoint", "")))
+        endpoint = str(body.get("endpoint", ""))
+        if not endpoint:   # ohne eigenes Abo nichts senden (sonst ginge der Test an alle Geräte)
+            raise web.HTTPBadRequest(text="Kein Push-Abo")
+        await self.push.send("test", "🔔 Test", "Push-Benachrichtigungen funktionieren.", only=endpoint)
         return web.json_response({"ok": True})
 
     # --- Seiten ---
@@ -608,6 +625,8 @@ async def security_headers(request, handler):
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("Referrer-Policy", "no-referrer")
     response.headers.setdefault("X-Frame-Options", "DENY")
+    # nur eigene Skripte; Bilder vom VPS (Notfall direkt von GTCHA); keine fremden Verbindungen oder Rahmen
+    response.headers.setdefault("Content-Security-Policy", CSP)
     return response
 
 
@@ -652,6 +671,7 @@ def make_app(app: App) -> web.Application:
     async def start_background(_):
         await app.push.init()
         await app.bridge.init()
+        await app.migrate_raw_imports()
         await app.accuracy.init()
         web_app["refresh_task"] = asyncio.create_task(app.refresh_loop())
         web_app["push_task"] = asyncio.create_task(app.push_loop())

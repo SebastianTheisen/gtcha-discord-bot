@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 69;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 70;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -730,9 +730,9 @@ async function showSettings() {
     </div>
     <h2>ℹ️ Über diese App</h2>
     <div class="panel"><div class="hint">Inoffiziell, kein Angebot von GTCHA · Version ${APP_VERSION}</div></div>
-    <h2>⏱ Geschwindigkeit</h2>
+    ${admin ? `<h2>⏱ Geschwindigkeit <small>Admin</small></h2>
     <div class="panel"><button class="btn" id="speed">Geschwindigkeit testen</button>
-      <div class="hint" id="speed-out"></div></div>`;
+      <div class="hint" id="speed-out"></div></div>` : ""}`;
   view.querySelectorAll("#bm-sync, #bm-full").forEach((btn) => btn.addEventListener("click", async () => {
     const code = bookmarkletSync(deviceToken(), btn.id === "bm-full");
     const msg = view.querySelector("#bm-msg");
@@ -1424,17 +1424,6 @@ async function showInbox() {
   draw(res.unread);
 }
 
-function showImportDone(query) {
-  const q = new URLSearchParams(query);
-  view.innerHTML = `<div class="section-title">📥 Übertragen</div><div class="panel"><div class="hint">${q.get("error")
-    ? "Dieses Lesezeichen gehört zu keinem verknüpften Gerät mehr – bitte im Reiter „Ich“ neu kopieren."
-    : `✅ ${esc(q.get("areas"))} Bereiche mit zusammen ${esc(q.get("pages"))} Seiten übertragen. Die Daten liegen nur auf deinem VPS.`
-      + (Number(q.get("new")) ? `<br>➕ ${esc(q.get("new"))} Bereich(e) nur mit neuen Einträgen.` : "")
-      + (q.get("gap") ? `<br>⚠️ Zwischen alt und neu fehlt evtl. etwas – einmal „Komplett übertragen“ benutzen.` : "")
-      + (Number(q.get("claims")) ? `<br>🏅 ${esc(q.get("claims"))} Medaille(n) automatisch gemeldet – siehe „Mein Verlauf“.` : "")}</div></div>`;
-  history.replaceState(null, "", "#/settings");
-}
-
 function post(body) {
   return { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
 }
@@ -1457,8 +1446,6 @@ async function route() {
     window.scrollTo({ top: 0 });
     return;
   }
-  const done = hash.match(/^#\/import-done\?(.*)$/);
-  if (done) { showImportDone(done[1]); return; }
   const banner = hash.match(/^#\/banner\/(\d+)/);
   document.querySelectorAll(".tabbar a").forEach((a) => a.classList.toggle("active", a.dataset.tab === tab && !banner));
   const render = banner ? () => showBanner(banner[1]) : tab === "hot" ? showHot : tab === "settings" ? showSettings
