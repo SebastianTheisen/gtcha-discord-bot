@@ -59,6 +59,11 @@ class AppBridge:
                 "DELETE FROM user_imports WHERE id NOT IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER "
                 "(PARTITION BY discord_user_id ORDER BY id DESC) AS n FROM user_imports) WHERE n <= ?)", (KEEP_IMPORTS,))
             removed = cur.rowcount
+            for column in ("last_seen TEXT", "agent TEXT"):   # Geräte verwalten: zuletzt aktiv, Gerätetyp
+                try:
+                    await db.execute(f"ALTER TABLE devices ADD COLUMN {column}")
+                except aiosqlite.OperationalError:
+                    pass
             try:   # Push zum Ergebnis automatischer Medaillen - bisherige gelten als erledigt
                 await db.execute("ALTER TABLE auto_claims ADD COLUMN notified INTEGER DEFAULT 0")
                 await db.execute("UPDATE auto_claims SET notified = 1")
@@ -78,7 +83,7 @@ class AppBridge:
             await db.commit()
         return code
 
-    async def redeem_code(self, code: str) -> Optional[Dict]:
+    async def redeem_code(self, code: str, agent: str = "") -> Optional[Dict]:
         """Gültiger Code -> neues Gerät {token, user_id, name}; sonst None."""
         code = (code or "").strip().upper().replace(" ", "")
         cutoff = (datetime.now() - timedelta(minutes=CODE_MINUTES)).isoformat()
@@ -90,8 +95,8 @@ class AppBridge:
                 return None
             token = secrets.token_urlsafe(32)
             await db.execute("UPDATE link_codes SET used = 1 WHERE code = ?", (code,))
-            await db.execute("INSERT INTO devices (token_hash, discord_user_id, discord_name, created_at) "
-                             "VALUES (?, ?, ?, ?)", (_hash(token), row[0], row[1], _now()))
+            await db.execute("INSERT INTO devices (token_hash, discord_user_id, discord_name, created_at, last_seen, agent) "
+                             "VALUES (?, ?, ?, ?, ?, ?)", (_hash(token), row[0], row[1], _now(), _now(), agent[:40]))
             await db.commit()
         return {"token": token, "user_id": row[0], "name": row[1]}
 
@@ -99,10 +104,30 @@ class AppBridge:
         if not token:
             return None
         async with aiosqlite.connect(self.db_path) as db:
-            cur = await db.execute("SELECT discord_user_id, discord_name FROM devices WHERE token_hash = ?",
+            cur = await db.execute("SELECT discord_user_id, discord_name, last_seen FROM devices WHERE token_hash = ?",
                                    (_hash(token),))
             row = await cur.fetchone()
+            # "zuletzt aktiv" höchstens stündlich schreiben
+            if row and (not row[2] or row[2] < (datetime.now() - timedelta(hours=1)).isoformat()):
+                await db.execute("UPDATE devices SET last_seen = ? WHERE token_hash = ?", (_now(), _hash(token)))
+                await db.commit()
         return {"user_id": row[0], "name": row[1]} if row else None
+
+    async def devices(self, user_id: str) -> List[Dict]:
+        """Alle verknüpften Geräte einer Person (Kennung = Anfang des Schlüssel-Hashes, nie der Schlüssel)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT token_hash, created_at, last_seen, agent FROM devices "
+                                   "WHERE discord_user_id = ? ORDER BY COALESCE(last_seen, created_at) DESC", (str(user_id),))
+            return [{"id": h[:16], "created_at": c, "last_seen": s, "agent": a or ""} for h, c, s, a in await cur.fetchall()]
+
+    async def remove_device(self, user_id: str, device_id: str) -> bool:
+        if len(device_id) < 16:
+            return False
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("DELETE FROM devices WHERE discord_user_id = ? AND substr(token_hash, 1, 16) = ?",
+                                   (str(user_id), device_id[:16]))
+            await db.commit()
+            return cur.rowcount > 0
 
     async def unlink(self, token: str):
         async with aiosqlite.connect(self.db_path) as db:
