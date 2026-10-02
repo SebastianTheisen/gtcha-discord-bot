@@ -58,6 +58,7 @@ async def _run(tmp_path, browser_path):
     base = str(server.make_url("/")).rstrip("/")
     code = await app.bridge.create_code(42, "Basti")
     token = (await app.bridge.redeem_code(code))["token"]
+    await app.bridge.add_admin(42)   # Admin-Abschnitt "Discord-Ansicht" mit prüfen
     problems = []
     async with playwright_api.async_playwright() as pw:
         try:

@@ -31,11 +31,18 @@ CREATE TABLE IF NOT EXISTS user_imports (
     id INTEGER PRIMARY KEY AUTOINCREMENT, discord_user_id TEXT, kind TEXT, url TEXT, data TEXT, created_at TEXT);
 CREATE TABLE IF NOT EXISTS user_history (
     discord_user_id TEXT, area TEXT, data TEXT, updated_at TEXT, PRIMARY KEY (discord_user_id, area));
+CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS app_admins (discord_user_id TEXT PRIMARY KEY, added_at TEXT);
 CREATE TABLE IF NOT EXISTS auto_claims (
     discord_user_id TEXT, card_key TEXT, pack_id INTEGER, tier TEXT, request_id INTEGER, created_at TEXT,
     PRIMARY KEY (discord_user_id, card_key));
 """
 MAX_IMPORT_BYTES = 8_000_000
+# Was Discord zu sehen bekommt (App und VPS haben immer alles):
+#   discord_mode  "slim" = abgespeckt, "full" = alles wie früher
+#   discord_delay Minuten, um die automatisch erkannte Hits und in der App gemeldete Medaillen in Discord später erscheinen
+DEFAULT_SETTINGS = {"discord_mode": "slim", "discord_delay": "30"}
+MAX_DELAY_MINUTES = 24 * 60
 KEEP_IMPORTS = 24    # je Person (~3 Läufe; der Verlauf liegt zusammengeführt in user_history)
 
 
@@ -133,6 +140,40 @@ class AppBridge:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("DELETE FROM devices WHERE token_hash = ?", (_hash(token),))
             await db.commit()
+
+    # --- Einstellungen (Discord-Ausgabe) und Admins ---
+    async def settings(self) -> Dict[str, str]:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT key, value FROM app_settings")
+            return {**DEFAULT_SETTINGS, **{k: v for k, v in await cur.fetchall()}}
+
+    async def discord_view(self) -> Dict:
+        """{"slim": bool, "delay": Sekunden} - Verzögerung nur im schlanken Modus."""
+        s = await self.settings()
+        slim = s.get("discord_mode") != "full"
+        try:
+            minutes = max(0, min(MAX_DELAY_MINUTES, int(s.get("discord_delay") or 0)))
+        except ValueError:
+            minutes = 0
+        return {"slim": slim, "delay": minutes * 60 if slim else 0, "delay_minutes": minutes}
+
+    async def set_setting(self, key: str, value: str):
+        if key not in DEFAULT_SETTINGS:
+            raise ValueError(key)
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)", (key, str(value)))
+            await db.commit()
+
+    async def add_admin(self, user_id) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("INSERT OR IGNORE INTO app_admins (discord_user_id, added_at) VALUES (?, ?)",
+                             (str(user_id), _now()))
+            await db.commit()
+
+    async def is_admin(self, user_id) -> bool:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT 1 FROM app_admins WHERE discord_user_id = ?", (str(user_id),))
+            return await cur.fetchone() is not None
 
     # --- Eigene GTCHA-Daten, per Lesezeichen von der eigenen Seite übertragen ---
     async def add_import(self, user: Dict, kind: str, url: str, data: str) -> int:

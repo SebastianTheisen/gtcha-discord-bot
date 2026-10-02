@@ -56,8 +56,8 @@ class HotBannerMixin:
 
         Steigt ein Banner neu über 100 %, kommt eine stille Meldung (ohne Ping) in denselben Thread.
         """
-        if not HOT_BANNER_CHANNEL_ID or not HOT_BANNER_ENABLED:
-            return
+        if not HOT_BANNER_CHANNEL_ID or not HOT_BANNER_ENABLED or await self._slim():
+            return   # schlank: Top 10 nur in der App
         try:
             channel = self.get_channel(HOT_BANNER_CHANNEL_ID) or await self.fetch_channel(HOT_BANNER_CHANNEL_ID)
             if not isinstance(channel, discord.ForumChannel):

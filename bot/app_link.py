@@ -1,6 +1,7 @@
 """Web-App: Discord-Verknüpfung (/app-verknüpfen) und Medaillen, die in der App gemeldet werden."""
 
 import os
+import time
 
 from bot.common import *  # noqa: F401,F403
 from config import DATABASE_PATH
@@ -21,6 +22,9 @@ class AppLinkMixin:
         await self.app_bridge.init()
         name = interaction.user.display_name
         code = await self.app_bridge.create_code(interaction.user.id, name)
+        perms = getattr(interaction.user, "guild_permissions", None)
+        if perms is not None and perms.administrator:   # Discord-Admins dürfen in der App die Discord-Ansicht einstellen
+            await self.app_bridge.add_admin(interaction.user.id)
         await interaction.response.send_message(
             f"🔗 Dein Code für die GTCHA-Tracker-App: **`{code}`**\n"
             f"In der App unter **Push → Discord verknüpfen** eingeben. Gültig {CODE_MINUTES} Minuten, "
@@ -64,10 +68,8 @@ class AppLinkMixin:
             if int(existing.get("user_id") or 0) != user_id:
                 return False, f"{tier} hat jemand anderes gemeldet"
             await self.db.delete_medal(thread_id, tier)
-            await self._set_starter_reaction(thread, thread_data, emoji, add=False)
-            await discord_rate_limiter.acquire("message_send")
-            await thread.send(f"↩️ {tier} von <@{user_id}> zurückgenommen *(über die App)*",
-                              allowed_mentions=discord.AllowedMentions.none())
+            await self._post_app_medal(thread, thread_data, pack_id, emoji, add=False, silent=True,
+                                       text=f"↩️ {tier} von <@{user_id}> zurückgenommen *(über die App)*")
             logger.info(f"App-Medaille zurückgenommen: {tier} von {req['discord_name']} bei {pack_id}")
         else:
             problem = await self._invalid_medal_reason(pack_id, tier)
@@ -75,15 +77,26 @@ class AppLinkMixin:
                 return False, problem.replace("❌ ", "")
             if existing:
                 return False, f"{tier} ist schon vergeben"
-            await self.db.save_medal(thread_id, tier, user_id)
-            await self._set_starter_reaction(thread, thread_data, emoji, add=True)
-            await discord_rate_limiter.acquire("message_send")
-            await thread.send(f"{emoji} {tier} geht an <@{user_id}>! *(über die App)*")
+            await self.db.save_medal(thread_id, tier, user_id, source="app")
+            await self._post_app_medal(thread, thread_data, pack_id, emoji, add=True, silent=False,
+                                       text=f"{emoji} {tier} geht an <@{user_id}>! *(über die App)*")
             logger.info(f"App-Medaille: {tier} an {req['discord_name']} bei {pack_id}")
 
         await self._update_probability_message(thread_id, pack_id)
         await self._refresh_pool_views(pack_id)
         return True, None
+
+    async def _post_app_medal(self, thread, thread_data: dict, pack_id: int, emoji: str, add: bool, silent: bool,
+                              text: str):
+        """In der App gemeldet: in der App sofort, in Discord nach der eingestellten Verzögerung."""
+        delay = (await self._view())["delay"]
+        if delay:
+            await self.db.queue_discord("app_medal", pack_id, thread.id,
+                                        {"text": text, "emoji": emoji, "add": add, "silent": silent}, time.time() + delay)
+            return
+        await self._set_starter_reaction(thread, thread_data, emoji, add=add)
+        await discord_rate_limiter.acquire("message_send")
+        await thread.send(text, **({"allowed_mentions": discord.AllowedMentions.none()} if silent else {}))
 
     async def _set_starter_reaction(self, thread, thread_data: dict, emoji: str, add: bool):
         starter_id = thread_data.get("starter_message_id")

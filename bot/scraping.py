@@ -455,6 +455,9 @@ class ScrapingMixin:
             thread_id = thread_data.get('thread_id')
             if not thread_id:
                 return False
+            if await self._slim():
+                # schlank: kein Post - aber True, damit die neue Pack-Zahl gespeichert wird (App, Verlauf)
+                return True
 
             # Thread holen
             thread = self.get_channel(int(thread_id))

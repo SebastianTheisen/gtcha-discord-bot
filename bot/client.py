@@ -14,10 +14,11 @@ from bot.medals import MedalsMixin
 from bot.hot_banner import HotBannerMixin
 from bot.fast_poll import FastPollMixin
 from bot.app_link import AppLinkMixin
+from bot.discord_view import DiscordViewMixin
 
 
 class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, HitsMixin, MedalsMixin, HotBannerMixin,
-              AppLinkMixin, commands.Bot):
+              AppLinkMixin, DiscordViewMixin, commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
@@ -85,6 +86,15 @@ class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, Hits
             self._process_app_requests, 'interval', seconds=5,
             id='app_requests_job', replace_existing=True, coalesce=True, max_instances=1,
         )
+        # Discord-Ansicht: zeitversetzte Posts nachholen, Umschalten schlank/voll übernehmen
+        self.scheduler.add_job(
+            self._process_discord_outbox, 'interval', seconds=30,
+            id='discord_outbox_job', replace_existing=True, coalesce=True, max_instances=1,
+        )
+        self.scheduler.add_job(
+            self._watch_discord_mode, 'interval', minutes=1,
+            id='discord_mode_job', replace_existing=True, coalesce=True, max_instances=1,
+        )
         # Web-App erreichbar? (nur Meldung im Admin-Kanal, wenn sie vorher schon lief)
         self._webapp_seen, self._webapp_fails = False, 0
         self.scheduler.add_job(
@@ -147,5 +157,6 @@ class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, Hits
             self._migrate_then_sync_medals(),
             self._cleanup_duplicate_probability_messages(),
             self._refresh_all_embeds_once(),
+            self._remember_owner_as_admin(),
             return_exceptions=True,
         )

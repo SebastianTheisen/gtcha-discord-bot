@@ -161,7 +161,7 @@ class ThreadsMixin:
                             shipped: Optional[str] = None, minimum: Optional[str] = None,
                             starts_at: Optional[int] = None,
                             pool_value: Optional[str] = None,
-                            hit_link: Optional[str] = None) -> discord.Embed:
+                            hit_link: Optional[str] = None, slim: bool = False) -> discord.Embed:
         """Erstellt ein Embed für einen Banner (funktioniert mit Objekt oder Dict)."""
         # Helper für Zugriff
         get = lambda key, default=None: self._get_banner_value(banner, key, default)
@@ -216,7 +216,18 @@ class ThreadsMixin:
                          else format_end_date_countdown(get('sale_end_date')))
             embed.add_field(name="Ende", value=countdown, inline=True)
 
-        if stats:
+        if stats and slim:
+            # schlank: nur Ampel und offene Hits - Details gibt es in der App
+            pct = stats.get('ev_pct')
+            if pct is not None:
+                light = "🟢 lohnt sich" if pct >= 100 else "🟡 knapp" if pct >= 90 else "🔴 eher nicht"
+                embed.add_field(name="Rückgabe", value=light, inline=True)
+            if stats['tracked_hits']:
+                embed.add_field(name="Hits", value=f"{stats['hits_open']} von {stats['hits_total']} noch drin", inline=True)
+            else:
+                open_tiers = " ".join(MEDAL_EMOJIS[t] for t in stats['open_tiers']) or "keine"
+                embed.add_field(name="Hits", value=f"Top 3 noch drin: {open_tiers}", inline=True)
+        elif stats:
             ev_text = f"{fmt_coins(stats['ev'])} Coins"
             if stats['ev_pct'] is not None:
                 ev_text += f" ({fmt_pct(stats['ev_pct'])} % vom Preis)"
@@ -237,13 +248,13 @@ class ThreadsMixin:
         if hit_link:
             embed.add_field(name="Hit-Liste", value=f"[🏆 Zur Hit-Liste springen]({hit_link})", inline=False)
 
-        if minimum:
+        if minimum and not slim:
             embed.add_field(name="Mindestens zurück pro Zug", value=minimum, inline=False)
-        if pool_value:
+        if pool_value and not slim:
             embed.add_field(name="Gesamtwert", value=pool_value, inline=False)
-        if tempo:
+        if tempo and not slim:
             embed.add_field(name="Abverkauf", value=tempo, inline=False)
-        if shipped:
+        if shipped and not slim:
             embed.add_field(name="Verschickt", value=shipped, inline=False)
         if conditions:
             embed.add_field(name="Kaufbedingungen", value=conditions, inline=False)
@@ -350,6 +361,8 @@ class ThreadsMixin:
             if not row or not thread_data or thread_data.get('is_expired'):
                 return
             status = await self._thread_status(row, thread_data)
+            if status in ("endspurt", "hits_out") and await self._slim():
+                status = "running"   # schlank: Titel verrät nicht, dass Hits raus sind oder Endspurt ist
             title = thread_title(pack_id, row.get('price_coins'), row.get('total_packs'),
                                  row.get('entries_per_day'), status, row.get('starts_at'))
             thread_id = int(thread_data['thread_id'])
@@ -427,7 +440,7 @@ class ThreadsMixin:
                         if hit_ids else None)
             new_embed = self._build_banner_embed(banner, stats=stats, tempo=tempo, conditions=conditions,
                                                  shipped=shipped, minimum=minimum, pool_value=pool_value,
-                                                 hit_link=hit_link)
+                                                 hit_link=hit_link, slim=await self._slim())
 
             # Message updaten
             await discord_rate_limiter.acquire("message_edit")
@@ -461,6 +474,7 @@ class ThreadsMixin:
                 await self._refresh_pool_views(pid, force=True)
             else:
                 await self._update_thread_embed(row)
+            await self._sync_thread_title(pid)
         await self.db.set_meta('embed_version', str(EMBED_VERSION))
         logger.info("Startbeiträge aktualisiert")
 

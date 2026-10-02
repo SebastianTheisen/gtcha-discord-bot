@@ -117,6 +117,14 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS pack_history_changed ON pack_history (changed_at);
 
+                -- Discord sieht automatisch erkannte Hits zeitversetzt: öffentlicher Stand je Banner
+                -- (fehlt die Zeile, gilt der echte Stand) und Warteschlange für spätere Posts
+                CREATE TABLE IF NOT EXISTS discord_public (
+                    pack_id INTEGER PRIMARY KEY, pulled_cards TEXT, unsure_cards TEXT);
+                CREATE TABLE IF NOT EXISTS discord_outbox (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, pack_id INTEGER, thread_id INTEGER,
+                    payload TEXT, send_at REAL);
+
                 -- Schlankes Archiv beendeter Banner (für den eigenen Verlauf in der App:
                 -- Preis, Kartenwerte und Karten-IDs, damit ältere Züge noch zugeordnet werden können)
                 CREATE TABLE IF NOT EXISTS banner_archive (
@@ -195,7 +203,8 @@ class Database:
                                ('banners', 'start_announced INTEGER DEFAULT 0'),
                                ('discord_threads', 'top5_message_id INTEGER'),
                                ('discord_threads', 'value_alert_sent INTEGER DEFAULT 0'),
-                               ('banners', 'converted INTEGER')]:
+                               ('banners', 'converted INTEGER'),
+                               ('medals', "source TEXT DEFAULT 'discord'")]:
                 try:
                     await db.execute(f"ALTER TABLE {table} ADD COLUMN {col}")
                     await db.commit()
@@ -310,6 +319,50 @@ class Database:
             cursor = await db.execute("SELECT card_pool FROM banners WHERE pack_id = ?", (pack_id,))
             row = await cursor.fetchone()
         return json.loads(row[0]) if row and row[0] else None
+
+    # --- Öffentlicher Stand für Discord (zeitversetzt) ---
+    async def get_public_pulls(self, pack_id: int) -> Optional[Dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT pulled_cards, unsure_cards FROM discord_public WHERE pack_id = ?", (pack_id,))
+            row = await cur.fetchone()
+        if not row:
+            return None
+        return {"pulled": json.loads(row[0]) if row[0] else [], "unsure": json.loads(row[1]) if row[1] else []}
+
+    async def set_public_pulls(self, pack_id: int, pulled: Optional[list], unsure: Optional[list] = None,
+                               only_if_missing: bool = False) -> None:
+        """pulled=None: Zeile löschen (Discord sieht wieder den echten Stand)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            if pulled is None:
+                await db.execute("DELETE FROM discord_public WHERE pack_id = ?", (pack_id,))
+            else:
+                verb = "INSERT OR IGNORE" if only_if_missing else "INSERT OR REPLACE"
+                await db.execute(f"{verb} INTO discord_public (pack_id, pulled_cards, unsure_cards) VALUES (?, ?, ?)",
+                                 (pack_id, json.dumps(pulled), json.dumps(unsure or [])))
+            await db.commit()
+
+    async def queue_discord(self, kind: str, pack_id: int, thread_id: int, payload: Dict, send_at: float) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("INSERT INTO discord_outbox (kind, pack_id, thread_id, payload, send_at) VALUES (?, ?, ?, ?, ?)",
+                             (kind, pack_id, thread_id, json.dumps(payload), send_at))
+            await db.commit()
+
+    async def due_discord(self, now: float) -> List[Dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT id, kind, pack_id, thread_id, payload FROM discord_outbox "
+                                   "WHERE send_at <= ? ORDER BY id", (now,))
+            return [{"id": r[0], "kind": r[1], "pack_id": r[2], "thread_id": r[3], "payload": json.loads(r[4] or "{}")}
+                    for r in await cur.fetchall()]
+
+    async def done_discord(self, item_id: int) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("DELETE FROM discord_outbox WHERE id = ?", (item_id,))
+            await db.commit()
+
+    async def pending_discord(self, pack_id: int) -> int:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT count(*) FROM discord_outbox WHERE pack_id = ?", (pack_id,))
+            return (await cur.fetchone())[0]
 
     async def get_pull_tracking(self, pack_id: int) -> Dict:
         """Zuletzt gesehene Zähler (None = noch nie gesehen) und als gezogen erkannte Karten."""
@@ -553,26 +606,35 @@ class Database:
             row = await cursor.fetchone()
             return dict(row) if row else None
 
-    async def get_medals(self, thread_id: int) -> Dict[str, int]:
-        """Alle vergebenen Medaillen eines Threads: Stufe (T1-T10) -> Discord-User-ID (0 = unbekannt)."""
+    async def get_medals(self, thread_id: int, hide_app_since: Optional[str] = None) -> Dict[str, int]:
+        """Alle vergebenen Medaillen eines Threads: Stufe (T1-T10) -> Discord-User-ID (0 = unbekannt).
+
+        hide_app_since (ISO-Zeit): in der App gemeldete Medaillen, die jünger sind, weglassen
+        (Discord sieht sie zeitversetzt); im Thread geschriebene zählen immer sofort.
+        """
         async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute("SELECT tier, user_id FROM medals WHERE thread_id = ?", (thread_id,))
-            medals = {row[0]: row[1] or 0 for row in await cursor.fetchall()}
+            cursor = await db.execute("SELECT tier, user_id, source, created_at FROM medals WHERE thread_id = ?",
+                                      (thread_id,))
+            rows = await cursor.fetchall()
             cursor = await db.execute(
                 "SELECT t1_claimed, t2_claimed, t3_claimed FROM discord_threads WHERE thread_id = ?", (thread_id,))
             row = await cursor.fetchone()
+        hidden = {t for t, _, src, created in rows
+                  if hide_app_since and src == "app" and (created or "") > hide_app_since}
+        medals = {t: u or 0 for t, u, _, _ in rows if t not in hidden}
         for tier, claimed in zip(("T1", "T2", "T3"), row or ()):
-            if claimed:
+            if claimed and tier not in hidden:
                 medals.setdefault(tier, 0)
         return medals
 
-    async def save_medal(self, thread_id: int, tier: str, user_id: int) -> None:
+    async def save_medal(self, thread_id: int, tier: str, user_id: int, source: str = "discord") -> None:
+        """source: "discord" (im Thread geschrieben) oder "app" (in der App gemeldet - in Discord zeitversetzt)."""
         now = datetime.now().isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("""
-                INSERT INTO medals (thread_id, tier, user_id, created_at)
-                VALUES (?, ?, ?, ?)
-            """, (thread_id, tier, user_id, now))
+                INSERT INTO medals (thread_id, tier, user_id, created_at, source)
+                VALUES (?, ?, ?, ?, ?)
+            """, (thread_id, tier, user_id, now, source))
 
             # Auch die claimed-Spalte in discord_threads setzen
             col_map = {'T1': 't1_claimed', 'T2': 't2_claimed', 'T3': 't3_claimed'}

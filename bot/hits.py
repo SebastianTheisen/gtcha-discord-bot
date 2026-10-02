@@ -41,7 +41,7 @@ class HitsMixin:
             return None
         pulled, _, winners, _ = await self._pulled_cards(int(thread_data['thread_id']), pid, pool)
         row = await self.db.get_banner(pid) or {}
-        shipped_keys = set((await self.db.get_pull_tracking(pid))["pulled"])
+        shipped_keys = set((await self._public_pull_tracking(pid))["pulled"])
         site = json.loads(row['site_stats']) if row.get('site_stats') else {}
         out_value = out_of_banner_value(pool, row.get('converted'), _int(site.get('coins')),
                                         set(winners) - shipped_keys, shipped_keys)
@@ -51,9 +51,10 @@ class HitsMixin:
         """(gezogene Karten inkl. Stellvertreter, nur automatisch erkannte, Gewinner, offene ❓-Gruppen).
 
         Medaille Tn zählt für Platz n der Hit-Liste; Gewinner = Schlüssel -> Discord-User-ID.
+        Für Discord: öffentlicher (ggf. zeitversetzter) Stand - die App rechnet mit dem echten.
         """
-        medals = await self.db.get_medals(int(thread_id))
-        state = await self.db.get_pull_tracking(pack_id)
+        medals = await self._public_medals(int(thread_id))
+        state = await self._public_pull_tracking(pack_id)
         keys = tier_keys(pool)
         winners = {keys[t]: user for t, user in medals.items() if t in keys}
         pulled, sure, open_groups = resolve_pulled(state["pulled"], state["unsure"], set(winners))
@@ -61,11 +62,11 @@ class HitsMixin:
 
     async def _claimed_tiers(self, thread_id: int, pack_id: int) -> dict:
         """T1-T3 als gezogen (Medaille oder automatisch erkannt) für die 🎯-Nachricht."""
-        medals = await self.db.get_medals(int(thread_id))
+        medals = await self._public_medals(int(thread_id))
         pool = await self.db.get_card_pool(pack_id)
         if not pool:
             return {t: t in medals for t in TIERS}
-        state = await self.db.get_pull_tracking(pack_id)
+        state = await self._public_pull_tracking(pack_id)
         _, detected, _ = resolve_pulled(state["pulled"], state["unsure"], set())
         keys = tier_keys(pool)
         return {t: t in medals or keys.get(t) in detected for t in TIERS}
@@ -81,7 +82,7 @@ class HitsMixin:
         if not total or remaining <= 0 or remaining > total * ENDSPURT_PERCENT / 100 or not open_hits:
             return
         await self.db.set_endspurt_sent(thread.id)
-        if silent:
+        if silent or await self._slim():   # schlank: nur in der App
             return
         units = tracked_units(await self.db.get_card_pool(get('pack_id')))
         rank = {u['key']: i for i, u in enumerate(units, 1)}
@@ -105,6 +106,7 @@ class HitsMixin:
         if pct is None:
             return
         alert_sent = bool(thread_data.get('value_alert_sent'))
+        silent = silent or await self._slim()   # schlank: "Lohnt sich" nur in der App
         if pct > 100 and not alert_sent and silent:
             await self.db.set_value_alert_sent(thread.id, True)
         elif pct > 100 and not alert_sent:
@@ -191,6 +193,7 @@ class HitsMixin:
                 logger.info(f"[HIT] {pid}: {reason} -> sicher {match['certain']}, "
                             f"wertgleich {match['groups']}, möglich {match['maybe']}")
                 thread_id = int(thread_data['thread_id'])
+                text = None
                 if not first_look:
                     medals = await self.db.get_medals(thread_id)
                     medal_keys = {k for t, k in tier_keys(pool).items() if t in medals}
@@ -200,20 +203,17 @@ class HitsMixin:
                     groups = [g for g in match["groups"] if set(g["keys"]) & worth]
                     maybe = [g for g in match["maybe"] if set(g["keys"]) & worth]
                     if certain or groups or maybe:
-                        await self._announce_detected_hits(thread_id, pool, certain, groups, maybe)
+                        text = self._detected_hits_text(pool, certain, groups, maybe)
+                # in Discord ggf. zeitversetzt (Post und Markierung in Hit-Liste/Startbeitrag)
+                await self._publish_pulls(pid, thread_id, {"pulled": state["pulled"], "unsure": state["unsure"]},
+                                          text, immediate=first_look)
                 await self._refresh_pool_views(pid)
                 await self._update_probability_message(thread_id, pid)
             except Exception as e:
                 logger.warning(f"[HIT] Fehler bei Banner {pid}: {e}")
 
-    async def _announce_detected_hits(self, thread_id: int, pool: dict, certain: list,
-                                      groups: list = (), maybe: list = ()):
-        thread = self.get_channel(thread_id) or await self.fetch_channel(thread_id)
-        if not isinstance(thread, discord.Thread):
-            return
-        if thread.archived:
-            await discord_rate_limiter.acquire("thread_edit")
-            await thread.edit(archived=False)
+    def _detected_hits_text(self, pool: dict, certain: list, groups: list = (), maybe: list = ()) -> str:
+        """Text der "Hit gezogen"-Meldung (wird sofort oder zeitversetzt gepostet)."""
         units = tracked_units(pool)
         rank = {u["key"]: i for i, u in enumerate(units, 1)}
         label = {u["key"]: f"{self._rank_icon(rank[u['key']])} {u['name']}" for u in units}
@@ -248,8 +248,7 @@ class HitsMixin:
         else:
             lines.append("*Automatisch erkannt: die Karte wurde gerade in Coins umgewandelt oder verschickt.*")
         mention = "@everyone " if MENTION_ON_PACK_UPDATE and (certain or groups) else ""
-        await discord_rate_limiter.acquire("message_send")
-        await thread.send(mention + "\n".join(lines))
+        return mention + "\n".join(lines)
 
     @staticmethod
     def _value_span(group: dict) -> str:
@@ -344,7 +343,7 @@ class HitsMixin:
                 return
 
             pulled, detected, winners, open_groups = await self._pulled_cards(thread_id, pack_id, pool)
-            maybe = [g for g in (await self.db.get_pull_tracking(pack_id))["unsure"] if g.get("pulled", 0) == 0]
+            maybe = [g for g in (await self._public_pull_tracking(pack_id))["unsure"] if g.get("pulled", 0) == 0]
             messages = self._build_hit_messages(pool, pulled, detected, open_groups + maybe, winners,
                                                 price=_int(banner.get('price_coins')) or None)
             if not messages:
@@ -423,7 +422,9 @@ class HitsMixin:
         return None
 
     async def _update_probability_message(self, thread_id: int, banner_id: int):
-        """Erstellt oder aktualisiert die Wahrscheinlichkeits-Nachricht im Thread."""
+        """Erstellt oder aktualisiert die Wahrscheinlichkeits-Nachricht im Thread (nicht im schlanken Modus)."""
+        if await self._slim():
+            return
         try:
             # Banner-Daten holen
             banner = await self.db.get_banner(banner_id)

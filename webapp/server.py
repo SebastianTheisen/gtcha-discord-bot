@@ -21,7 +21,7 @@ from aiohttp import web
 from loguru import logger
 
 from database.db import Database
-from utils.app_bridge import MAX_IMPORT_BYTES, AppBridge
+from utils.app_bridge import MAX_DELAY_MINUTES, MAX_IMPORT_BYTES, AppBridge
 from utils.banner_info import berlin_time
 from webapp.accuracy import AccuracyStore
 from webapp.history import JST_OFFSET, build_from_stored, ingest, local_time, plan_claims, profile, stored_events
@@ -229,7 +229,34 @@ class App:
 
     async def api_me(self, request):
         user = await self._user(request)
+        if user:
+            user = {**user, "admin": await self.bridge.is_admin(user["user_id"])}
         return web.json_response(user or {}, status=200 if user else 401)
+
+    async def _admin(self, request):
+        """Nur verknüpfte Geräte von Discord-Admins (Server-Inhaber oder Administrator bei /app-verknüpfen)."""
+        user = await self._user(request)
+        if not user or not await self.bridge.is_admin(user["user_id"]):
+            raise web.HTTPForbidden(text="Nur für Admins")
+        return user
+
+    async def api_admin_settings(self, request):
+        user = await self._admin(request)
+        if request.method == "POST":
+            body = await request.json()
+            mode = str(body.get("mode", ""))
+            if mode not in ("slim", "full"):
+                raise web.HTTPBadRequest(text="Modus: slim oder full")
+            try:
+                delay = int(body.get("delay_minutes"))
+            except (TypeError, ValueError):
+                raise web.HTTPBadRequest(text="Verzögerung in Minuten")
+            delay = max(0, min(MAX_DELAY_MINUTES, delay))
+            await self.bridge.set_setting("discord_mode", mode)
+            await self.bridge.set_setting("discord_delay", str(delay))
+            logger.info(f"Discord-Ansicht von {user['name']} geändert: {mode}, {delay} Min")
+        view = await self.bridge.discord_view()
+        return web.json_response({"mode": "slim" if view["slim"] else "full", "delay_minutes": view["delay_minutes"]})
 
     async def api_my_medals(self, request):
         user = await self._user(request)
@@ -556,6 +583,8 @@ def make_app(app: App) -> web.Application:
         web.get("/api/me/profile", app.api_my_profile),
         web.post("/api/unlink", app.api_unlink),
         web.get("/api/me/devices", app.api_my_devices),
+        web.get("/api/admin/settings", app.api_admin_settings),
+        web.post("/api/admin/settings", app.api_admin_settings),
         web.post("/api/me/devices/remove", app.api_remove_device),
         web.get("/api/health", app.api_health),
         web.get("/api/accuracy", app.api_accuracy),

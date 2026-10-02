@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 63;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 64;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -651,6 +651,7 @@ async function showSettings() {
     user ? authApi("/api/me/history").catch(() => null) : null,
     api("/api/accuracy").catch(() => null),
     user ? authApi("/api/me/devices").then((r) => r.devices).catch(() => []) : []]);
+  const admin = user?.admin ? await authApi("/api/admin/settings").catch(() => null) : null;
   applyProfile(hist?.profile);
   const prof = hist?.profile;
   view.innerHTML = `
@@ -729,6 +730,7 @@ async function showSettings() {
           Der Code enthält deinen persönlichen Schlüssel – nicht weitergeben.</div>
         <div class="hint" id="bm-msg"></div>
       </div>` : ""}
+    ${admin ? adminSection(admin) : ""}
     <h2>🔗 GTCHA-Seite öffnen in</h2>
     <div class="panel">
       <select id="link-mode" aria-label="GTCHA-Seite öffnen in">${Object.entries(LINK_MODES).map(([k, label]) =>
@@ -751,6 +753,16 @@ async function showSettings() {
   }));
   makeCollapsible(view);
   view.querySelector("#link-mode")?.addEventListener("change", (e) => save("linkMode", e.target.value));
+  view.querySelector("#admin-save")?.addEventListener("click", async () => {
+    const msg = view.querySelector("#admin-msg");
+    try {
+      const res = await authApi("/api/admin/settings", { mode: view.querySelector("#admin-mode").value,
+        delay_minutes: Number(view.querySelector("#admin-delay").value) || 0 });
+      msg.textContent = `Gespeichert ✓ – Discord: ${res.mode === "slim" ? "schlank" : "voll"}, ${res.delay_minutes} Min Verzögerung.
+        Der Bot übernimmt es innerhalb einer Minute.`;
+      haptic();
+    } catch (e) { msg.textContent = "Nicht gespeichert: " + e.message; }
+  });
   view.querySelector("#speed")?.addEventListener("click", () => speedTest(view.querySelector("#speed-out")));
   view.querySelector("#my-rank")?.addEventListener("change", (e) => save("myRank", e.target.value));
   view.querySelector("#my-charge")?.addEventListener("change", (e) => save("myCharge", String(Number(e.target.value.replace(/\D/g, "")) || 0)));
@@ -1188,6 +1200,28 @@ function historySection(h) {
     ${claims ? `<h3 class="sub-title">Automatisch gemeldete Medaillen</h3><div class="rows">${claims}</div>` : ""}
     ${h.shipped.length ? `<details class="sub-details"><summary>Verschickt (${h.shipped.length})</summary>
       <div class="rows">${h.shipped.map(cardLine).join("")}</div></details>` : ""}`;
+}
+
+// --- Admin: was Discord zu sehen bekommt (App und VPS haben immer alles) ---
+function adminSection(a) {
+  return `<h2>⚙️ Discord-Ansicht <small>Admin</small></h2>
+    <div class="panel">
+      <div class="add-watch">
+        <select id="admin-mode" aria-label="Modus">
+          <option value="slim" ${a.mode === "slim" ? "selected" : ""}>Schlank</option>
+          <option value="full" ${a.mode === "full" ? "selected" : ""}>Voll (wie früher)</option>
+        </select>
+        <input id="admin-delay" class="code-input plain" inputmode="numeric" value="${a.delay_minutes}" aria-label="Verzögerung in Minuten">
+      </div>
+      <div class="hint">Links der Modus, rechts die Verzögerung in Minuten (0 = sofort).</div>
+      <button class="btn primary" id="admin-save">Speichern</button>
+      <div class="hint" id="admin-msg"></div>
+      <div class="hint"><b>Schlank:</b> Startbeitrag nur mit Ampel 🟢/🟡/🔴 und „Hits noch drin“, neutraler Titel,
+        keine Pack-Updates, kein „Lohnt sich“, kein Endspurt, keine Hit-Chance, kein Top-10-Kanal.
+        <b>Automatisch erkannte Hits</b> und <b>in der App gemeldete Medaillen</b> erscheinen in Discord erst nach der
+        Verzögerung (auch in der Hit-Liste). Im Thread geschriebene Medaillen zählen sofort.
+        Beim Umschalten zeichnet der Bot alle Threads neu; alte Posts der weggefallenen Arten löscht er.</div>
+    </div>`;
 }
 
 // --- Treffsicherheit: vorhergesagte Ø Rückgabe gegenüber dem, was tatsächlich raus kam ---
