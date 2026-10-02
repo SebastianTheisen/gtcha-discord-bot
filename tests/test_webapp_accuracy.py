@@ -1,0 +1,36 @@
+import asyncio
+
+from webapp.accuracy import AccuracyStore, evaluate
+
+
+def test_evaluate_weights_prediction_by_sold_packs():
+    # (banner, t, ev %, übrig, raus, Preis, Titel): 100 Packs zu 1.000 Coins verkauft
+    snaps = [(1, 0, 120.0, 200, 50_000, 1000, "A"), (1, 10, 100.0, 140, 120_000, 1000, "A"),
+             (1, 20, 90.0, 100, 150_000, 1000, "A")]
+    r = evaluate({1: snaps, 2: [(2, 0, 100.0, 50, 0, 1000, "B"), (2, 5, 100.0, 40, 9000, 1000, "B")]})
+    assert r["count"] == 1                               # Banner 2: zu wenig verkauft
+    item = r["items"][0]
+    assert item["predicted"] == round((120 * 60 + 100 * 40) / 100, 1) == 112.0
+    assert item["realized"] == 100.0 and item["diff"] == 12.0
+    assert r["mean_abs"] == 12.0 and r["bias"] == 12.0
+
+
+def test_record_only_when_time_passed_or_value_changed(tmp_path):
+    import time
+    t0 = int(time.time())
+
+    async def run():
+        store = AccuracyStore(str(tmp_path / "w.db"))
+        await store.init()
+        b = {"id": 5, "ev_pct": 101.0, "remaining": 80, "price": 1000, "converted": 1000, "ship_value": 500, "title": "X"}
+        assert await store.record([b], now=t0) == 1
+        assert await store.record([{**b, "ev_pct": 102.0}], now=t0 + 100) == 0      # kaum Änderung, zu früh
+        assert await store.record([{**b, "ev_pct": 106.0}], now=t0 + 200) == 1      # +5 %-Punkte
+        assert await store.record([{**b, "ev_pct": 106.5}], now=t0 + 200 + 1800) == 1   # 30 Minuten später
+        assert await store.record([{**b, "ev_pct": None}], now=t0 + 9000) == 0
+        assert [p["ev"] for p in await store.history(5)] == [101.0, 106.0, 106.5]
+        store2 = AccuracyStore(store.db_path)                                    # Neustart: letzter Stand bekannt
+        await store2.init()
+        assert await store2.record([{**b, "ev_pct": 106.5}], now=t0 + 2100) == 0
+
+    asyncio.run(run())
