@@ -85,6 +85,12 @@ class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, Hits
             self._process_app_requests, 'interval', seconds=5,
             id='app_requests_job', replace_existing=True, coalesce=True, max_instances=1,
         )
+        # Web-App erreichbar? (nur Meldung im Admin-Kanal, wenn sie vorher schon lief)
+        self._webapp_seen, self._webapp_fails = False, 0
+        self.scheduler.add_job(
+            self._check_webapp, 'interval', minutes=5,
+            id='webapp_check_job', replace_existing=True, coalesce=True, max_instances=1,
+        )
         self.scheduler.add_job(
             self._backup_database, 'cron', hour=3, minute=30,
             id='db_backup_job', replace_existing=True, coalesce=True, max_instances=1,
@@ -108,22 +114,6 @@ class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, Hits
             max_instances=1,
         )
         logger.info("Archiv-Bereinigung Scheduler: Alle 30 Min (löscht Daten älter als 1 Stunde)")
-
-        # Täglicher Auto-Restart (Railway)
-        if DAILY_RESTART_TIME:
-            try:
-                hour, minute = DAILY_RESTART_TIME.split(":")
-                self.scheduler.add_job(
-                    self._daily_restart,
-                    'cron',
-                    hour=int(hour),
-                    minute=int(minute),
-                    id='daily_restart_job',
-                    replace_existing=True,
-                )
-                logger.info(f"Daily Restart Scheduler: Täglich um {DAILY_RESTART_TIME} UTC")
-            except ValueError:
-                logger.error(f"Ungültiges DAILY_RESTART_TIME Format: '{DAILY_RESTART_TIME}' (erwartet HH:MM)")
 
         # Commands synchronisieren
         if GUILD_ID:
@@ -159,15 +149,3 @@ class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, Hits
             self._refresh_all_embeds_once(),
             return_exceptions=True,
         )
-
-    async def _daily_restart(self):
-        """Beendet den Bot-Prozess für einen automatischen Neustart (Railway)."""
-        logger.warning("Täglicher Auto-Restart wird ausgeführt...")
-        try:
-            from utils.notifications import notify_critical_error
-            await notify_critical_error("Geplanter täglicher Neustart wird durchgeführt.")
-        except Exception:
-            pass
-        await asyncio.sleep(2)
-        logger.warning("Prozess wird mit Exit-Code 1 beendet - Railway startet automatisch neu.")
-        os._exit(1)

@@ -1,5 +1,5 @@
 # GTCHA Discord Bot - Dockerfile
-# Optimiert für Railway.app mit Playwright Chromium
+# Bot mit Playwright Chromium (läuft per docker compose auf dem VPS)
 
 FROM python:3.11-slim-bookworm
 
