@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 60;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 61;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -327,6 +327,26 @@ function stat(label, value, sub = "") {
   return `<div class="stat"><div class="label">${label}</div><div class="value">${value}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
 }
 
+// Ø Rückgabe (%) über die Zeit, mit 100-%-Linie
+function evChart(points) {
+  if (!points || points.length < 2) return `<div class="chart"><div class="empty">Wird ab jetzt aufgezeichnet</div></div>`;
+  const W = 600, H = 200, P = 28;
+  const t0 = points[0].t, t1 = points[points.length - 1].t;
+  const vals = points.map((p) => p.ev);
+  const max = Math.max(110, ...vals), min = Math.min(60, ...vals);
+  const x = (t) => P + ((t - t0) / Math.max(1, t1 - t0)) * (W - 2 * P);
+  const y = (v) => P / 2 + (1 - (v - min) / Math.max(1, max - min)) * (H - P * 1.5);
+  const pts = points.map((p) => `${x(p.t).toFixed(1)},${y(p.ev).toFixed(1)}`).join(" ");
+  const last = vals[vals.length - 1];
+  return `<div class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Verlauf der Ø Rückgabe">
+    <line x1="${P}" x2="${W - P}" y1="${y(100)}" y2="${y(100)}" stroke="#1f9d55" stroke-dasharray="6 5" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+    <polyline points="${pts}" fill="none" stroke="#3d7fd9" stroke-width="2.5" vector-effect="non-scaling-stroke"/>
+    <text class="axis" x="${P}" y="${H - 6}">${time(t0)}</text>
+    <text class="axis" x="${W - P}" y="${H - 6}" text-anchor="end">${time(t1)}</text>
+    <text class="axis" x="${W - P}" y="16" text-anchor="end">jetzt ${pct(last)}</text>
+  </svg></div>`;
+}
+
 function chart(history) {
   if (!history || history.length < 2) return `<div class="chart"><div class="empty">Noch zu wenig Verlauf</div></div>`;
   const W = 600, H = 220, P = 28;
@@ -516,6 +536,8 @@ async function showBanner(id) {
     <section class="pane" data-pane="history" ${tab === "history" ? "" : "hidden"}>
       <h2>📉 Pack-Verlauf</h2>
       ${chart(b.history)}
+      <h2>💰 Ø Rückgabe im Verlauf <small>gestrichelt = 100 %</small></h2>
+      ${evChart(b.ev_history)}
       <h2>📦 Versandschübe <small>Kartenwert = gezählter Wert × 1,1 (Steuer)</small></h2>
       ${b.shipments.length ? `<div class="rows">${b.shipments.map((s) => `
         <div class="batch ${s.kind === "hits" ? "has-hit" : ""}">
@@ -607,9 +629,10 @@ async function showSettings() {
   const watched = Object.keys(prefs.watch);
   const options = banners.filter((b) => !prefs.watch[b.id]).sort((a, b) => b.id - a.id);
   const user = await me();
-  const [medals, hist] = user ? await Promise.all([
-    authApi("/api/me/medals").then((r) => r.medals).catch(() => []),
-    authApi("/api/me/history").catch(() => null)]) : [[], null];
+  const [medals, hist, acc] = await Promise.all([
+    user ? authApi("/api/me/medals").then((r) => r.medals).catch(() => []) : [],
+    user ? authApi("/api/me/history").catch(() => null) : null,
+    api("/api/accuracy").catch(() => null)]);
   applyProfile(hist?.profile);
   const prof = hist?.profile;
   view.innerHTML = `
@@ -625,6 +648,7 @@ async function showSettings() {
           <span class="muted">›</span></a>`).join("")
         : `<div class="line muted">Noch nichts gemeldet – auf einer Banner-Seite unter „Karten“ eine Karte antippen.</div>`}</div>` : ""}
     ${user ? historySection(hist) : ""}
+    ${accuracySection(acc)}
     <h2>🎖️ Mein Mitgliedsrang</h2>
     <div class="panel">
       <div class="add-watch">
@@ -1092,6 +1116,28 @@ function historySection(h) {
     ${claims ? `<h3 class="sub-title">Automatisch gemeldete Medaillen</h3><div class="rows">${claims}</div>` : ""}
     ${h.shipped.length ? `<details class="sub-details"><summary>Verschickt (${h.shipped.length})</summary>
       <div class="rows">${h.shipped.map(cardLine).join("")}</div></details>` : ""}`;
+}
+
+// --- Treffsicherheit: vorhergesagte Ø Rückgabe gegenüber dem, was tatsächlich raus kam ---
+function accuracySection(a) {
+  if (!a) return "";
+  const head = `<h2>🎯 Treffsicherheit <small>${a.count ? `${a.count} Banner` : "sammelt Daten"}</small></h2>`;
+  if (!a.count) {
+    return head + `<div class="panel"><div class="hint">Die App merkt sich ab jetzt die vorhergesagte Ø Rückgabe jedes Banners
+      und vergleicht sie mit dem, was tatsächlich zurückkam (umgewandelt + verschickt). Sobald bei einem Banner
+      mindestens 30 Packs verkauft wurden, steht hier das Ergebnis.</div></div>`;
+  }
+  const dir = a.bias > 1 ? "eher zu optimistisch" : a.bias < -1 ? "eher zu vorsichtig" : "ohne klare Richtung";
+  return head + `<div class="stats hist-stats">
+      ${stat("Ø Abweichung", `${a.mean_abs.toLocaleString("de-DE")} %-Punkte`, dir)}
+    </div>
+    <div class="hint pad">Vorhersage = Ø Rückgabe, gewichtet mit den jeweils verkauften Packs. Ergebnis = was laut Seite
+      umgewandelt/verschickt wurde, geteilt durch verkaufte Packs × Preis. Noch nicht verschickte Karten kommen erst
+      später dazu – das Ergebnis ist daher eher etwas zu niedrig.</div>
+    <div class="rows">${a.items.map((i) => `
+      <a class="line" href="#/banner/${i.id}"><span><b>${esc(i.title || "Banner " + i.id)}</b><br>
+        <span class="muted">${num(i.sold)} Packs · vorhergesagt ${pct(i.predicted)} · tatsächlich ${pct(i.realized)}</span></span>
+        <span class="ev ${Math.abs(i.diff) <= 5 ? "good" : Math.abs(i.diff) <= 15 ? "ok" : "bad"}">${i.diff > 0 ? "+" : ""}${i.diff.toLocaleString("de-DE")}</span></a>`).join("")}</div>`;
 }
 
 // --- Kartensuche und Wunschliste ---

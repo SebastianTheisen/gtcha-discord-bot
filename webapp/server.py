@@ -22,6 +22,7 @@ from loguru import logger
 from database.db import Database
 from utils.app_bridge import MAX_IMPORT_BYTES, AppBridge
 from utils.banner_info import berlin_time
+from webapp.accuracy import AccuracyStore
 from webapp.history import JST_OFFSET, build_from_stored, ingest, local_time, plan_claims, profile, stored_events
 from webapp.images import ImageCache, content_type
 from webapp.push import DEFAULTS, EVENTS, WATCH_EVENTS, PushService, build_events
@@ -102,6 +103,7 @@ class App:
         self.push = PushService(data_dir, contact)
         self.images = ImageCache(data_dir)
         self.bridge = AppBridge(os.path.join(data_dir, "webapp.db"))
+        self.accuracy = AccuracyStore(os.path.join(data_dir, "webapp.db"))
         self._link_fails = []
         self._data = None
         self._updated = 0
@@ -115,6 +117,10 @@ class App:
             started = time.monotonic()
             self._data = await self.view.all_banners(with_pool=True)
             self._updated = int(time.time())
+            try:
+                await self.accuracy.record(self._data)
+            except Exception as e:
+                logger.debug(f"Treffsicherheit nicht gespeichert: {e}")
             logger.debug(f"Daten neu berechnet in {time.monotonic() - started:.2f}s")
             return self._data
 
@@ -177,6 +183,7 @@ class App:
             raise web.HTTPNotFound()
         data.pop("hit_keys_detected", None)
         data.pop("cards_brief", None)
+        data["ev_history"] = await self.accuracy.history(pack_id)
         return web.json_response(data)
 
     async def image(self, request):
@@ -219,6 +226,9 @@ class App:
         if not user:
             raise web.HTTPUnauthorized(text="Gerät nicht mit Discord verknüpft")
         return web.json_response({"medals": await self.view.my_medals(user["user_id"])})
+
+    async def api_accuracy(self, request):
+        return web.json_response(await self.accuracy.report())
 
     async def api_health(self, request):
         """Für die Überwachung durch den Bot: läuft, und wie alt die berechneten Daten sind."""
@@ -518,6 +528,7 @@ def make_app(app: App) -> web.Application:
         web.get("/api/me/profile", app.api_my_profile),
         web.post("/api/unlink", app.api_unlink),
         web.get("/api/health", app.api_health),
+        web.get("/api/accuracy", app.api_accuracy),
         web.post("/api/import-form", app.api_import_form),
         web.post("/api/medal", app.api_medal),
         web.get(r"/api/medal/{id:\d+}", app.api_medal_status),
@@ -534,6 +545,7 @@ def make_app(app: App) -> web.Application:
     async def start_background(_):
         await app.push.init()
         await app.bridge.init()
+        await app.accuracy.init()
         web_app["refresh_task"] = asyncio.create_task(app.refresh_loop())
         web_app["push_task"] = asyncio.create_task(app.push_loop())
 
