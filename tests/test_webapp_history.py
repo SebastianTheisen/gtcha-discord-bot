@@ -225,3 +225,10 @@ def test_real_balance_with_hits_luck_and_months():
     assert row["hits_value"] == 45000 and row["luck_pct"] == round((row["returned"] + 45000) / (row["pulls"] * 800) * 100)
     m = {x["month"]: x for x in h["summary"]["months"]}
     assert m["2026-10"]["bought_yen"] == 8000 and m["2026-09"]["spent"] == 10 and m["2026-10"]["opens"] == 2
+
+
+def test_import_result_page_is_standalone():
+    from webapp.server import import_result_page
+    res = import_result_page(["✅ 8 Bereiche", "<script>x</script>"])
+    assert res.content_type == "text/html" and res.headers["Cache-Control"] == "no-store"
+    assert "✅ 8 Bereiche" in res.text and "<script>x" not in res.text and "/static/" not in res.text

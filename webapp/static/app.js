@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 56;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 57;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;

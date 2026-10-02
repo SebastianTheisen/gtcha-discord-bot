@@ -33,6 +33,30 @@ POOL_KEYS = ("hits", "hit_keys_detected", "cards_brief", "out_ids")   # nur inte
 SEARCH_LIMIT = 40
 
 
+RESULT_PAGE = """<!doctype html><html lang="de"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>GTCHA Tracker</title>
+<style>body{{margin:0;font:16px -apple-system,system-ui,sans-serif;background:#eef0f4;color:#1d2433}}
+.box{{max-width:480px;margin:40px auto;padding:20px;background:#fff;border-radius:14px;box-shadow:0 2px 8px rgba(20,30,60,.08)}}
+h1{{font-size:20px;margin:0 0 12px;color:{color}}}p{{margin:8px 0;line-height:1.4}}
+a{{display:block;margin-top:16px;padding:12px;border-radius:10px;text-align:center;text-decoration:none;font-weight:700;
+background:#2563c4;color:#fff}}a.alt{{background:#e6e8ee;color:#1d2433}}
+@media (prefers-color-scheme:dark){{body{{background:#0f1320;color:#e8ebf5}}.box{{background:#1a2033}}a.alt{{background:#232a40;color:#e8ebf5}}}}
+</style></head><body><div class="box"><h1>{title}</h1>{lines}
+<a href="https://gtchaxonline.com/">Zurück zu GTCHA</a><a class="alt" href="/#/settings">GTCHA Tracker öffnen</a>
+<p style="font-size:13px;color:#6b7385">Die Daten liegen nur auf deinem VPS. In der installierten App unter „Ich“ →
+„Mein Verlauf“ ansehen.</p></div></body></html>"""
+
+
+def import_result_page(lines: list, ok: bool = True) -> web.Response:
+    """Ergebnis von "Alles übertragen" als eigenständige Seite (alles eingebettet). Sie öffnet sich im
+    Safari-Tab - dort hat die App weder Verknüpfung noch aktuellen Zwischenspeicher, daher nicht die App laden."""
+    import html
+    body = "".join(f"<p>{html.escape(line)}</p>" for line in lines)
+    return web.Response(text=RESULT_PAGE.format(title="Übertragen" if ok else "Nicht übertragen", lines=body,
+                                                color="#1f3a6e" if ok else "#e5383b"),
+                        content_type="text/html", headers={"Cache-Control": "no-store"})
+
+
 def search_cards(banners: list, q: str, ids: set) -> list:
     """Karten (gleiche Karten-ID = gleiche Karte) mit allen aktiven Bannern, in denen sie stecken."""
     found = {}
@@ -198,7 +222,8 @@ class App:
             raise web.HTTPBadRequest(text="Ungültige Daten")
         user = await self.bridge.device(str(data.get("t", "")))
         if not user:
-            raise web.HTTPFound("/#/import-done?error=unlinked")
+            return import_result_page(["⚠️ Dieses Lesezeichen gehört zu keinem verknüpften Gerät mehr – bitte in der "
+                                       "App unter „Ich“ neu kopieren."], ok=False)
         saved = pages = partial = 0
         entries = []
         for entry in data.get("pages") or []:
@@ -224,8 +249,14 @@ class App:
             claims = len(await self.auto_claim(user))
         except Exception as e:
             logger.warning(f"Automatische Medaillen fehlgeschlagen: {type(e).__name__}: {e}")
-        raise web.HTTPSeeOther(f"/#/import-done?areas={saved}&pages={pages}&new={partial}&claims={claims}"
-                               + ("&gap=1" if gap else ""))
+        lines = [f"✅ {saved} Bereiche mit zusammen {pages} Seiten übertragen."]
+        if partial:
+            lines.append(f"➕ {partial} Bereich(e) nur mit neuen Einträgen.")
+        if gap:
+            lines.append("⚠️ Zwischen alt und neu fehlt evtl. etwas – einmal „Komplett übertragen“ benutzen.")
+        if claims:
+            lines.append(f"🏅 {claims} Medaille(n) automatisch gemeldet.")
+        return import_result_page(lines)
 
     async def auto_claim(self, user: Dict) -> list:
         """Angeforderte Karten (noch nicht verschickt) automatisch als Medaille melden, wenn eindeutig."""
