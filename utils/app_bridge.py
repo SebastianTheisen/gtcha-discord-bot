@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS medal_requests (
     action TEXT, status TEXT DEFAULT 'pending', reason TEXT, created_at TEXT, done_at TEXT);
 CREATE TABLE IF NOT EXISTS user_imports (
     id INTEGER PRIMARY KEY AUTOINCREMENT, discord_user_id TEXT, kind TEXT, url TEXT, data TEXT, created_at TEXT);
+CREATE TABLE IF NOT EXISTS user_history (
+    discord_user_id TEXT, area TEXT, data TEXT, updated_at TEXT, PRIMARY KEY (discord_user_id, area));
 CREATE TABLE IF NOT EXISTS auto_claims (
     discord_user_id TEXT, card_key TEXT, pack_id INTEGER, tier TEXT, request_id INTEGER, created_at TEXT,
     PRIMARY KEY (discord_user_id, card_key));
@@ -122,6 +124,22 @@ class AppBridge:
             except ValueError:
                 continue
         return areas
+
+    # --- Zusammengeführter Verlauf (nur Neues wird angehängt) ---
+    async def get_history(self, user_id: str) -> Dict:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT area, data, updated_at FROM user_history WHERE discord_user_id = ?",
+                                   (str(user_id),))
+            rows = await cur.fetchall()
+        return {area: {**json.loads(data), "updated_at": updated} for area, data, updated in rows}
+
+    async def set_history(self, user_id: str, areas: Dict[str, Dict]):
+        async with aiosqlite.connect(self.db_path) as db:
+            for area, data in areas.items():
+                data = {k: v for k, v in data.items() if k != "updated_at"}
+                await db.execute("INSERT OR REPLACE INTO user_history (discord_user_id, area, data, updated_at) "
+                                 "VALUES (?, ?, ?, ?)", (str(user_id), area, json.dumps(data, ensure_ascii=False), _now()))
+            await db.commit()
 
     # --- Automatische Medaillen aus den angeforderten Karten (jede Karte nur einmal) ---
     async def auto_claim_keys(self, user_id: str) -> set:

@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 48;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 49;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -661,7 +661,10 @@ async function showSettings() {
         <button class="btn primary" id="bm-sync">Lesezeichen „Alles übertragen“ kopieren</button>
         <div class="hint">Auf irgendeiner gtchaxonline-Seite antippen: lädt deine Verlaufsseiten (Gacha, Versand,
           Münzen, Käufe, Tickets, Ausgaben in ¥) samt allen Seitenzahlen und überträgt sie. Von der Kontoseite nur
-          Zeilen mit Beträgen, Rang und Datum – Name und Adresse nicht.</div>
+          Zeilen mit Beträgen, Rang und Datum – Name und Adresse nicht. Ab dem zweiten Mal nur Neues: es hört auf
+          zu blättern, sobald es bekannte Einträge sieht (alle 30 Tage einmal komplett).</div>
+        <button class="btn" id="bm-full">Lesezeichen „Komplett übertragen“ kopieren</button>
+        <div class="hint">Nur nötig, wenn im Verlauf eine Lücke gemeldet wird – überträgt wieder alle Seiten.</div>
         <button class="btn" id="bm-copy">Lesezeichen „Nur diese Seite“ kopieren</button>
         <div class="hint">Einrichten (einmalig): 1. In Safari irgendeine Seite als Lesezeichen sichern (Teilen → Lesezeichen),
           Name „An GTCHA Tracker“. 2. Lesezeichen bearbeiten, Adresse löschen und den kopierten Code einfügen.<br>
@@ -683,12 +686,12 @@ async function showSettings() {
     <h2>⏱ Geschwindigkeit</h2>
     <div class="panel"><button class="btn" id="speed">Geschwindigkeit testen</button>
       <div class="hint" id="speed-out">Lädt 10 Bilder aus dem iPhone-Speicher und frisch vom VPS und zeigt die Zeiten.</div></div>`;
-  view.querySelector("#bm-sync")?.addEventListener("click", async () => {
-    const code = bookmarkletSync(deviceToken());
+  view.querySelectorAll("#bm-sync, #bm-full").forEach((btn) => btn.addEventListener("click", async () => {
+    const code = bookmarkletSync(deviceToken(), btn.id === "bm-full");
     const msg = view.querySelector("#bm-msg");
     try { await navigator.clipboard.writeText(code); msg.textContent = "Kopiert ✓"; haptic(); }
     catch (e) { msg.innerHTML = `<textarea class="bm-code" readonly>${esc(code)}</textarea>`; msg.querySelector("textarea").select(); }
-  });
+  }));
   view.querySelector("#bm-copy")?.addEventListener("click", async () => {
     const code = bookmarkletCode(deviceToken());
     const msg = view.querySelector("#bm-msg");
@@ -986,10 +989,19 @@ function bookmarkletCode(token) {
 // liefert die Ausgaben in Yen; von dort gehen nur Zeilen mit Beträgen/Rang/Datum mit (keine Name/Adresse).
 const SYNC_PAGES = ["undecided-detail", "pending-detail", "shipped-detail", "downloaded-detail",
                     "buy-point-history", "purchase-history", "ticket-history", "change-member"];
-function bookmarkletSync(token) {
+// Nur Neues: Das Lesezeichen merkt sich (im Speicher von gtchaxonline.com auf diesem Gerät) den neuesten
+// Eintrag je Verlaufsbereich und hört auf zu blättern, sobald eine Seite ihn enthält. Der VPS hängt dann
+// nur das Neue an. Alle 30 Tage (oder mit "komplett") wird wieder alles übertragen.
+const SYNC_INCREMENTAL = ["buy-point-history", "shipped-detail", "ticket-history", "purchase-history", "downloaded-detail"];
+function bookmarkletSync(token, full = false) {
   const src = `(async()=>{
 if(!/gtchaxonline\\.com$/.test(location.hostname)){alert('Bitte auf gtchaxonline.com öffnen');return}
-const P=${JSON.stringify(SYNC_PAGES)};
+const P=${JSON.stringify(SYNC_PAGES)};const INC=${JSON.stringify(SYNC_INCREMENTAL)};const LS='gtchaTracker.marks';
+let M={};try{M=JSON.parse(localStorage.getItem(LS)||'{}')}catch(e){}
+const FULL=${full ? "true" : "false"}||!M.at||Date.now()-M.at>30*864e5;
+const lines=t=>t.split('\\n').map(l=>l.trim()).filter(Boolean);
+const sig=t=>{const L=lines(t);const i=L.findIndex(l=>/\\d{2,4}\\/\\d{2}\\/\\d{2}/.test(l));return i<0?'':L.slice(i,i+4).join('\\n')};
+const NM={at:FULL?Date.now():M.at};
 const box=document.createElement('div');box.style.cssText='position:fixed;z-index:2147483647;left:10px;right:10px;top:10px;padding:12px;background:#1f3a6e;color:#fff;font:15px sans-serif;border-radius:10px';document.body.appendChild(box);
 const say=t=>{box.textContent='GTCHA Tracker: '+t};
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -1002,14 +1014,17 @@ const out=[];
 for(const p of P){say('lade '+p+' …');
 await new Promise(r=>{fr.onload=r;fr.src='/'+p});await settle();
 const d=fr.contentDocument;if(!d||!d.body){out.push({path:p,error:'kein Zugriff'});continue}
-const pages=[grab(d)];
-for(let n=2;n<=40;n++){
+const pages=[grab(d)];const mark=!FULL&&INC.includes(p)&&M[p];let partial=false;
+const known=g=>mark&&lines(g.text).join('\\n').includes(mark);
+if(INC.includes(p))NM[p]=sig(pages[0].text)||M[p]||'';
+if(known(pages[0]))partial=true;
+for(let n=2;n<=40&&!partial;n++){
 const btn=[...d.querySelectorAll('a,button,li,span,div')].find(e=>isNum(e)&&e.textContent.trim()===String(n)&&[...((e.parentElement&&e.parentElement.parentElement)||e).querySelectorAll('*')].filter(isNum).length>=3);
 if(!btn)break;const before=d.body.innerText;btn.click();
 let g=null;for(let w=0;w<30;w++){await sleep(500);if(d.body.innerText!==before){await settle();g=grab(d);break}}
-if(!g)break;pages.push(g);say(p+' Seite '+n)}
-out.push({path:p,pages})}
-say('sende …');
+if(!g)break;pages.push(g);say(p+' Seite '+n);if(known(g))partial=true}
+out.push({path:p,pages,partial})}
+say('sende …');try{localStorage.setItem(LS,JSON.stringify(NM))}catch(e){}
 const f=document.createElement('form');f.method='POST';f.action=${JSON.stringify(location.origin)}+'/api/import-form';
 const i=document.createElement('input');i.type='hidden';i.name='d';i.value=JSON.stringify({t:${JSON.stringify(token)},at:new Date().toISOString(),pages:out});
 f.appendChild(i);document.body.appendChild(f);f.submit()})()`;
@@ -1052,6 +1067,7 @@ function historySection(h) {
       ${stat("Bilanz", signed(t.balance) + " Coins", `${num(t.spent)} ausgegeben · ${num(t.returned)} zurück`)}
       ${t.bought ? stat("Coins gekauft", num(t.bought), num(t.bought_yen) + " ¥") : ""}
     </div>
+    ${h.gap ? `<div class="notice warn">⚠️ Im Verlauf fehlt evtl. etwas – einmal das Lesezeichen „Komplett übertragen“ benutzen.</div>` : ""}
     <div class="hint pad">Münzverlauf seit ${esc((s.since || "").split(" ")[0].split("-").reverse().join("."))} · ${t.opens} Öffnungen.
       Zurück = in Münzen umgewandelte Karten (angeforderte Karten zählen nicht mit).</div>
     ${banners ? `<h3 class="sub-title">Pro Banner</h3><div class="rows">${banners}</div>` : ""}
@@ -1070,6 +1086,8 @@ function showImportDone(query) {
   view.innerHTML = `<div class="section-title">📥 Übertragen</div><div class="panel"><div class="hint">${q.get("error")
     ? "Dieses Lesezeichen gehört zu keinem verknüpften Gerät mehr – bitte im Reiter „Ich“ neu kopieren."
     : `✅ ${esc(q.get("areas"))} Bereiche mit zusammen ${esc(q.get("pages"))} Seiten übertragen. Die Daten liegen nur auf deinem VPS.`
+      + (Number(q.get("new")) ? `<br>➕ ${esc(q.get("new"))} Bereich(e) nur mit neuen Einträgen.` : "")
+      + (q.get("gap") ? `<br>⚠️ Zwischen alt und neu fehlt evtl. etwas – einmal „Komplett übertragen“ benutzen.` : "")
       + (Number(q.get("claims")) ? `<br>🏅 ${esc(q.get("claims"))} Medaille(n) automatisch gemeldet – siehe „Mein Verlauf“.` : "")}</div></div>`;
   history.replaceState(null, "", "#/settings");
 }

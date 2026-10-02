@@ -20,7 +20,7 @@ from loguru import logger
 
 from database.db import Database
 from utils.app_bridge import MAX_IMPORT_BYTES, AppBridge
-from webapp.history import JST_OFFSET, build_history, parse_cards, parse_coins, plan_claims
+from webapp.history import JST_OFFSET, build_from_stored, ingest, plan_claims, stored_events
 from webapp.images import ImageCache, content_type
 from webapp.push import DEFAULTS, EVENTS, WATCH_EVENTS, PushService, build_events
 from webapp.view import BannerView
@@ -177,27 +177,37 @@ class App:
         user = await self.bridge.device(str(data.get("t", "")))
         if not user:
             raise web.HTTPFound("/#/import-done?error=unlinked")
-        saved = pages = 0
+        saved = pages = partial = 0
+        entries = []
         for entry in data.get("pages") or []:
             path = str(entry.get("path", ""))
             if not re.fullmatch(r"[a-z0-9-]{1,40}", path):
                 continue
             await self.bridge.add_import(user, "sync", f"https://gtchaxonline.com/{path}",
                                          json.dumps(entry, ensure_ascii=False))
+            entries.append({"path": path, "pages": entry.get("pages") or [], "partial": bool(entry.get("partial"))})
             saved += 1
+            partial += bool(entry.get("partial"))
             pages += len(entry.get("pages") or [])
-        logger.info(f"Sync von {user['name']}: {saved} Bereiche, {pages} Seiten")
+        logger.info(f"Sync von {user['name']}: {saved} Bereiche, {pages} Seiten ({partial} nur Neues)")
+        gap = False
+        try:
+            changed = ingest(await self.bridge.get_history(user["user_id"]), entries)
+            await self.bridge.set_history(user["user_id"], changed)
+            gap = any(a.get("gap") for a in changed.values())
+        except Exception as e:
+            logger.warning(f"Verlauf nicht übernommen: {type(e).__name__}: {e}")
         claims = 0
         try:
             claims = len(await self.auto_claim(user))
         except Exception as e:
             logger.warning(f"Automatische Medaillen fehlgeschlagen: {type(e).__name__}: {e}")
-        raise web.HTTPSeeOther(f"/#/import-done?areas={saved}&pages={pages}&claims={claims}")
+        raise web.HTTPSeeOther(f"/#/import-done?areas={saved}&pages={pages}&new={partial}&claims={claims}"
+                               + ("&gap=1" if gap else ""))
 
     async def auto_claim(self, user: Dict) -> list:
         """Angeforderte Karten (noch nicht verschickt) automatisch als Medaille melden, wenn eindeutig."""
-        areas = await self.bridge.latest_sync(user["user_id"])
-        cards = parse_cards((areas.get("pending-detail") or {}).get("pages") or [])
+        cards = ((await self.history(user)).get("pending") or {}).get("items") or []
         if not cards:
             return []
         banners, _ = await self.view.history_context(None)
@@ -208,19 +218,30 @@ class App:
             logger.info(f"Automatische Medaille für {user['name']}: {p['card']} -> {p['pack_id']} {p['tier']}")
         return planned
 
+    async def history(self, user: Dict) -> Dict:
+        """Gespeicherter Verlauf; beim ersten Mal aus dem letzten vollständigen Lauf übernommen."""
+        stored = await self.bridge.get_history(user["user_id"])
+        if not stored:
+            areas = await self.bridge.latest_sync(user["user_id"])
+            if areas:
+                await self.bridge.set_history(user["user_id"], ingest({}, [
+                    {"path": p, "pages": a.get("pages") or []} for p, a in areas.items()]))
+                stored = await self.bridge.get_history(user["user_id"])
+        return stored
+
     async def api_my_history(self, request):
-        """Eigener Verlauf aus dem letzten "Alles übertragen" (nur für die verknüpfte Person)."""
+        """Eigener Verlauf aus allen "Alles übertragen"-Läufen (nur für die verknüpfte Person)."""
         user = await self._user(request)
         if not user:
             raise web.HTTPUnauthorized(text="Gerät nicht mit Discord verknüpft")
-        areas = await self.bridge.latest_sync(user["user_id"])
-        if not areas:
+        stored = await self.history(user)
+        if not stored:
             return web.json_response({"empty": True})
-        events = parse_coins((areas.get("buy-point-history") or {}).get("pages") or [])
-        since = min((e["t"] for e in events), default=None)
+        since = min((e["t"] for e in stored_events(stored)), default=None)
         banners, moves = await self.view.history_context(since - JST_OFFSET if since else None)
-        data = build_history(areas, banners, moves)
-        data["saved_at"] = max(a.get("saved_at") or "" for a in areas.values())[:16]
+        # Rechnen außerhalb der Ereignisschleife - die App bleibt währenddessen bedienbar
+        data = await asyncio.get_running_loop().run_in_executor(None, build_from_stored, stored, banners, moves)
+        data["saved_at"] = max(a.get("updated_at") or "" for a in stored.values())[:16]
         data["auto_claims"] = await self.bridge.auto_claims(user["user_id"])
         for c in data["auto_claims"]:
             c["title"] = (banners.get(c["pack_id"]) or {}).get("title")
