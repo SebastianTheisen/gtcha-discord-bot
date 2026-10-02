@@ -168,12 +168,53 @@ def test_admin_settings_only_for_admins(tmp_path):
         assert (await (await client.get("/api/me", headers=h(7))).json())["admin"] is False
         assert (await client.get("/api/admin/settings", headers=h(7))).status == 403
         assert (await client.post("/api/admin/settings", headers=h(7), json={"mode": "full", "delay_minutes": 0})).status == 403
-        res = await client.get("/api/admin/settings", headers=h(42))
-        assert await res.json() == {"mode": "slim", "delay_minutes": 30}          # Voreinstellung
-        res = await client.post("/api/admin/settings", headers=h(42), json={"mode": "slim", "delay_minutes": 90})
-        assert await res.json() == {"mode": "slim", "delay_minutes": 90}
+        res = await (await client.get("/api/admin/settings", headers=h(42))).json()
+        assert (res["mode"], res["delay_minutes"]) == ("slim", 30)                  # Voreinstellung
+        assert res["admins"] == [{"user_id": "42", "name": "U42"}] and res["you"] == "42"
+        res = await (await client.post("/api/admin/settings", headers=h(42), json={"mode": "slim", "delay_minutes": 90})).json()
+        assert (res["mode"], res["delay_minutes"]) == ("slim", 90)
+        # Nutzer-Statistik: nur Admin
+        assert (await client.get("/api/admin/users", headers=h(7))).status == 403
+        assert (await client.get("/api/admin/user/42", headers=h(7))).status == 403
+        users = (await (await client.get("/api/admin/users", headers=h(42))).json())["users"]
+        assert sorted(u["name"] for u in users) == ["U42", "U7"]
+        assert (await (await client.get("/api/admin/user/7", headers=h(42))).json())["empty"] is True
+        assert (await client.get("/api/admin/user/999", headers=h(42))).status == 404
         assert (await app.bridge.discord_view())["delay"] == 90 * 60
         assert (await client.post("/api/admin/settings", headers=h(42), json={"mode": "x", "delay_minutes": 1})).status == 400
         await client.close()
+
+    asyncio.run(run())
+
+
+def test_admins_replaced_on_start_only_configured_ids(tmp_path, env, monkeypatch):
+    """Admin ist nur, wer in APP_ADMIN_IDS steht (sonst der Server-Inhaber) - frühere Einträge fliegen raus."""
+    import config
+    from bot.discord_view import DiscordViewMixin
+
+    class Guild:
+        owner_id = 111
+
+    class Bot(DiscordViewMixin):
+        guilds = [Guild()]
+
+        def __init__(self, bridge):
+            self._app_bridge = bridge
+
+        @property
+        def app_bridge(self):
+            return self._app_bridge
+
+    async def run():
+        bridge = AppBridge(str(tmp_path / "w.db"))
+        await bridge.init()
+        await bridge.add_admin(999)                                   # z. B. ein Discord-Admin von früher
+        monkeypatch.setattr(config, "APP_ADMIN_IDS", ["42"])
+        await Bot(bridge)._remember_owner_as_admin()
+        assert [a["user_id"] for a in await bridge.admins()] == ["42"]
+        assert not await bridge.is_admin(999) and not await bridge.is_admin(111)
+        monkeypatch.setattr(config, "APP_ADMIN_IDS", [])
+        await Bot(bridge)._remember_owner_as_admin()
+        assert [a["user_id"] for a in await bridge.admins()] == ["111"]
 
     asyncio.run(run())

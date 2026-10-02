@@ -7,6 +7,7 @@ on:
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -15,7 +16,14 @@ jobs:
       - name: Abhängigkeiten installieren
         run: pip install -r requirements.txt -r requirements-dev.txt -r requirements-webapp.txt
       - name: Browser für den Oberflächen-Test
-        run: python -m playwright install --with-deps chromium
+        # Paketquellen von GitHub hängen gelegentlich: je Versuch höchstens 3 Minuten, bis zu 3 Versuche
+        timeout-minutes: 10
+        run: |
+          for i in 1 2 3; do
+            timeout 180 python -m playwright install --with-deps chromium && exit 0
+            echo "Versuch $i hing oder schlug fehl - neuer Versuch"
+          done
+          exit 1
       - name: Tests
         run: python -m pytest -q tests
       - name: Syntax aller Module prüfen

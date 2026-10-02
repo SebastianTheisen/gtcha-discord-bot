@@ -328,7 +328,7 @@ h2 small { font-size: 13px; color: var(--muted); font-weight: 400; }
 /* Tab-Leiste unten */
 .tabbar {
   position: fixed; bottom: 0; left: 0; right: 0; z-index: 20;
-  display: grid; grid-template-columns: repeat(4, 1fr);
+  display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
   padding: 6px 0 calc(6px + var(--safe-bottom));
   background: var(--surface); box-shadow: 0 -1px 0 var(--line), 0 -4px 12px rgba(0, 0, 0, .05);
 }
@@ -473,3 +473,12 @@ details.section > summary small { font-size: 13px; color: var(--muted); font-wei
   background: var(--surface-2); color: inherit; text-decoration: none; }
 .find-b.out { opacity: .55; }
 .find-b .muted { white-space: nowrap; }
+.tabbar a[hidden] { display: none; }
+
+/* Admin: Nutzer-Statistiken */
+.user-card { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); margin: 0 10px 10px; }
+.user-card > summary { list-style: none; cursor: pointer; padding: 12px; display: flex; justify-content: space-between; gap: 10px; }
+.user-card > summary::-webkit-details-marker { display: none; }
+.user-card > summary b { font-size: 15px; }
+.user-body { padding: 0 0 12px; border-top: 1px solid var(--line); }
+.user-body h2 { font-size: 15px; }

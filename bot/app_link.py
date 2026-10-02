@@ -22,9 +22,6 @@ class AppLinkMixin:
         await self.app_bridge.init()
         name = interaction.user.display_name
         code = await self.app_bridge.create_code(interaction.user.id, name)
-        perms = getattr(interaction.user, "guild_permissions", None)
-        if perms is not None and perms.administrator:   # Discord-Admins dürfen in der App die Discord-Ansicht einstellen
-            await self.app_bridge.add_admin(interaction.user.id)
         await interaction.response.send_message(
             f"🔗 Dein Code für die GTCHA-Tracker-App: **`{code}`**\n"
             f"In der App unter **Push → Discord verknüpfen** eingeben. Gültig {CODE_MINUTES} Minuten, "

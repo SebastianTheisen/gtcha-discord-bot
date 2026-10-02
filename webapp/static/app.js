@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 64;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 66;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -1215,6 +1215,10 @@ function adminSection(a) {
       </div>
       <div class="hint">Links der Modus, rechts die Verzögerung in Minuten (0 = sofort).</div>
       <button class="btn primary" id="admin-save">Speichern</button>
+      <div class="hint"><b>Admin (sieht alle Nutzer-Statistiken):</b> ${(a.admins || []).map((x) =>
+        `${esc(x.name || "nicht verknüpft")} <span class="muted">(${esc(x.user_id)})</span>`).join(", ") || "–"}<br>
+        Deine Discord-ID: <b>${esc(a.you || "")}</b> – auf dem VPS in der <code>.env</code> als
+        <code>APP_ADMIN_IDS=${esc(a.you || "")}</code> eintragen, dann bist nur du Admin (Bot neu starten).</div>
       <div class="hint" id="admin-msg"></div>
       <div class="hint"><b>Schlank:</b> Startbeitrag nur mit Ampel 🟢/🟡/🔴 und „Hits noch drin“, neutraler Titel,
         keine Pack-Updates, kein „Lohnt sich“, kein Endspurt, keine Hit-Chance, kein Top-10-Kanal.
@@ -1222,6 +1226,52 @@ function adminSection(a) {
         Verzögerung (auch in der Hit-Liste). Im Thread geschriebene Medaillen zählen sofort.
         Beim Umschalten zeichnet der Bot alle Threads neu; alte Posts der weggefallenen Arten löscht er.</div>
     </div>`;
+}
+
+// --- Admin: Statistiken aller Nutzer (je Person aufklappbar) ---
+const rankLabel = (k) => (RANKS.find(([key]) => key === k) || [null, k || "–"])[1];
+async function showUsers() {
+  const user = await me();
+  if (!user?.admin) {
+    view.innerHTML = `<div class="empty">Nur für den Admin.</div>`;
+    return;
+  }
+  const { users } = await authApi("/api/admin/users");
+  view.innerHTML = `<div class="section-title">👥 Nutzer <small class="muted">${users.length}</small></div>
+    <div class="hint pad">Alles, was die Nutzer selbst per Lesezeichen übertragen bzw. gemeldet haben. Antippen zum Aufklappen.</div>
+    ${users.map((u) => {
+      const p = u.profile || {}, t = u.total;
+      return `<details class="user-card" data-user="${esc(u.user_id)}">
+        <summary><span><b>${esc(u.name || "Unbekannt")}</b><br>
+          <span class="muted">${esc(rankLabel(p.rank))} · ${u.medals} Medaille${u.medals === 1 ? "" : "n"}
+            · ${u.saved_at ? "übertragen " + esc(u.saved_at.slice(8, 10) + "." + u.saved_at.slice(5, 7) + ". " + u.saved_at.slice(11, 16)) : "nie übertragen"}</span></span>
+          <span>${t ? signed(t.balance) : `<span class="muted">–</span>`}</span></summary>
+        <div class="user-body"><div class="loading">Lädt …</div></div>
+      </details>`;
+    }).join("") || `<div class="empty">Noch keine Nutzer verknüpft.</div>`}`;
+  view.querySelectorAll(".user-card").forEach((card) => card.addEventListener("toggle", async () => {
+    if (!card.open || card.dataset.loaded) return;
+    card.dataset.loaded = "1";
+    const body = card.querySelector(".user-body");
+    try {
+      const h = await authApi(`/api/admin/user/${card.dataset.user}`);
+      const p = h.profile || {};
+      body.innerHTML = `<div class="stats hist-stats" style="margin-top:10px">
+          ${stat("Mitgliedsrang", esc(rankLabel(p.rank)))}
+          ${stat("Aufgeladen (Monat)", p.charge != null ? num(p.charge) + " Coins" : "–", p.charge_yen != null ? num(p.charge_yen) + " ¥" : "")}
+          ${stat("Coin-Stand", h.member?.coins != null ? num(h.member.coins) + " Coins" : "–")}
+          ${stat("Geräte", String((h.devices || []).length), (h.devices || []).map((d) => esc(d.agent || "Gerät")).join(", "))}
+        </div>
+        <h3 class="sub-title">🏅 Medaillen (${(h.medals || []).length})</h3>
+        <div class="rows">${(h.medals || []).map((m) => `
+          <a class="line claim-row" href="#/banner/${m.banner_id}"><span class="claim-thumb">${img(m.image, m.name, false, 320)}</span>
+            <span class="claim-text"><b>${esc(m.tier)}</b> ${esc(m.name)}<br><span class="muted">${esc(m.title || "Banner " + m.banner_id)}
+            ${m.value != null ? " · " + num(m.value) + " Coins" : ""}</span></span></a>`).join("")
+          || `<div class="line muted">Keine aktiven Medaillen</div>`}</div>
+        ${h.empty ? `<div class="hint pad">Hat noch nichts per Lesezeichen übertragen.</div>`
+          : historySection(h).replace(/<h2>📊 Mein Verlauf/, "<h2>📊 Verlauf")}`;
+    } catch (e) { body.innerHTML = `<div class="hint pad">Nicht ladbar: ${esc(e.message)}</div>`; }
+  }));
 }
 
 // --- Treffsicherheit: vorhergesagte Ø Rückgabe gegenüber dem, was tatsächlich raus kam ---
@@ -1427,7 +1477,7 @@ async function route() {
   document.querySelectorAll(".modal-wrap").forEach((m) => m.remove());
   const hash = location.hash || "#/";
   const tab = hash.startsWith("#/hot") ? "hot" : hash.startsWith("#/settings") ? "settings"
-    : hash.startsWith("#/search") ? "search" : "list";
+    : hash.startsWith("#/search") ? "search" : hash.startsWith("#/users") ? "users" : "list";
   const readId = hash.match(/[?&]n=(\d+)/);
   if (readId) markRead([Number(readId[1])]);
   document.getElementById("bell")?.classList.toggle("active", hash.startsWith("#/inbox"));
@@ -1443,8 +1493,8 @@ async function route() {
   const banner = hash.match(/^#\/banner\/(\d+)/);
   document.querySelectorAll(".tabbar a").forEach((a) => a.classList.toggle("active", a.dataset.tab === tab && !banner));
   const render = banner ? () => showBanner(banner[1]) : tab === "hot" ? showHot : tab === "settings" ? showSettings
-    : tab === "search" ? showSearch : showList;
-  state.render = tab === "settings" || tab === "search" ? null : render;
+    : tab === "search" ? showSearch : tab === "users" ? showUsers : showList;
+  state.render = tab === "settings" || tab === "search" || tab === "users" ? null : render;
   state.current = render;
   if (!view.innerHTML || banner) view.innerHTML = `<div class="loading">Lädt …</div>`;
   try {
@@ -1455,7 +1505,7 @@ async function route() {
       ? `<div class="empty">Banner nicht gefunden.<br><a class="back" href="#/">‹ Zur Übersicht</a></div>`
       : `<div class="empty">Daten nicht erreichbar (${esc(e.message)})</div>`;
   }
-  if (tab !== "settings" && tab !== "search") state.timer = setInterval(() => render().catch(() => {}), REFRESH_MS);
+  if (!["settings", "search", "users"].includes(tab)) state.timer = setInterval(() => render().catch(() => {}), REFRESH_MS);
 }
 
 // Bilder, die nicht laden, ausblenden statt Alt-Text zu zeigen
@@ -1544,6 +1594,8 @@ navigator.serviceWorker?.addEventListener("message", (e) => {
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
 route();
 updateBell();
+// Reiter "Nutzer" nur für Admins
+me().then((u) => { const t = document.getElementById("users-tab"); if (t) t.hidden = !u?.admin; }).catch(() => {});
 setInterval(() => { if (document.visibilityState === "visible") updateBell(); }, 60000);
 // Rang/Aufladung beim Start aus dem letzten Übertragen holen (Banner-Liste danach neu zeichnen)
 if (deviceToken()) authApi("/api/me/profile").then((p) => { if (applyProfile(p) && state.render) state.render().catch(() => {}); }).catch(() => {});

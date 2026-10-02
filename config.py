@@ -81,6 +81,9 @@ CHANNEL_IDS = {
 # Admin-Channel für Bot-Benachrichtigungen (optional)
 # Der Bot postet hier Status-Updates, Fehler und Erfolge
 ADMIN_CHANNEL_ID = int(os.getenv("ADMIN_CHANNEL_ID") or "0")
+# Wer in der App Admin ist (Discord-Ansicht einstellen, Nutzer-Statistiken sehen): Discord-IDs, mit Komma getrennt.
+# Leer = nur der Inhaber des Discord-Servers. Die Liste wird bei jedem Bot-Start komplett neu gesetzt.
+APP_ADMIN_IDS = [i.strip() for i in os.getenv("APP_ADMIN_IDS", "").split(",") if i.strip().isdigit()]
 
 # Memory-Monitor Schwellwerte (in MB)
 # Für kleine Server können diese Werte reduziert werden
