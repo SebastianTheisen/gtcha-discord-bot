@@ -54,7 +54,8 @@ Melden kann man alle Karten ab Packpreis (T1 = teuerste, höchstens T50).
 
 ```bash
 docker logs -f gtcha-app                 # Log der App
-docker compose up -d --build gtcha-app   # nach Updates neu bauen
+./update.sh                              # nach Updates: holt main, baut nur Geändertes, prüft danach
+./update.sh --alles                      # alles neu bauen
 ```
 
 Optional in `.env`: `WEBAPP_PORT` (Standard 8080), `WEBAPP_CONTACT` (Kontakt für Push-Dienste,
