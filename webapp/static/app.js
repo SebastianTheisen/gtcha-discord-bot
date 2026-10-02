@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 46;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 47;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -993,7 +993,7 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const fr=document.createElement('iframe');fr.style.cssText='position:fixed;left:-3000px;top:0;width:420px;height:900px';document.body.appendChild(fr);
 const keep=/[¥￥]|coin|münz|rang|rank|\\d{4}[\\/.-]\\d{1,2}[\\/.-]\\d{1,2}|^[\\d.,\\s]+$/i;
 const grab=d=>({text:(d.location.pathname.includes('change-member')?d.body.innerText.split('\\n').filter(l=>keep.test(l)).join('\\n'):d.body.innerText).slice(0,40000),images:[...d.querySelectorAll('img')].map(i=>i.getAttribute('src')).filter(s=>s&&s.includes('/card/')).slice(0,400)});
-const settle=async()=>{let last='',same=0;for(let i=0;i<40;i++){await sleep(400);const d=fr.contentDocument;const t=d&&d.body?d.body.innerText:'';if(t&&t===last){if(++same>=3)return}else same=0;last=t}};
+const settle=async()=>{let last='',same=0;for(let i=0;i<40;i++){await sleep(400);const d=fr.contentDocument;const t=d&&d.body?d.body.innerText:'';if(t&&t===last){if(++same>=6)return}else same=0;last=t}};
 const isNum=x=>x.children.length===0&&/^\\d+$/.test(x.textContent.trim());
 const out=[];
 for(const p of P){say('lade '+p+' …');
@@ -1002,8 +1002,9 @@ const d=fr.contentDocument;if(!d||!d.body){out.push({path:p,error:'kein Zugriff'
 const pages=[grab(d)];
 for(let n=2;n<=40;n++){
 const btn=[...d.querySelectorAll('a,button,li,span,div')].find(e=>isNum(e)&&e.textContent.trim()===String(n)&&[...((e.parentElement&&e.parentElement.parentElement)||e).querySelectorAll('*')].filter(isNum).length>=3);
-if(!btn)break;const before=d.body.innerText;btn.click();await settle();
-const g=grab(d);if(g.text===before)break;pages.push(g);say(p+' Seite '+n)}
+if(!btn)break;const before=d.body.innerText;btn.click();
+let g=null;for(let w=0;w<30;w++){await sleep(500);if(d.body.innerText!==before){await settle();g=grab(d);break}}
+if(!g)break;pages.push(g);say(p+' Seite '+n)}
 out.push({path:p,pages})}
 say('sende …');
 const f=document.createElement('form');f.method='POST';f.action=${JSON.stringify(location.origin)}+'/api/import-form';
