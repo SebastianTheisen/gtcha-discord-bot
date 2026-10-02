@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 68;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 69;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -311,9 +311,9 @@ function drawList() {
     ${shown.length ? (state.listView === "compact"
       ? `<div class="clist">${shown.map(compactRow).join("")}</div>`
       : `<div class="list">${shown.map((b) => row(b)).join("")}</div>`)
-      : `<div class="empty">${q ? "Kein aktiver Banner gefunden – mit Enter die ID direkt öffnen"
-        : state.category === "Wunsch" ? (wishList().length ? "Gerade ist keine deiner Wunschkarten in einem für dich kaufbaren Banner."
-          : "Noch keine Wunschkarten – unter 🔍 Suche oder auf einer Banner-Seite Karten mit ⭐ merken.")
+      : `<div class="empty">${q ? "Nicht gefunden – Enter öffnet die ID"
+        : state.category === "Wunsch" ? (wishList().length ? "Gerade keine Wunschkarte kaufbar."
+          : "Noch keine Wunschkarten (⭐ merken).")
         : active.length ? "Keine Banner für diese Filter" : "Keine Banner"}</div>`}
     <div class="updated" id="updated"></div>`);
   view.querySelector("#updated").textContent = `Stand ${time(updated)}`;
@@ -471,11 +471,11 @@ function renderCards(b) {
 
 // Ampel: lohnt sich (ab 100 %), knapp (90-100 %), lohnt sich nicht
 function verdict(b) {
-  if (b.ev_pct == null) return ["grey", "Keine Daten", "Kartenpool noch nicht geladen"];
+  if (b.ev_pct == null) return ["grey", "Keine Daten", ""];
   if (b.status === "upcoming") return ["grey", "Noch nicht gestartet", ""];
-  if (b.ev_pct >= 100) return ["green", "Lohnt sich", "Im Schnitt kommt mehr zurück als ein Zug kostet"];
-  if (b.ev_pct >= 90) return ["yellow", "Knapp", "Im Schnitt etwas weniger zurück als ein Zug kostet"];
-  return ["red", "Lohnt sich nicht", "Im Schnitt deutlich weniger zurück als ein Zug kostet"];
+  if (b.ev_pct >= 100) return ["green", "Lohnt sich", ""];
+  if (b.ev_pct >= 90) return ["yellow", "Knapp", ""];
+  return ["red", "Lohnt sich nicht", ""];
 }
 
 function glance(b) {
@@ -483,7 +483,7 @@ function glance(b) {
   const diff = b.price && b.remaining && b.left_value != null ? b.left_value - b.price * b.remaining : null;
   return `<div class="glance ${color}">
     <div class="glance-head"><span class="light"></span><div><div class="glance-title">${title}</div>
-      <div class="glance-sub">${sub}</div></div>
+      ${sub ? `<div class="glance-sub">${sub}</div>` : ""}</div>
       ${b.ev_pct != null ? `<div class="glance-pct">${pct(b.ev_pct)}<small>Ø ${num(b.ev)} Coins/Zug</small></div>` : ""}</div>
     <div class="glance-facts">
       ${b.hits_open != null ? `<span>🎯 <b>${hitsText(b)}</b>${b.unsure ? " ❓" : ""}</span>` : ""}
@@ -492,7 +492,7 @@ function glance(b) {
       ${b.cost_to_hit ? `<span>⏱ Ø <b>${num(b.cost_to_hit)}</b> bis Hit</span>` : ""}
     </div>
     ${b.end ? `<div class="glance-until">⏳ ${esc(untilText(b))}</div>` : ""}
-    <div class="glance-note">${b.ev_from_site ? "aus den Zahlen der Seite" : "geschätzt"} · nicht abgeholte Karten zählen noch als drin</div>
+    <div class="glance-note">${b.ev_from_site ? "aus Seitenzahlen" : "geschätzt"}</div>
   </div>`;
 }
 
@@ -543,8 +543,7 @@ async function showBanner(id) {
 
     <section class="pane" data-pane="cards" ${tab === "cards" ? "" : "hidden"}>
       ${b.cards.length ? `<h2 id="cards-title">🃏 Alle Karten <small>${num(b.cards.reduce((n, c) => n + c.copies, 0))} Karten · ${b.cards.length} verschiedene</small></h2>
-        <div class="hint pane-hint">${b.share_above_price != null ? `${pct(b.share_above_price)} der Karten sind mindestens einen Zug wert (<b>gold</b>). ` : ""}
-          Karte antippen, um sie als gezogen zu melden.</div>
+        <div class="hint pane-hint">${b.share_above_price != null ? `${pct(b.share_above_price)} ≥ Packpreis (<b>gold</b>) · ` : ""}Antippen = melden</div>
         <div id="cards"></div>`
         : hits.length ? `<h2>🏆 Hits <small>${open} von ${hits.length} noch drin</small></h2>
         <div class="hits">${hits.map(hitCard).join("")}</div>` : `<div class="empty">Kartenliste noch nicht geladen</div>`}
@@ -598,13 +597,13 @@ function b64ToBytes(b64) {
 }
 
 const EVENT_LABELS = {
-  new: ["🆕 Neuer Banner", "Ein neuer Banner ist online"],
-  value: ["💰 Lohnt sich", "Ein ziehbarer Banner steigt neu über 100 % Ø Rückgabe (wie Top 10)"],
-  hit: ["🎯 Hit raus", "Bei irgendeinem Banner ist ein Hit raus (Versand erkannt oder Medaille)"],
-  packs: ["📉 Pack-Bewegung", "Packs weniger – alle Banner zusammen in einem Push pro Minute"],
-  ship: ["📦 Versand", "Neuer Versandschub bei irgendeinem Banner"],
-  low: ["⚡ Endspurt", "Ein Banner hat nur noch wenige Packs"],
-  end: ["🏁 Beendet", "Ein Banner ist ausverkauft oder nicht mehr online"],
+  new: ["🆕 Neuer Banner", ""],
+  value: ["💰 Lohnt sich", "über 100 %"],
+  hit: ["🎯 Hit raus", ""],
+  packs: ["📉 Pack-Bewegung", "gesammelt, max. 1× pro Minute"],
+  ship: ["📦 Versand", ""],
+  low: ["⚡ Endspurt", ""],
+  end: ["🏁 Beendet", ""],
 };
 // Vorgaben wie auf dem Server (DEFAULTS in webapp/push.py)
 const EVENT_DEFAULTS = { new: true, value: true, hit: true, packs: false, ship: false, low: true, end: false };
@@ -675,22 +674,17 @@ async function showSettings() {
           ${RANKS.map(([k, l]) => `<option value="${k}" ${k === myRank() ? "selected" : ""}>${l}</option>`).join("")}</select>
         <input id="my-charge" class="code-input plain" inputmode="numeric" placeholder="Aufladung" value="${myCharge() || ""}">
       </div>
-      <div class="hint">Rang und diesen Monat gekaufte Coins (laut deinem Münzverlauf). Damit graut
-        die App Banner aus, die du nicht kaufen kannst, und der Filter „✅ Für mich“ funktioniert.</div>
-      <div class="hint">${prof && prof.updated_at && (prof.rank || prof.charge != null)
-        ? `🔄 Wird beim „Alles übertragen“ automatisch ausgefüllt (zuletzt ${esc(prof.updated_at.slice(8, 10) + "." + prof.updated_at.slice(5, 7) + ". " + prof.updated_at.slice(11, 16))}).
-           Von Hand ändern geht trotzdem – gilt bis zum nächsten Übertragen.`
-        : "Von Hand auswählen – oder unten per Lesezeichen „Alles übertragen“ automatisch ausfüllen lassen."}</div>
+      <div class="hint">Rang · diesen Monat gekaufte Coins${prof && prof.updated_at && (prof.rank || prof.charge != null)
+        ? ` · 🔄 automatisch (${esc(prof.updated_at.slice(8, 10) + "." + prof.updated_at.slice(5, 7) + ".")})` : ""}</div>
     </div>
     <h2>🔔 Push-Benachrichtigungen</h2>
-    ${!isStandalone() ? `<div class="notice" style="margin-bottom:12px">Auf dem iPhone gehen Pushes nur, wenn die App installiert ist:
-      in Safari auf <b>Teilen</b> → <b>Zum Home-Bildschirm</b>, dann die App vom Home-Bildschirm öffnen.</div>` : ""}
+    ${!isStandalone() ? `<div class="notice" style="margin-bottom:12px">Pushes nur in der installierten App (Teilen → Zum Home-Bildschirm).</div>` : ""}
     <div class="panel">
       <div class="hint"><b>Für alle Banner</b></div>
       ${Object.entries(EVENT_LABELS).map(([k, [label, hint]]) => `
-        <label class="toggle"><span>${label}<br><span class="hint">${hint}</span></span>
+        <label class="toggle"><span>${label}${hint ? `<br><span class="hint">${hint}</span>` : ""}</span>
         <input type="checkbox" data-event="${k}" ${(prefs[k] ?? EVENT_DEFAULTS[k]) ? "checked" : ""}></label>`).join("")}
-      ${!supported ? `<div class="hint">Dieses Gerät/dieser Browser unterstützt keine Push-Benachrichtigungen.</div>`
+      ${!supported ? `<div class="hint">Hier nicht verfügbar.</div>`
         : sub ? `<button class="btn" id="test">Test-Push senden</button>
                  <button class="btn" id="off">Pushes ausschalten</button>`
               : `<button class="btn primary" id="on">Pushes einschalten</button>`}
@@ -705,15 +699,12 @@ async function showSettings() {
           </select>
           <button class="btn primary" id="watch-add-btn">Hinzufügen</button>
         </div>
-        <div class="hint">Pro Banner beliebig viele Ereignisse antippen – sie kommen einzeln, zusätzlich zu den
-          Schaltern oben. Gleiche Meldungen kommen nur einmal.</div>
         ${watched.length ? watched.sort((a, b) => b - a).map((id) => watchCard(id, prefs.watch[id], byId[id])).join("")
-          : `<div class="hint">Noch kein Banner beobachtet. Auch auf jeder Banner-Seite über „🔔 Beobachten“.</div>`}
+          : `<div class="hint">Noch keiner.</div>`}
       </div>` : ""}
     ${user ? `<h2>📥 Eigene GTCHA-Daten</h2>
       <div class="panel">
-        <div class="hint">Ein Lesezeichen überträgt deine eigenen GTCHA-Verlaufsseiten an deinen VPS – kein Passwort,
-          nur das, was dir dort angezeigt wird. Daraus entstehen „Mein Verlauf“, Rang/Aufladung und automatische Medaillen.</div>
+        <div class="hint">Überträgt deine GTCHA-Verlaufsseiten – ohne Passwort.</div>
         <div class="gt-links">
           <a class="btn primary" href="${esc(buyHref("https://gtchaxonline.com/pending-detail"))}" target="_blank" rel="noopener">📥 GTCHA öffnen</a>
         </div>
@@ -735,16 +726,13 @@ async function showSettings() {
     <div class="panel">
       <select id="link-mode" aria-label="GTCHA-Seite öffnen in">${Object.entries(LINK_MODES).map(([k, label]) =>
         `<option value="${k}" ${k === load("linkMode", "safari") ? "selected" : ""}>${label}</option>`).join("")}</select>
-      <div class="hint">Gilt für „Öffnen ↗“ in der installierten App auf dem iPhone. Safari bzw. Chrome öffnen die
-        Seite dort, wo du eingeloggt bist (Safari ab iOS 17). „In der App“ öffnet ein eigenes Fenster ohne deine Logins.</div>
+      <div class="hint">Für „Öffnen ↗“.</div>
     </div>
     <h2>ℹ️ Über diese App</h2>
-    <div class="panel"><div class="hint">Private, inoffizielle App mit den Daten deines GTCHA-Discord-Bots.
-      Kein Angebot von GTCHA. Gezogen wird immer auf der offiziellen Seite.</div>
-      <div class="hint">App-Version ${APP_VERSION}</div></div>
+    <div class="panel"><div class="hint">Inoffiziell, kein Angebot von GTCHA · Version ${APP_VERSION}</div></div>
     <h2>⏱ Geschwindigkeit</h2>
     <div class="panel"><button class="btn" id="speed">Geschwindigkeit testen</button>
-      <div class="hint" id="speed-out">Lädt 10 Bilder aus dem iPhone-Speicher und frisch vom VPS und zeigt die Zeiten.</div></div>`;
+      <div class="hint" id="speed-out"></div></div>`;
   view.querySelectorAll("#bm-sync, #bm-full").forEach((btn) => btn.addEventListener("click", async () => {
     const code = bookmarkletSync(deviceToken(), btn.id === "bm-full");
     const msg = view.querySelector("#bm-msg");
@@ -758,8 +746,7 @@ async function showSettings() {
     try {
       const res = await authApi("/api/admin/settings", { mode: view.querySelector("#admin-mode").value,
         delay_minutes: Number(view.querySelector("#admin-delay").value) || 0 });
-      msg.textContent = `Gespeichert ✓ – Discord: ${res.mode === "slim" ? "schlank" : "voll"}, ${res.delay_minutes} Min Verzögerung.
-        Der Bot übernimmt es innerhalb einer Minute.`;
+      msg.textContent = "Gespeichert ✓";
       haptic();
     } catch (e) { msg.textContent = "Nicht gespeichert: " + e.message; }
   });
@@ -935,18 +922,16 @@ async function claimFlow(b, card) {
 function linkPanel(user, devices = []) {
   const when = (t) => (t ? `${t.slice(8, 10)}.${t.slice(5, 7)}. ${t.slice(11, 16)}` : "–");
   return `<h2>🔗 Discord verknüpfen</h2><div class="panel">${user
-    ? `<div>Verknüpft als <b>${esc(user.name)}</b> – du kannst Hits melden, sie erscheinen im Discord-Thread.</div>
-       <div class="hint">Deine Discord-ID: <b>${esc(user.user_id)}</b>${user.admin ? " · Admin" : ""}</div>
+    ? `<div>Verknüpft als <b>${esc(user.name)}</b>${user.admin ? " · Admin" : ""}</div>
+       <button class="btn" id="copy-id">Discord-ID kopieren</button>
        <button class="btn" id="unlink">Verknüpfung trennen</button>
-       ${devices.length ? `<div class="hint" style="margin-top:12px"><b>Verknüpfte Geräte (${devices.length})</b></div>
+       ${devices.length ? `<div class="hint" style="margin-top:12px"><b>Geräte (${devices.length})</b></div>
        <div class="rows" style="margin:6px 0 0">${devices.map((d) => `
          <div class="line"><span>${esc(d.agent || "Gerät")}${d.current ? " · <b>dieses Gerät</b>" : ""}<br>
-           <span class="muted">verknüpft ${when(d.created_at)} · zuletzt aktiv ${when(d.last_seen)}</span></span>
+           <span class="muted">zuletzt ${when(d.last_seen)}</span></span>
            ${d.current ? "" : `<button class="icon-btn" data-device="${esc(d.id)}" aria-label="Gerät abmelden">✕</button>`}</div>`).join("")}</div>
-       <div class="hint">Safari und die installierte App zählen als eigene Geräte. Mit ✕ meldest du ein Gerät ab
-         (z. B. ein altes Handy) – sein Lesezeichen funktioniert dann nicht mehr.</div>` : ""}`
-    : `<div class="hint">1. In Discord <b>/app-verknüpfen</b> eingeben – der Bot zeigt dir einen Code (nur für dich).<br>
-       2. Code hier eingeben. Danach kannst du auf jeder Banner-Seite Hits als gezogen melden.</div>
+` : ""}`
+    : `<div class="hint">In Discord <b>/app-verknüpfen</b>, Code hier eingeben.</div>
        <div class="add-watch"><input id="link-code" class="code-input" maxlength="8" autocomplete="one-time-code"
          autocapitalize="characters" placeholder="Code, z. B. K7M2QX">
        <button class="btn primary" id="link-btn">Verknüpfen</button></div>
@@ -954,6 +939,10 @@ function linkPanel(user, devices = []) {
 }
 
 function wireLinkPanel() {
+  view.querySelector("#copy-id")?.addEventListener("click", async (e) => {
+    try { await navigator.clipboard.writeText(String(state.me?.user_id || "")); e.target.textContent = "Kopiert ✓"; haptic(); }
+    catch (err) { e.target.textContent = "Kopieren nicht möglich"; }
+  });
   view.querySelectorAll("[data-device]").forEach((btn) => btn.addEventListener("click", async () => {
     if (await ask("Gerät abmelden?", "Dieses Gerät ist danach nicht mehr mit Discord verknüpft.") !== "Ja") return;
     await authApi("/api/me/devices/remove", { id: btn.dataset.device }).catch(() => {});
@@ -1152,8 +1141,7 @@ function balanceChart(daysNewestFirst) {
 
 function historySection(h) {
   if (!h || h.empty) {
-    return `<h2>📊 Mein Verlauf</h2><div class="panel"><div class="hint">Noch keine Daten – unten bei „Eigene GTCHA-Daten“
-      das Lesezeichen „Alles übertragen“ einrichten und auf gtchaxonline.com antippen.</div></div>`;
+    return `<h2>📊 Mein Verlauf</h2><div class="panel"><div class="hint">Noch keine Daten.</div></div>`;
   }
   const s = h.summary, t = s.total, m = h.member || {};
   const banners = s.banners.map((b) => `
@@ -1185,15 +1173,12 @@ function historySection(h) {
       ${t.hits ? stat("Nur Coins", signed(t.balance) + " Coins", "ohne angeforderte/verschickte Karten") : ""}
       ${t.bought ? stat("Coins gekauft", num(t.bought), num(t.bought_yen) + " ¥") : ""}
     </div>
-    ${h.gap ? `<div class="notice warn">⚠️ Im Verlauf fehlt evtl. etwas – einmal das Lesezeichen „Komplett übertragen“ benutzen.</div>` : ""}
-    <div class="hint pad">Münzverlauf seit ${esc((s.since || "").split(" ")[0].split("-").reverse().join("."))} · ${t.opens} Öffnungen.
-      Hits = angeforderte und verschickte Karten seit dann, mit ihrem Kartenwert. Glück/Pech: was du aus einem
-      Banner bekommen hast gegenüber dem Durchschnitt (Züge × Ø Wert je Pack).</div>
+    ${h.gap ? `<div class="notice warn">⚠️ Lücke – einmal „Komplett übertragen“.</div>` : ""}
+    <div class="hint pad">Seit ${esc((s.since || "").split(" ")[0].split("-").reverse().join("."))} · ${t.opens} Öffnungen</div>
     ${banners ? `<h3 class="sub-title">Pro Banner</h3><div class="rows">${banners}</div>` : ""}
-    ${s.unassigned_opens ? `<div class="hint pad">${s.unassigned_opens} Öffnungen nicht zugeordnet – nur eindeutige Fälle
-      (Preis, Pack-Bewegung, Kartenwert) werden einem Banner zugerechnet.</div>` : ""}
+    ${s.unassigned_opens ? `<div class="hint pad">${s.unassigned_opens} nicht zugeordnet</div>` : ""}
     ${monthRows ? `<h3 class="sub-title">Pro Monat</h3><div class="rows">${monthRows}</div>` : ""}
-    ${s.days.length > 1 ? `<h3 class="sub-title">Bilanz pro Tag <small class="muted">Balken = Tag, Linie = aufsummiert</small></h3>
+    ${s.days.length > 1 ? `<h3 class="sub-title">Bilanz pro Tag</h3>
       ${balanceChart(s.days)}` : ""}
     ${days ? `<h3 class="sub-title">Pro Tag</h3><div class="rows">${days}</div>` : ""}
     ${h.pending.length ? `<h3 class="sub-title">Angefordert, noch nicht verschickt (${h.pending.length})</h3>
@@ -1214,19 +1199,10 @@ function adminSection(a) {
         </select>
         <input id="admin-delay" class="code-input plain" inputmode="numeric" value="${a.delay_minutes}" aria-label="Verzögerung in Minuten">
       </div>
-      <div class="hint">Links der Modus, rechts die Verzögerung in Minuten (0 = sofort).</div>
+      <div class="hint">Modus · Verzögerung in Min (0 = sofort)</div>
       <button class="btn primary" id="admin-save">Speichern</button>
-      <div class="hint"><b>Admin (sieht alle Nutzer-Statistiken):</b> ${(a.admins || []).map((x) =>
-        `${esc(x.name || "nicht verknüpft")} <span class="muted">(${esc(x.user_id)})</span>`).join(", ") || "–"}<br>
-        Deine Discord-ID: <b>${esc(a.you || "")}</b> – auf dem VPS in der <code>.env</code> als
-        <code>APP_ADMIN_IDS=${esc(a.you || "")}</code> eintragen und
-        <code>docker compose up -d --force-recreate gtcha-app gtcha-bot</code> – dann bist nur du Admin.</div>
+      <div class="hint">Admin: ${(a.admins || []).map((x) => esc(x.name || "–")).join(", ") || "–"}</div>
       <div class="hint" id="admin-msg"></div>
-      <div class="hint"><b>Schlank:</b> Startbeitrag nur mit Ampel 🟢/🟡/🔴 und „Hits noch drin“, neutraler Titel,
-        keine Pack-Updates, kein „Lohnt sich“, kein Endspurt, keine Hit-Chance, kein Top-10-Kanal.
-        <b>Automatisch erkannte Hits</b> und <b>in der App gemeldete Medaillen</b> erscheinen in Discord erst nach der
-        Verzögerung (auch in der Hit-Liste). Im Thread geschriebene Medaillen zählen sofort.
-        Beim Umschalten zeichnet der Bot alle Threads neu; alte Posts der weggefallenen Arten löscht er.</div>
     </div>`;
 }
 
@@ -1240,7 +1216,6 @@ async function showUsers() {
   }
   const { users } = await authApi("/api/admin/users");
   view.innerHTML = `<div class="section-title">👥 Nutzer <small class="muted">${users.length}</small></div>
-    <div class="hint pad">Alles, was die Nutzer selbst per Lesezeichen übertragen bzw. gemeldet haben. Antippen zum Aufklappen.</div>
     ${users.map((u) => {
       const p = u.profile || {}, t = u.total;
       return `<details class="user-card" data-user="${esc(u.user_id)}">
@@ -1250,7 +1225,7 @@ async function showUsers() {
           <span>${t ? signed(t.balance) : `<span class="muted">–</span>`}</span></summary>
         <div class="user-body"><div class="loading">Lädt …</div></div>
       </details>`;
-    }).join("") || `<div class="empty">Noch keine Nutzer verknüpft.</div>`}`;
+    }).join("") || `<div class="empty">Keine Nutzer.</div>`}`;
   view.querySelectorAll(".user-card").forEach((card) => card.addEventListener("toggle", async () => {
     if (!card.open || card.dataset.loaded) return;
     card.dataset.loaded = "1";
@@ -1270,7 +1245,7 @@ async function showUsers() {
             <span class="claim-text"><b>${esc(m.tier)}</b> ${esc(m.name)}<br><span class="muted">${esc(m.title || "Banner " + m.banner_id)}
             ${m.value != null ? " · " + num(m.value) + " Coins" : ""}</span></span></a>`).join("")
           || `<div class="line muted">Keine aktiven Medaillen</div>`}</div>
-        ${h.empty ? `<div class="hint pad">Hat noch nichts per Lesezeichen übertragen.</div>`
+        ${h.empty ? `<div class="hint pad">Nichts übertragen.</div>`
           : historySection(h).replace(/<h2>📊 Mein Verlauf/, "<h2>📊 Verlauf")}`;
     } catch (e) { body.innerHTML = `<div class="hint pad">Nicht ladbar: ${esc(e.message)}</div>`; }
   }));
@@ -1281,17 +1256,12 @@ function accuracySection(a) {
   if (!a) return "";
   const head = `<h2>🎯 Treffsicherheit <small>${a.count ? `${a.count} Banner` : "sammelt Daten"}</small></h2>`;
   if (!a.count) {
-    return head + `<div class="panel"><div class="hint">Die App merkt sich ab jetzt die vorhergesagte Ø Rückgabe jedes Banners
-      und vergleicht sie mit dem, was tatsächlich zurückkam (umgewandelt + verschickt). Sobald bei einem Banner
-      mindestens 30 Packs verkauft wurden, steht hier das Ergebnis.</div></div>`;
+    return head + `<div class="panel"><div class="hint">Ergebnis ab 30 verkauften Packs je Banner.</div></div>`;
   }
   const dir = a.bias > 1 ? "eher zu optimistisch" : a.bias < -1 ? "eher zu vorsichtig" : "ohne klare Richtung";
   return head + `<div class="stats hist-stats">
       ${stat("Ø Abweichung", `${a.mean_abs.toLocaleString("de-DE")} %-Punkte`, dir)}
     </div>
-    <div class="hint pad">Vorhersage = Ø Rückgabe, gewichtet mit den jeweils verkauften Packs. Ergebnis = was laut Seite
-      umgewandelt/verschickt wurde, geteilt durch verkaufte Packs × Preis. Noch nicht verschickte Karten kommen erst
-      später dazu – das Ergebnis ist daher eher etwas zu niedrig.</div>
     <div class="rows">${a.items.map((i) => `
       <a class="line" href="#/banner/${i.id}"><span><b>${esc(i.title || "Banner " + i.id)}</b><br>
         <span class="muted">${num(i.sold)} Packs · vorhergesagt ${pct(i.predicted)} · tatsächlich ${pct(i.realized)}</span></span>
@@ -1348,9 +1318,7 @@ async function showSearch() {
     if (text.length < 2) {
       const wish = wishList();
       if (!wish.length) {
-        out.innerHTML = `<div class="panel"><div class="hint">Sucht in allen laufenden Bannern. Mit „☆ Merken“ kommt eine Karte
-          auf deine Wunschliste: Push, sobald ein neuer Banner sie enthält oder sie irgendwo gezogen wurde
-          (Pushes müssen dafür unter „Ich“ an sein).</div></div>`;
+        out.innerHTML = `<div class="panel"><div class="hint">☆ Merken = Push bei neuem Banner oder wenn gezogen.</div></div>`;
         return;
       }
       const res = await api(`/api/cards?ids=${wish.map((w) => w.id).join(",")}`);
@@ -1423,8 +1391,7 @@ async function showInbox() {
   const sub = await currentSubscription().catch(() => null);
   if (!sub) {
     view.innerHTML = `<div class="section-title">🔔 Benachrichtigungen</div>
-      <div class="panel"><div class="hint">Auf diesem Gerät sind Pushes aus. Hier erscheinen alle Pushes, die du bekommst –
-      auch die, die du weggewischt hast.</div><a class="btn primary" href="#/settings">Pushes einschalten</a></div>`;
+      <div class="panel"><div class="hint">Pushes sind aus.</div><a class="btn primary" href="#/settings">Einschalten</a></div>`;
     return;
   }
   let items = [], more = false;
@@ -1432,7 +1399,7 @@ async function showInbox() {
     view.innerHTML = `<div class="section-title">🔔 Benachrichtigungen</div>
       <div class="inbox-actions"><span class="hint">${unread ? `${unread} ungelesen` : "Alles gelesen"} · letzte 30 Tage</span>
         ${unread ? `<button class="btn" id="read-all">✓ Alle gelesen</button>` : ""}</div>
-      ${items.length ? inboxList(items) : `<div class="empty">Noch keine Benachrichtigungen.</div>`}
+      ${items.length ? inboxList(items) : `<div class="empty">Keine Benachrichtigungen.</div>`}
       ${more ? `<div style="margin:12px 10px"><button class="btn" id="more">Ältere laden</button></div>` : ""}`;
     view.querySelector("#read-all")?.addEventListener("click", async () => {
       haptic();

@@ -267,7 +267,7 @@ class App:
             logger.info(f"Discord-Ansicht von {user['name']} geändert: {mode}, {delay} Min")
         view = await self.bridge.discord_view()
         return web.json_response({"mode": "slim" if view["slim"] else "full", "delay_minutes": view["delay_minutes"],
-                                  "admins": await self.bridge.names(admin_ids()), "you": user["user_id"]})
+                                  "admins": [{"name": x["name"]} for x in await self.bridge.names(admin_ids())]})
 
     async def api_my_medals(self, request):
         user = await self._user(request)
