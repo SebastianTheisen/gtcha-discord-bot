@@ -171,7 +171,7 @@ def test_admin_settings_only_for_admins(tmp_path, monkeypatch):
         assert (await client.post("/api/admin/settings", headers=h(7), json={"mode": "full", "delay_minutes": 0})).status == 403
         res = await (await client.get("/api/admin/settings", headers=h(42))).json()
         assert (res["mode"], res["delay_minutes"]) == ("slim", 30)                  # Voreinstellung
-        assert res["admins"] == [{"user_id": "42", "name": "U42"}] and res["you"] == "42"
+        assert res["admins"] == [{"name": "U42"}] and "you" not in res          # keine IDs im Klartext
         res = await (await client.post("/api/admin/settings", headers=h(42), json={"mode": "slim", "delay_minutes": 90})).json()
         assert (res["mode"], res["delay_minutes"]) == ("slim", 90)
         # Nutzer-Statistik: nur Admin
