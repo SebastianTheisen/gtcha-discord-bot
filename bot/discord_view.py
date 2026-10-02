@@ -12,6 +12,7 @@ Die Datenbank (und damit die App) bekommt jede Änderung sofort.
 """
 
 import time
+from datetime import timezone
 
 from bot.common import *  # noqa: F401,F403
 
@@ -129,14 +130,9 @@ class DiscordViewMixin:
                     continue
                 if not isinstance(thread, discord.Thread):
                     continue
-                async for msg in thread.history(limit=None):
-                    if msg.author.id == self.user.id and (msg.content or "").startswith(OLD_POST_PREFIXES):
-                        await discord_rate_limiter.acquire("message_delete")
-                        try:
-                            await msg.delete()
-                            deleted += 1
-                        except discord.NotFound:
-                            pass
+                old = [msg async for msg in thread.history(limit=None)
+                       if msg.author.id == self.user.id and (msg.content or "").startswith(OLD_POST_PREFIXES)]
+                deleted += await self._delete_messages(thread, old)
                 await self.db.update_probability_message_id(int(thread_data["thread_id"]), None)
             hot_id = await self.db.get_meta("hot_thread_id")
             if hot_id:
@@ -174,6 +170,36 @@ class DiscordViewMixin:
                 await self._cleanup_old_posts()
         except Exception as e:
             logger.warning(f"[DISCORD] Ansicht nicht übernommen: {e}")
+
+    async def _delete_messages(self, thread, messages: list) -> int:
+        """Jüngere als 14 Tage gesammelt löschen (bis 100 auf einmal - ein Aufruf statt 100, kaum Wartezeiten
+        durch Discord), ältere einzeln (das erlaubt Discord nur so)."""
+        limit = datetime.now(timezone.utc) - timedelta(days=13, hours=12)
+        recent = [m for m in messages if m.created_at > limit]
+        older = [m for m in messages if m.created_at <= limit]
+        deleted = 0
+        for i in range(0, len(recent), 100):
+            chunk = recent[i:i + 100]
+            await discord_rate_limiter.acquire("message_delete")
+            try:
+                if len(chunk) == 1:
+                    await chunk[0].delete()
+                else:
+                    await thread.delete_messages(chunk)
+                deleted += len(chunk)
+            except discord.NotFound:
+                pass
+            except discord.HTTPException as e:   # z. B. eine Nachricht schon weg - dann einzeln
+                logger.debug(f"[DISCORD] Sammel-Löschen fehlgeschlagen, einzeln: {e}")
+                older += chunk
+        for msg in older:
+            await discord_rate_limiter.acquire("message_delete")
+            try:
+                await msg.delete()
+                deleted += 1
+            except discord.NotFound:
+                pass
+        return deleted
 
     async def _remember_owner_as_admin(self):
         """Admin-Tabelle = genau APP_ADMIN_IDS aus der .env (nur Anzeige/Protokoll; die App prüft die .env selbst).
