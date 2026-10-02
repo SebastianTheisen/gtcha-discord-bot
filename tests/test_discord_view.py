@@ -260,3 +260,51 @@ def test_security_basics(tmp_path):
         await client.close()
 
     asyncio.run(run())
+
+
+def test_admin_tools_status_block_push_medal(tmp_path, monkeypatch):
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from webapp.server import App, make_app
+
+    async def run():
+        await Database(str(tmp_path / "gtcha_bot.db")).init()
+        app = App(str(tmp_path / "gtcha_bot.db"), str(tmp_path), "x")
+        await app.bridge.init()
+        await app.push.init()
+        tok = {}
+        for uid in (42, 7):
+            tok[uid] = (await app.bridge.redeem_code(await app.bridge.create_code(uid, f"U{uid}")))["token"]
+        monkeypatch.setenv("APP_ADMIN_IDS", "42")
+        web_app = make_app(app)
+        web_app.on_startup.clear()
+        web_app.on_cleanup.clear()
+        client = TestClient(TestServer(web_app))
+        await client.start_server()
+        h = lambda uid: {"X-Device-Token": tok[uid]}
+        for path, body in (("/api/admin/medal", {"pack_id": 1, "tier": "T1", "action": "remove"}),
+                           ("/api/admin/block", {"user_id": "42", "blocked": True}),
+                           ("/api/admin/push", {"title": "x"})):
+            assert (await client.post(path, headers=h(7), json=body)).status == 403        # nur Admin
+        assert (await client.get("/api/admin/status", headers=h(7))).status == 403
+        st = await (await client.get("/api/admin/status", headers=h(42))).json()
+        assert st["users"] == 2 and st["slim"] is True
+        # Push an alle
+        assert (await (await client.post("/api/admin/push", headers=h(42), json={"title": "Hallo"})).json())["sent"] == 0
+        # Medaille umtragen -> Auftrag für den Bot
+        res = await client.post("/api/admin/medal", headers=h(42), json={"pack_id": 5, "tier": "T2", "action": "assign",
+                                                                         "user_id": "7"})
+        req = await app.bridge.get_request((await res.json())["id"])
+        assert (req["action"], req["discord_user_id"], req["tier"]) == ("admin_assign", "7", "T2")
+        # Sperren: Admin nicht, andere ja - Geräte weg, neu verknüpfen geht nicht
+        assert (await client.post("/api/admin/block", headers=h(42), json={"user_id": "42", "blocked": True})).status == 400
+        assert (await client.post("/api/admin/block", headers=h(42), json={"user_id": "7", "blocked": True})).status == 200
+        assert await app.bridge.device(tok[7]) is None
+        assert await app.bridge.redeem_code(await app.bridge.create_code(7, "U7")) is None
+        users = (await (await client.get("/api/admin/users", headers=h(42))).json())["users"]
+        assert next(u for u in users if u["user_id"] == "7")["blocked"] is True
+        await client.post("/api/admin/block", headers=h(42), json={"user_id": "7", "blocked": False})
+        assert await app.bridge.redeem_code(await app.bridge.create_code(7, "U7"))
+        await client.close()
+
+    asyncio.run(run())

@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict
 
+import aiosqlite
 from aiohttp import web
 from loguru import logger
 
@@ -442,6 +443,87 @@ class App:
         users.sort(key=lambda x: (x["saved_at"] or "", x["last_seen"] or ""), reverse=True)
         return web.json_response({"users": users})
 
+    async def api_admin_status(self, request):
+        """System-Status für den Admin: läuft der Bot, Pack-Zahlen, Backups, Datenbanken, Discord-Warteschlange."""
+        await self._admin(request)
+        data_dir = Path(self.bridge.db_path).parent
+        now = time.time()
+        age = lambda p: int(now - p.stat().st_mtime) if p.exists() else None
+        bot_db = Path(self.view.db.db_path)
+        backups = sorted((data_dir / "backups").glob("*.db"), key=lambda p: p.stat().st_mtime)
+        async with aiosqlite.connect(f"file:{bot_db}?mode=ro", uri=True) as db:
+            q = lambda sql: db.execute(sql)
+            last_move = (await (await q("SELECT max(changed_at) FROM pack_history")).fetchone())[0]
+            active = (await (await q("SELECT count(*) FROM banners WHERE is_active = 1")).fetchone())[0]
+            try:
+                outbox = (await (await q("SELECT count(*) FROM discord_outbox")).fetchone())[0]
+            except aiosqlite.OperationalError:
+                outbox = None
+            meta = dict(await (await q("SELECT key, value FROM bot_meta")).fetchall())
+        view = await self.bridge.discord_view()
+        users = await self.bridge.known_users()
+        return web.json_response({
+            "heartbeat_age": age(data_dir / "heartbeat"),
+            "last_pack_move": local_time(last_move), "active_banners": active,
+            "data_age": int(now) - self._updated if self._updated else None,
+            "backup_last": local_time(datetime.fromtimestamp(backups[-1].stat().st_mtime).isoformat()) if backups else None,
+            "backups": len(backups),
+            "db_mb": round(bot_db.stat().st_size / 1e6, 1) if bot_db.exists() else None,
+            "app_db_mb": round(Path(self.bridge.db_path).stat().st_size / 1e6, 1),
+            "outbox": outbox, "slim": view["slim"], "delay_minutes": view["delay_minutes"],
+            "cleanup_done": meta.get("slim_cleanup") == "1",
+            "users": len([u for u in users if not u.get("blocked")]),
+            "blocked": len([u for u in users if u.get("blocked")]),
+            "push_devices": await self.push.count(),
+        })
+
+    async def api_admin_medal(self, request):
+        """Medaille entfernen oder an eine andere Person umtragen - der Bot erledigt es und meldet es im Thread."""
+        admin = await self._admin(request)
+        body = await request.json()
+        tier, action = str(body.get("tier", "")).upper(), body.get("action")
+        try:
+            pack_id = int(body.get("pack_id"))
+        except (TypeError, ValueError):
+            raise web.HTTPBadRequest(text="Banner fehlt")
+        if action not in ("remove", "assign") or not re.fullmatch(r"T([1-9]\d?)", tier):
+            raise web.HTTPBadRequest(text="Ungültig")
+        target = admin
+        if action == "assign":
+            known = {u["user_id"]: u for u in await self.bridge.known_users()}
+            target = known.get(str(body.get("user_id", "")))
+            if not target or target.get("blocked"):
+                raise web.HTTPBadRequest(text="Unbekannte Person")
+        request_id = await self.bridge.add_request(pack_id, tier, {"user_id": target["user_id"], "name": target["name"]},
+                                                   f"admin_{action}")
+        logger.info(f"Admin {admin['name']}: Medaille {tier} bei {pack_id} {action}")
+        return web.json_response({"id": request_id})
+
+    async def api_admin_block(self, request):
+        admin = await self._admin(request)
+        body = await request.json()
+        user_id = str(body.get("user_id", ""))
+        if not user_id.isdigit() or is_admin(user_id):
+            raise web.HTTPBadRequest(text="Admins können nicht gesperrt werden")
+        if body.get("blocked"):
+            known = {u["user_id"]: u for u in await self.bridge.known_users()}
+            await self.bridge.block(user_id, (known.get(user_id) or {}).get("name"))
+            await self.push.remove_user(user_id)
+        else:
+            await self.bridge.unblock(user_id)
+        logger.info(f"Admin {admin['name']}: Nutzer {'gesperrt' if body.get('blocked') else 'entsperrt'}")
+        return web.json_response({"ok": True})
+
+    async def api_admin_push(self, request):
+        admin = await self._admin(request)
+        body = await request.json()
+        title, text = str(body.get("title", "")).strip()[:80], str(body.get("body", "")).strip()[:300]
+        if not title:
+            raise web.HTTPBadRequest(text="Titel fehlt")
+        sent = await self.push.send("admin", f"📢 {title}", text)
+        logger.info(f"Admin {admin['name']}: Push an alle ({sent} Geräte)")
+        return web.json_response({"sent": sent})
+
     async def api_admin_user(self, request):
         await self._admin(request)
         user_id = request.match_info["id"]
@@ -652,6 +734,10 @@ def make_app(app: App) -> web.Application:
         web.post("/api/admin/settings", app.api_admin_settings),
         web.get("/api/admin/users", app.api_admin_users),
         web.get(r"/api/admin/user/{id:\d+}", app.api_admin_user),
+        web.get("/api/admin/status", app.api_admin_status),
+        web.post("/api/admin/medal", app.api_admin_medal),
+        web.post("/api/admin/block", app.api_admin_block),
+        web.post("/api/admin/push", app.api_admin_push),
         web.post("/api/me/devices/remove", app.api_remove_device),
         web.get("/api/health", app.api_health),
         web.get("/api/accuracy", app.api_accuracy),

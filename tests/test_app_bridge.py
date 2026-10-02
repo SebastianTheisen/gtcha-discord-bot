@@ -97,6 +97,16 @@ def test_bot_applies_app_medals(tmp_path, monkeypatch):
         r5 = await bridge.add_request(7, "T2", me, "unclaim")
         await bot._process_app_requests()
         assert (await bridge.get_request(r5))["status"] == "ok" and await db.get_medal(700, "T2") is None
+        # Admin-Korrektur: umtragen und entfernen, egal wem die Medaille gehört
+        r6 = await bridge.add_request(7, "T1", other, "claim")
+        r7 = await bridge.add_request(7, "T1", me, "admin_assign")
+        await bot._process_app_requests()
+        assert (await bridge.get_request(r7))["status"] == "ok" and (await db.get_medal(700, "T1"))["user_id"] == 11
+        assert any("T1 an <@11> umgetragen" in s for s in sent)
+        r8 = await bridge.add_request(7, "T1", me, "admin_remove")
+        await bot._process_app_requests()
+        assert (await bridge.get_request(r8))["status"] == "ok" and await db.get_medal(700, "T1") is None
+        assert (await bridge.get_request(r6))["status"] == "ok"
 
     asyncio.run(run())
 
