@@ -306,6 +306,23 @@ class App:
         body = await request.json()
         return web.json_response({"prefs": await self.push.prefs(str(body.get("endpoint", "")))})
 
+    async def api_push_inbox(self, request):
+        """Verlauf der Pushes dieses Geräts (erkannt am Push-Abo, wie die Einstellungen)."""
+        body = await request.json()
+        endpoint = str(body.get("endpoint", ""))
+        if not endpoint:
+            return web.json_response({"items": [], "unread": 0, "more": False})
+        limit = max(1, min(100, int(body.get("limit") or 30)))
+        return web.json_response(await self.push.inbox(endpoint, limit, int(body.get("before") or 0)))
+
+    async def api_push_read(self, request):
+        body = await request.json()
+        endpoint = str(body.get("endpoint", ""))
+        if endpoint:
+            ids = body.get("ids")
+            await self.push.mark_read(endpoint, None if body.get("all") else [int(i) for i in (ids or [])][:200])
+        return web.json_response({"ok": True})
+
     async def api_push_test(self, request):
         body = await request.json()
         await self.push.send("test", "🔔 Test", "Push-Benachrichtigungen funktionieren.",
@@ -379,6 +396,8 @@ def make_app(app: App) -> web.Application:
         web.post("/api/push/unsubscribe", app.api_push_unsubscribe),
         web.post("/api/push/prefs", app.api_push_prefs),
         web.post("/api/push/test", app.api_push_test),
+        web.post("/api/push/inbox", app.api_push_inbox),
+        web.post("/api/push/read", app.api_push_read),
     ])
     web_app.router.add_static("/static", STATIC)
 

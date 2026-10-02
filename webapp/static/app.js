@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 50;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 51;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -1098,6 +1098,92 @@ function historySection(h) {
       <div class="rows">${h.shipped.map(cardLine).join("")}</div></details>` : ""}`;
 }
 
+// --- Benachrichtigungen: Verlauf der Pushes dieses Geräts (Glocke oben) ---
+async function inboxApi(path, body = {}) {
+  const sub = await currentSubscription().catch(() => null);
+  if (!sub) return null;
+  return api(path, post({ endpoint: sub.endpoint, ...body }));
+}
+
+function setBell(unread) {
+  const el = document.getElementById("bell-count");
+  if (!el) return;
+  el.hidden = !unread;
+  el.textContent = unread > 99 ? "99+" : String(unread || "");
+  try { unread ? navigator.setAppBadge?.(unread) : navigator.clearAppBadge?.(); } catch (e) { /* nicht unterstützt */ }
+}
+
+async function updateBell() {
+  const res = await inboxApi("/api/push/inbox", { limit: 1 }).catch(() => null);
+  setBell(res ? res.unread : 0);
+}
+
+async function markRead(ids) {
+  await inboxApi("/api/push/read", ids ? { ids } : { all: true }).catch(() => null);
+  await updateBell();
+}
+
+function inboxTime(t) {
+  const d = new Date(t.replace(" ", "T") + "Z");   // Server: UTC
+  return { day: d.toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit" }),
+           time: d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" }) };
+}
+
+function inboxItem(n) {
+  const href = n.banner_id ? `#/banner/${n.banner_id}?n=${n.id}` : "#/inbox";
+  return `<a class="inbox-item ${n.read ? "" : "unread"}" href="${href}" data-id="${n.id}">
+    <span class="t">${inboxTime(n.t).time}</span><b>${esc(n.title)}</b>
+    ${n.body ? `<div class="b">${esc(n.body)}</div>` : ""}</a>`;
+}
+
+function inboxList(items) {
+  let html = "", day = "";
+  for (const n of items) {
+    const d = inboxTime(n.t).day;
+    if (d !== day) { html += `${day ? "</div>" : ""}<div class="inbox-day">${esc(d)}</div><div class="rows">`; day = d; }
+    html += inboxItem(n);
+  }
+  return html + (day ? "</div>" : "");
+}
+
+async function showInbox() {
+  const sub = await currentSubscription().catch(() => null);
+  if (!sub) {
+    view.innerHTML = `<div class="section-title">🔔 Benachrichtigungen</div>
+      <div class="panel"><div class="hint">Auf diesem Gerät sind Pushes aus. Hier erscheinen alle Pushes, die du bekommst –
+      auch die, die du weggewischt hast.</div><a class="btn primary" href="#/settings">Pushes einschalten</a></div>`;
+    return;
+  }
+  let items = [], more = false;
+  const draw = (unread) => {
+    view.innerHTML = `<div class="section-title">🔔 Benachrichtigungen</div>
+      <div class="inbox-actions"><span class="hint">${unread ? `${unread} ungelesen` : "Alles gelesen"} · letzte 30 Tage</span>
+        ${unread ? `<button class="btn" id="read-all">✓ Alle gelesen</button>` : ""}</div>
+      ${items.length ? inboxList(items) : `<div class="empty">Noch keine Benachrichtigungen.</div>`}
+      ${more ? `<div style="margin:12px 10px"><button class="btn" id="more">Ältere laden</button></div>` : ""}`;
+    view.querySelector("#read-all")?.addEventListener("click", async () => {
+      haptic();
+      await markRead(null);
+      items = items.map((n) => ({ ...n, read: true }));
+      draw(0);
+    });
+    view.querySelector("#more")?.addEventListener("click", async () => {
+      const res = await inboxApi("/api/push/inbox", { limit: 30, before: items[items.length - 1].id });
+      items = items.concat(res.items);
+      more = res.more;
+      draw(res.unread);
+    });
+    view.querySelectorAll(".inbox-item.unread").forEach((a) => a.addEventListener("click", () => {
+      markRead([Number(a.dataset.id)]);
+    }));
+  };
+  const res = await inboxApi("/api/push/inbox", { limit: 30 });
+  items = res.items;
+  more = res.more;
+  setBell(res.unread);
+  draw(res.unread);
+}
+
 function showImportDone(query) {
   const q = new URLSearchParams(query);
   view.innerHTML = `<div class="section-title">📥 Übertragen</div><div class="panel"><div class="hint">${q.get("error")
@@ -1135,6 +1221,16 @@ async function route() {
   clearInterval(state.timer);
   const hash = location.hash || "#/";
   const tab = hash.startsWith("#/hot") ? "hot" : hash.startsWith("#/settings") ? "settings" : "list";
+  const readId = hash.match(/[?&]n=(\d+)/);
+  if (readId) markRead([Number(readId[1])]);
+  document.getElementById("bell")?.classList.toggle("active", hash.startsWith("#/inbox"));
+  if (hash.startsWith("#/inbox")) {
+    document.querySelectorAll(".tabbar a").forEach((a) => a.classList.remove("active"));
+    state.render = null;
+    await showInbox().catch((e) => { view.innerHTML = `<div class="empty">Nicht erreichbar (${esc(e.message)})</div>`; });
+    window.scrollTo({ top: 0 });
+    return;
+  }
   const done = hash.match(/^#\/import-done\?(.*)$/);
   if (done) { showImportDone(done[1]); return; }
   const imp = hash.match(/^#\/import\?d=(.*)$/s);
@@ -1229,9 +1325,19 @@ document.addEventListener("touchend", async () => {
 
 // Zurück aus dem Hintergrund: sofort frische Daten statt bis zu 30 s alte
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && state.render) state.render().catch(() => {});
+  if (document.visibilityState !== "visible") return;
+  if (state.render) state.render().catch(() => {});
+  updateBell();
+});
+// Push kommt an, während die App offen ist -> Glocke sofort hochzählen
+navigator.serviceWorker?.addEventListener("message", (e) => {
+  if (e.data?.type !== "push") return;
+  setBell(e.data.unread || 0);
+  if (location.hash.startsWith("#/inbox")) showInbox().catch(() => {});
 });
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
 route();
+updateBell();
+setInterval(() => { if (document.visibilityState === "visible") updateBell(); }, 60000);
 // Rang/Aufladung beim Start aus dem letzten Übertragen holen (Banner-Liste danach neu zeichnen)
 if (deviceToken()) authApi("/api/me/profile").then((p) => { if (applyProfile(p) && state.render) state.render().catch(() => {}); }).catch(() => {});

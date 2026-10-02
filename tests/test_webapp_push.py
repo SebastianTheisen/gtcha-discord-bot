@@ -55,3 +55,38 @@ def test_recipients_general_watch_and_dedupe():
     summary = [m for m in got if m[1].startswith("📉 Pack-Bewegung")]
     assert len(summary) == 1 and summary[0][2] == "2: 50 → 49 · 3: 20 → 18"
     assert [m[1] for m in got if m[3] == 1] == ["📉 Banner 1: 100 → 90 Packs"]
+
+
+def test_push_inbox_per_device_and_mark_read(tmp_path, monkeypatch):
+    import asyncio
+    import sys
+    import types
+
+    from webapp.push import PushService
+
+    sent = []
+    fake = types.ModuleType("pywebpush")
+    fake.WebPushException = type("WebPushException", (Exception,), {})
+    fake.webpush = lambda **kw: sent.append(kw["data"])
+    monkeypatch.setitem(sys.modules, "pywebpush", fake)
+
+    async def run():
+        push = PushService(str(tmp_path), "x")
+        await push.init()
+        for i in range(3):
+            await push._push("A", {"endpoint": "A"}, f"Titel {i}", "Text", 24114 if i else None, "hit")
+        await push._push("B", {"endpoint": "B"}, "Anderes Gerät", "", None, "new")
+        box = await push.inbox("A", limit=2)
+        assert [n["title"] for n in box["items"]] == ["Titel 2", "Titel 1"] and box["more"] and box["unread"] == 3
+        older = await push.inbox("A", limit=2, before=box["items"][-1]["id"])
+        assert [n["title"] for n in older["items"]] == ["Titel 0"] and not older["more"]
+        await push.mark_read("A", [box["items"][0]["id"]])
+        await push.mark_read("A", [ (await push.inbox("B"))["items"][0]["id"] ])   # fremde ID: keine Wirkung
+        assert (await push.inbox("A"))["unread"] == 2 and (await push.inbox("B"))["unread"] == 1
+        await push.mark_read("A")
+        assert (await push.inbox("A"))["unread"] == 0 and (await push.inbox("B"))["unread"] == 1
+
+    asyncio.run(run())
+    payloads = [__import__("json").loads(d) for d in sent]
+    assert payloads[1]["url"].startswith("/#/banner/24114?n=") and payloads[0]["url"].startswith("/#/inbox?n=")
+    assert [p["unread"] for p in payloads[:3]] == [1, 2, 3]
