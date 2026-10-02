@@ -1,9 +1,9 @@
 // Service Worker: App-Hülle offline verfügbar halten, Push-Benachrichtigungen anzeigen.
-const CACHE = "gtcha-tracker-v50";
+const CACHE = "gtcha-tracker-v51";
 // Bilder dauerhaft auf dem Gerät halten (iOS leert den normalen Browser-Cache installierter Apps oft)
 const IMG_CACHE = "gtcha-img-v2";
 const IMG_MAX = 4000;
-const SHELL = ["/", "/static/style.css?v=50", "/static/app.js?v=50", "/static/icon-180.png?v=4", "/manifest.webmanifest"];
+const SHELL = ["/", "/static/style.css?v=51", "/static/app.js?v=51", "/static/icon-180.png?v=4", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -61,12 +61,16 @@ self.addEventListener("fetch", (event) => {
 self.addEventListener("push", (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch (e) { data = { title: "GTCHA Tracker", body: event.data?.text() }; }
-  event.waitUntil(self.registration.showNotification(data.title || "GTCHA Tracker", {
+  // Zähler auf dem App-Symbol und Glocke in offenen Fenstern sofort aktualisieren
+  const badge = data.unread && self.navigator.setAppBadge ? self.navigator.setAppBadge(data.unread).catch(() => {}) : null;
+  const tell = self.clients.matchAll({ type: "window", includeUncontrolled: true })
+    .then((list) => list.forEach((c) => c.postMessage({ type: "push", unread: data.unread })));
+  event.waitUntil(Promise.all([badge, tell, self.registration.showNotification(data.title || "GTCHA Tracker", {
     body: data.body || "",
     icon: "/static/icon-512.png?v=4",
     badge: "/static/icon-180.png?v=4",
     data: { url: data.url || "/" },
-  }));
+  })]));
 });
 
 self.addEventListener("notificationclick", (event) => {

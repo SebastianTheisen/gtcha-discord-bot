@@ -24,6 +24,8 @@ DEFAULTS = {"new": True, "value": True, "hit": True, "packs": False, "ship": Fal
 WATCH_EVENTS = ("hit", "packs", "ship", "ev", "low", "end")
 MAX_WATCHED = 50
 MAX_PACK_LINES = 6
+INBOX_KEEP = 300      # je Gerät
+INBOX_DAYS = 30
 
 
 def _watch_events(b: Dict, old: Dict) -> List[tuple]:
@@ -172,6 +174,10 @@ class PushService:
                 CREATE TABLE IF NOT EXISTS subscriptions (
                     endpoint TEXT PRIMARY KEY, data TEXT, prefs TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
                 CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT);
+                CREATE TABLE IF NOT EXISTS push_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, endpoint TEXT, kind TEXT, title TEXT, body TEXT,
+                    banner_id INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP, read INTEGER DEFAULT 0);
+                CREATE INDEX IF NOT EXISTS push_log_endpoint ON push_log (endpoint, id);
             """)
             await db.commit()
 
@@ -221,19 +227,55 @@ class PushService:
         if not messages:
             return
         for endpoint, sub, prefs in await self._subscriptions():
-            for _, title, body, banner_id, _ in recipients(messages, prefs):
-                await self._push(endpoint, sub, title, body, banner_id)
+            for kind, title, body, banner_id, _ in recipients(messages, prefs):
+                await self._push(endpoint, sub, title, body, banner_id, kind)
 
     async def send(self, event: str, title: str, body: str, banner_id=None, only: str = None):
         """Einzelne Nachricht (Test-Push) an ein Gerät oder alle."""
         for endpoint, sub, prefs in await self._subscriptions():
             if not only or endpoint == only:
-                await self._push(endpoint, sub, title, body, banner_id)
+                await self._push(endpoint, sub, title, body, banner_id, event)
 
-    async def _push(self, endpoint: str, sub: Dict, title: str, body: str, banner_id=None):
+    # --- Verlauf der Pushes je Gerät (Glocke in der App) ---
+    async def _log(self, endpoint: str, kind: str, title: str, body: str, banner_id) -> int:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("INSERT INTO push_log (endpoint, kind, title, body, banner_id) VALUES (?, ?, ?, ?, ?)",
+                                   (endpoint, kind, title, body, banner_id))
+            await db.execute("DELETE FROM push_log WHERE endpoint = ? AND (created_at < datetime('now', ?) OR id NOT IN "
+                             "(SELECT id FROM push_log WHERE endpoint = ? ORDER BY id DESC LIMIT ?))",
+                             (endpoint, f"-{INBOX_DAYS} days", endpoint, INBOX_KEEP))
+            await db.commit()
+            return cur.lastrowid
+
+    async def inbox(self, endpoint: str, limit: int = 30, before: int = 0) -> Dict:
+        """Letzte Pushes eines Geräts (neueste zuerst) und Anzahl ungelesener."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute(
+                "SELECT id, kind, title, body, banner_id, created_at, read FROM push_log WHERE endpoint = ? "
+                "AND (? = 0 OR id < ?) ORDER BY id DESC LIMIT ?", (endpoint, before, before, limit + 1))
+            rows = await cur.fetchall()
+            cur = await db.execute("SELECT count(*) FROM push_log WHERE endpoint = ? AND read = 0", (endpoint,))
+            unread = (await cur.fetchone())[0]
+        items = [{"id": r[0], "kind": r[1], "title": r[2], "body": r[3], "banner_id": r[4],
+                  "t": r[5], "read": bool(r[6])} for r in rows[:limit]]
+        return {"items": items, "unread": unread, "more": len(rows) > limit}
+
+    async def mark_read(self, endpoint: str, ids: List[int] = None):
+        """Bestimmte (ids) oder alle Pushes eines Geräts als gelesen markieren."""
+        async with aiosqlite.connect(self.db_path) as db:
+            if ids is None:
+                await db.execute("UPDATE push_log SET read = 1 WHERE endpoint = ? AND read = 0", (endpoint,))
+            else:
+                await db.executemany("UPDATE push_log SET read = 1 WHERE endpoint = ? AND id = ?",
+                                     [(endpoint, int(i)) for i in ids])
+            await db.commit()
+
+    async def _push(self, endpoint: str, sub: Dict, title: str, body: str, banner_id=None, kind: str = ""):
         from pywebpush import WebPushException, webpush
-        payload = json.dumps({"title": title, "body": body,
-                              "url": f"/#/banner/{banner_id}" if banner_id else "/"})
+        log_id = await self._log(endpoint, kind, title, body, banner_id)
+        url = f"/#/banner/{banner_id}?n={log_id}" if banner_id else f"/#/inbox?n={log_id}"
+        unread = (await self.inbox(endpoint, 1))["unread"]
+        payload = json.dumps({"title": title, "body": body, "url": url, "id": log_id, "unread": unread})
         loop = asyncio.get_running_loop()
         try:
             await loop.run_in_executor(None, lambda: webpush(
