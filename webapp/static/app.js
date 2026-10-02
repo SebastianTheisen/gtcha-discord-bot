@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 44;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 45;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -655,7 +655,10 @@ async function showSettings() {
           <a class="btn primary" href="${esc(buyHref("https://gtchaxonline.com/pending-detail"))}" target="_blank" rel="noopener">📥 Gacha öffnen</a>
         </div>
         <div class="hint">Öffnet die Seite in Safari – dort Adressleiste antippen und „An GTCHA Tracker“ wählen.</div>
-        <button class="btn" id="bm-copy">Lesezeichen-Code kopieren</button>
+        <button class="btn primary" id="bm-sync">Lesezeichen „Alles übertragen“ kopieren</button>
+        <div class="hint">Auf irgendeiner gtchaxonline-Seite antippen: lädt deine Verlaufsseiten (Gacha, Versand,
+          Münzen, Käufe, Tickets) samt allen Seitenzahlen und überträgt sie. Kontodaten (Name, Adresse) nicht.</div>
+        <button class="btn" id="bm-copy">Lesezeichen „Nur diese Seite“ kopieren</button>
         <div class="hint">Einrichten (einmalig): 1. In Safari irgendeine Seite als Lesezeichen sichern (Teilen → Lesezeichen),
           Name „An GTCHA Tracker“. 2. Lesezeichen bearbeiten, Adresse löschen und den kopierten Code einfügen.<br>
           Benutzen: Auf gtchaxonline.com die Seite öffnen (z. B. Transaktionen → Münzen), Adressleiste antippen und
@@ -676,6 +679,12 @@ async function showSettings() {
     <h2>⏱ Geschwindigkeit</h2>
     <div class="panel"><button class="btn" id="speed">Geschwindigkeit testen</button>
       <div class="hint" id="speed-out">Lädt 10 Bilder aus dem iPhone-Speicher und frisch vom VPS und zeigt die Zeiten.</div></div>`;
+  view.querySelector("#bm-sync")?.addEventListener("click", async () => {
+    const code = bookmarkletSync(deviceToken());
+    const msg = view.querySelector("#bm-msg");
+    try { await navigator.clipboard.writeText(code); msg.textContent = "Kopiert ✓"; haptic(); }
+    catch (e) { msg.innerHTML = `<textarea class="bm-code" readonly>${esc(code)}</textarea>`; msg.querySelector("textarea").select(); }
+  });
   view.querySelector("#bm-copy")?.addEventListener("click", async () => {
     const code = bookmarkletCode(deviceToken());
     const msg = view.querySelector("#bm-msg");
@@ -968,6 +977,47 @@ function bookmarkletCode(token) {
   return "javascript:" + src;
 }
 
+// "Alles übertragen": lädt die eigenen Verlaufsseiten nacheinander unsichtbar (iframe, gleiche Seite),
+// blättert jeweils durch alle Seitenzahlen und schickt alles per Formular an den VPS. change-member
+// (Name/Adresse) ist bewusst nicht dabei.
+const SYNC_PAGES = ["undecided-detail", "pending-detail", "shipped-detail", "downloaded-detail",
+                    "buy-point-history", "purchase-history", "ticket-history"];
+function bookmarkletSync(token) {
+  const src = `(async()=>{
+if(!/gtchaxonline\\.com$/.test(location.hostname)){alert('Bitte auf gtchaxonline.com öffnen');return}
+const P=${JSON.stringify(SYNC_PAGES)};
+const box=document.createElement('div');box.style.cssText='position:fixed;z-index:2147483647;left:10px;right:10px;top:10px;padding:12px;background:#1f3a6e;color:#fff;font:15px sans-serif;border-radius:10px';document.body.appendChild(box);
+const say=t=>{box.textContent='GTCHA Tracker: '+t};
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const fr=document.createElement('iframe');fr.style.cssText='position:fixed;left:-3000px;top:0;width:420px;height:900px';document.body.appendChild(fr);
+const grab=d=>({text:d.body.innerText.slice(0,40000),images:[...d.querySelectorAll('img')].map(i=>i.getAttribute('src')).filter(s=>s&&s.includes('/card/')).slice(0,400)});
+const settle=async()=>{let last='',same=0;for(let i=0;i<40;i++){await sleep(400);const d=fr.contentDocument;const t=d&&d.body?d.body.innerText:'';if(t&&t===last){if(++same>=3)return}else same=0;last=t}};
+const isNum=x=>x.children.length===0&&/^\\d+$/.test(x.textContent.trim());
+const out=[];
+for(const p of P){say('lade '+p+' …');
+await new Promise(r=>{fr.onload=r;fr.src='/'+p});await settle();
+const d=fr.contentDocument;if(!d||!d.body){out.push({path:p,error:'kein Zugriff'});continue}
+const pages=[grab(d)];
+for(let n=2;n<=40;n++){
+const btn=[...d.querySelectorAll('a,button,li,span,div')].find(e=>isNum(e)&&e.textContent.trim()===String(n)&&[...((e.parentElement&&e.parentElement.parentElement)||e).querySelectorAll('*')].filter(isNum).length>=3);
+if(!btn)break;const before=d.body.innerText;btn.click();await settle();
+const g=grab(d);if(g.text===before)break;pages.push(g);say(p+' Seite '+n)}
+out.push({path:p,pages})}
+say('sende …');
+const f=document.createElement('form');f.method='POST';f.action=${JSON.stringify(location.origin)}+'/api/import-form';
+const i=document.createElement('input');i.type='hidden';i.name='d';i.value=JSON.stringify({t:${JSON.stringify(token)},at:new Date().toISOString(),pages:out});
+f.appendChild(i);document.body.appendChild(f);f.submit()})()`;
+  return "javascript:" + src.replace(/\n/g, "");
+}
+
+function showImportDone(query) {
+  const q = new URLSearchParams(query);
+  view.innerHTML = `<div class="section-title">📥 Übertragen</div><div class="panel"><div class="hint">${q.get("error")
+    ? "Dieses Lesezeichen gehört zu keinem verknüpften Gerät mehr – bitte im Reiter „Ich“ neu kopieren."
+    : `✅ ${esc(q.get("areas"))} Bereiche mit zusammen ${esc(q.get("pages"))} Seiten übertragen. Die Daten liegen nur auf deinem VPS.`}</div></div>`;
+  history.replaceState(null, "", "#/settings");
+}
+
 async function showImport(raw) {
   view.innerHTML = `<div class="section-title">📥 Übertragen</div><div class="panel"><div class="hint" id="imp">Übertrage …</div></div>`;
   const out = view.querySelector("#imp");
@@ -994,6 +1044,8 @@ async function route() {
   clearInterval(state.timer);
   const hash = location.hash || "#/";
   const tab = hash.startsWith("#/hot") ? "hot" : hash.startsWith("#/settings") ? "settings" : "list";
+  const done = hash.match(/^#\/import-done\?(.*)$/);
+  if (done) { showImportDone(done[1]); return; }
   const imp = hash.match(/^#\/import\?d=(.*)$/s);
   if (imp) { await showImport(imp[1]); return; }
   const banner = hash.match(/^#\/banner\/(\d+)/);

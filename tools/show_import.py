@@ -1,8 +1,9 @@
-"""Zeigt die zuletzt per Lesezeichen übertragene eigene GTCHA-Seite in Kurzform.
+"""Zeigt per Lesezeichen übertragene eigene GTCHA-Seiten in Kurzform.
 
 Aufruf auf dem VPS:
-    docker exec -i gtcha-app python - < tools/show_import.py          # letzter Import
-    docker exec -i gtcha-app python - 3 < tools/show_import.py        # drittletzter
+    docker exec -i gtcha-app python - < tools/show_import.py              # letzter Import
+    docker exec -i gtcha-app python - 3 < tools/show_import.py            # drittletzter
+    docker exec -i gtcha-app python - sync < tools/show_import.py         # letzter "Alles übertragen"-Lauf
 """
 
 import json
@@ -11,8 +12,23 @@ import sqlite3
 import sys
 from collections import Counter
 
-nth = int(sys.argv[1]) if len(sys.argv) > 1 else 1
 db = sqlite3.connect("/app/data/webapp.db")
+if sys.argv[1:] == ["sync"]:
+    last = db.execute("SELECT max(created_at) FROM user_imports WHERE kind = 'sync'").fetchone()[0]
+    if not last:
+        sys.exit("Noch kein „Alles übertragen“.")
+    rows = db.execute("SELECT url, data FROM user_imports WHERE kind = 'sync' AND created_at >= ? ORDER BY id",
+                      (last[:16],)).fetchall()
+    for url, data in rows:
+        entry = json.loads(data)
+        pages = entry.get("pages") or []
+        print(f"\n=== {url.rsplit('/', 1)[-1]}: {len(pages)} Seite(n){' – ' + entry['error'] if entry.get('error') else ''}")
+        for i, page in enumerate(pages[:2], 1):
+            lines = [l for l in page["text"].splitlines() if l.strip()]
+            print(f"--- Seite {i} ({len(lines)} Zeilen, {len(page.get('images') or [])} Kartenbilder) ---")
+            print("\n".join(lines[:60]))
+    sys.exit(0)
+nth = int(sys.argv[1]) if len(sys.argv) > 1 else 1
 row = db.execute("SELECT created_at, url, data FROM user_imports ORDER BY id DESC LIMIT 1 OFFSET ?", (nth - 1,)).fetchone()
 if not row:
     sys.exit("Noch nichts übertragen.")
