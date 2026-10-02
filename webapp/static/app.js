@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 38;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 39;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -45,11 +45,12 @@ const safeUrl = (u) => (typeof u === "string" && /^https:\/\//.test(u) ? u : "")
 // Bilder von GTCHA über den Zwischenspeicher des VPS laden (schneller, bleiben 30 Tage im iPhone-Cache)
 // v= ändert die Adresse, wenn sich die Auslieferung ändert: Safari hält Bilder 30 Tage und würde sonst
 // alte (kaputte) Antworten weiterverwenden
-const IMG_VERSION = 2;
-const imgSrc = (u) => (/^https:\/\/([\w-]+\.)*gtchaxonline\.com\//.test(u)
-  ? `/img?v=${IMG_VERSION}&u=${encodeURIComponent(u)}` : u);
-const img = (u, alt = "", eager = false) => (safeUrl(u)
-  ? `<img src="${esc(imgSrc(u))}" data-orig="${esc(u)}" alt="${esc(alt)}" loading="eager">` : "");
+const IMG_VERSION = 3;
+// w = Breite in Pixeln: der VPS liefert eine verkleinerte Kopie (Banner 640, Karten 320)
+const imgSrc = (u, w = 640) => (/^https:\/\/([\w-]+\.)*gtchaxonline\.com\//.test(u)
+  ? `/img?v=${IMG_VERSION}&w=${w}&u=${encodeURIComponent(u)}` : u);
+const img = (u, alt = "", eager = false, w = 640) => (safeUrl(u)
+  ? `<img src="${esc(imgSrc(u, w))}" data-orig="${esc(u)}" alt="${esc(alt)}" loading="eager">` : "");
 const evClass = (p) => (p == null ? "" : p >= 100 ? "good" : p >= 70 ? "ok" : "");
 const time = (t) => new Date(t * 1000).toLocaleString("de-DE", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 const coins = (n) => `<span class="coin"></span>${n ? num(n) : "Gratis"}`;
@@ -75,8 +76,8 @@ function setHtml(el, html) {
 }
 
 // Bilder im Hintergrund in den Gerätespeicher holen (Service Worker), damit sie beim Blättern schon da sind
-function preloadImages(urls) {
-  const list = [...new Set(urls.filter((u) => safeUrl(u)).map(imgSrc).filter((u) => u.startsWith("/img?")))];
+function preloadImages(urls, w = 640) {
+  const list = [...new Set(urls.filter((u) => safeUrl(u)).map((u) => imgSrc(u, w)).filter((u) => u.startsWith("/img?")))];
   if (list.length) navigator.serviceWorker?.controller?.postMessage({ type: "preload", urls: list });
 }
 
@@ -365,7 +366,7 @@ function cardTile(c, price, units = [], meId = null) {
   return `<div class="tile ${gone ? "gone" : ""} ${c.unsure && !gone ? "unsure" : ""} ${units.length ? "claimable" : ""}"
       data-card="${esc(c.id)}">
     <div class="tile-art">
-      ${img(c.image, c.name)}
+      ${img(c.image, c.name, false, 320)}
       ${tiers ? `<span class="tier-badge">${tiers}</span>` : ""}
       ${c.copies > 1 ? `<span class="copies">×${c.copies}</span>` : ""}
       ${c.hit ? `<span class="ship-tag small">Versand nur ✈</span>` : ""}
@@ -534,7 +535,7 @@ async function showBanner(id) {
     view.querySelectorAll(".pane").forEach((p) => { p.hidden = p.dataset.pane !== el.dataset.tab; });
   }));
   renderCards(b);
-  if (state.preloaded !== b.id) { state.preloaded = b.id; preloadImages(b.cards.map((c) => c.image)); }
+  if (state.preloaded !== b.id) { state.preloaded = b.id; preloadImages(b.cards.map((c) => c.image), 320); }
   wireWatchButton(String(b.id)).catch(() => {});
   me().then(() => renderCards(b)).catch(() => {});
 }
@@ -608,7 +609,7 @@ async function showSettings() {
     ${user ? `<h2>🏅 Meine gemeldeten Hits <small>${medals.length} aktiv</small></h2>
       <div class="rows">${medals.length ? medals.map((m) => `
         <a class="line claim-row" href="#/banner/${m.banner_id}">
-          <span class="claim-thumb">${img(m.image, m.name)}</span>
+          <span class="claim-thumb">${img(m.image, m.name, false, 320)}</span>
           <span class="claim-text"><b>${m.tier}</b> ${esc(m.name)}<br>
             <span class="claim-value">${m.value != null ? num(m.value) + " Coins" : ""}</span>
             <span class="muted"> · Banner ${m.banner_id}${m.t ? " · " + time(m.t) : ""}</span></span>

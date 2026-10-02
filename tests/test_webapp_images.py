@@ -51,3 +51,29 @@ def test_content_type_is_set_without_system_mime_table(tmp_path):
     unknown.write_bytes(b"\x89PNG\r\n\x1a\n")
     assert content_type(webp) == "image/webp"
     assert content_type(unknown) == "image/png"
+
+
+def test_resized_copies_and_cleanup(tmp_path):
+    import os
+    import time
+    from PIL import Image
+    from webapp.images import ImageCache
+    cache = ImageCache(str(tmp_path))
+    big = "https://gtchaxonline.com/pack/1.png"
+    anim = "https://gtchaxonline.com/pack/2.gif"
+    Image.new("RGB", (2400, 1440), (200, 30, 30)).save(cache.dir / cache_name(big))
+    frames = [Image.new("P", (1600, 900), i) for i in (1, 2)]
+    frames[0].save(cache.dir / cache_name(anim), save_all=True, append_images=frames[1:])
+    small = cache.resized(cache.cached(big), 640)
+    with Image.open(small) as im:
+        assert im.size == (640, 384) and im.format == "WEBP"
+    assert cache.resized(cache.cached(big), 640) == small            # nur einmal erzeugt
+    with Image.open(cache.resized(cache.cached(anim), 320)) as im:
+        assert im.size == (320, 180)
+    # Aufräumen: Kopien bleiben mit ihrem Original, verschwinden mit ihm
+    old = time.time() - 3600
+    for p in cache.dir.iterdir():
+        os.utime(p, (old, old))
+    cache.cleanup([big])
+    names = sorted(p.name for p in cache.dir.iterdir())
+    assert names == sorted([cache_name(big), small.name])

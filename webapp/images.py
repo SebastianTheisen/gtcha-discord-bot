@@ -138,10 +138,11 @@ class ImageCache:
     def cleanup(self, keep_urls) -> int:
         """Löscht Bilder, die zu keinem aktiven Banner mehr gehören."""
         keep = {cache_name(u) for u in keep_urls if u}
+        keep |= {name.rsplit(".", 1)[0] for name in keep}   # Stamm -> verkleinerte Kopien "<stamm>.w640.webp"
         now = time.time()
         removed = 0
         for path in self.dir.iterdir():
-            if not path.is_file() or path.name in keep:
+            if not path.is_file() or path.name in keep or path.name.split(".w", 1)[0] in keep:
                 continue
             if now - path.stat().st_mtime < KEEP_UNUSED_SECONDS:
                 continue
@@ -150,6 +151,26 @@ class ImageCache:
         if removed:
             logger.info(f"Bilder: {removed} von beendeten Bannern gelöscht")
         return removed
+
+    def resized(self, path: Path, width: int) -> Path:
+        """Verkleinerte Kopie (Breite in Pixeln, WebP) neben dem Original; einmal erzeugt, dann gespeichert.
+
+        GTCHA-Bilder sind teils sehr groß oder animiert - das iPhone muss sie sonst in voller Größe
+        entpacken, auch wenn sie nur klein angezeigt werden (dauerte ~1 s pro Bild).
+        """
+        out = path.with_name(f"{path.stem}.w{width}.webp")
+        if out.exists():
+            return out
+        from PIL import Image
+        with Image.open(path) as im:
+            im.seek(0)                                   # bei GIF/animiertem WebP: erstes Bild
+            im = im.convert("RGBA" if im.mode in ("RGBA", "LA", "P") else "RGB")
+            if im.width > width:
+                im = im.resize((width, max(1, round(im.height * width / im.width))), Image.LANCZOS)
+            tmp = out.with_suffix(".tmp")
+            im.save(tmp, "WEBP", quality=82, method=4)
+            tmp.replace(out)
+        return out
 
     def stats(self) -> tuple:
         files = [p for p in self.dir.iterdir() if p.is_file()]

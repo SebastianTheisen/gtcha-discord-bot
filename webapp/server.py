@@ -108,6 +108,12 @@ class App:
         path = await self.images.get(request.query.get("u", ""))
         if not path:
             raise web.HTTPNotFound()
+        width = request.query.get("w", "")
+        if width in ("320", "640", "960"):
+            try:
+                path = await asyncio.get_running_loop().run_in_executor(None, self.images.resized, path, int(width))
+            except Exception as e:
+                logger.debug(f"Bild nicht verkleinert: {e}")
         return web.FileResponse(path, headers={"Cache-Control": f"public, max-age={IMAGE_MAX_AGE}, immutable",
                                                "Content-Type": content_type(path)})
 
