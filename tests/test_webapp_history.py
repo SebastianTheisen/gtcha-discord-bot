@@ -281,3 +281,23 @@ def test_bookmarklet_version_matches_app():
     from webapp.server import BOOKMARKLET_VERSION
     js = (Path(__file__).parent.parent / "webapp" / "static" / "app.js").read_text()
     assert int(_re.search(r"const SYNC_VERSION = (\d+);", js).group(1)) == BOOKMARKLET_VERSION
+
+
+def test_paypal_purchase_and_missing_note():
+    """Käufe heißen je nach Zahlungsweg anders (z. B. "PayPal"); der Hinweis ist optional und darf die
+    nächste Buchung nicht verschlucken."""
+    text = HEAD + "Datum\n" + "\n".join([
+        "2026/10/02 10:00", "50.000", "¥45.000", "PayPal",
+        "2026/10/01 09:00", "1.000", "¥0",                      # ohne Hinweis
+        "2026/10/01 08:00", "-1.000", "¥0", "Öffnen",
+        "2026/10/01 07:00", "300", "¥0", "Behalte deinen Rang",   # Gratis-Coins
+    ]) + "\n" + FOOT
+    ev = parse_coins([{"text": text}])
+    assert [(e["kind"], e["note"]) for e in ev] == [("buy", "PayPal"), ("other", ""), ("open", "Öffnen"),
+                                                     ("other", "Behalte deinen Rang")]
+    stored = ingest({}, [{"path": "buy-point-history", "pages": [{"text": text}]}])
+    assert profile(stored, now=datetime(2026, 10, 2, 3, 0))["charge"] == 50000
+    # schon gespeicherte, früher falsch eingeordnete Buchung wird beim Auswerten korrigiert
+    stored["coins"]["items"][0]["kind"] = "other"
+    from webapp.history import build_from_stored
+    assert build_from_stored(stored, {}, {})["summary"]["total"]["bought_yen"] == 45000

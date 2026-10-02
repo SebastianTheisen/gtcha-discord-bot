@@ -16,14 +16,14 @@ jobs:
       - name: Abhängigkeiten installieren
         run: pip install -r requirements.txt -r requirements-dev.txt -r requirements-webapp.txt
       - name: Browser für den Oberflächen-Test
-        # Paketquellen von GitHub hängen gelegentlich: je Versuch höchstens 3 Minuten, bis zu 3 Versuche
+        # Browser kommt direkt von Playwright; die Systempakete (apt) hängen bei GitHub gelegentlich -
+        # die meisten sind auf dem Runner schon da, daher nur versuchen. Fehlt wirklich etwas, schlägt
+        # der Oberflächen-Test selbst deutlich fehl.
         timeout-minutes: 10
         run: |
-          for i in 1 2 3; do
-            timeout 180 python -m playwright install --with-deps chromium && exit 0
-            echo "Versuch $i hing oder schlug fehl - neuer Versuch"
-          done
-          exit 1
+          for i in 1 2 3; do timeout 180 python -m playwright install chromium && break; sleep 5; done
+          timeout 240 sudo env "PATH=$PATH" python -m playwright install-deps chromium || echo "::warning::Systempakete nicht vollständig installiert"
+          python -m playwright install chromium
       - name: Tests
         run: python -m pytest -q tests
       - name: Syntax aller Module prüfen

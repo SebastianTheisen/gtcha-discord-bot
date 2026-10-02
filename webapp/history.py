@@ -23,7 +23,6 @@ MOVE_WINDOW = timedelta(minutes=7)   # Scrape alle 5 Minuten + Laufzeit
 NEAR_WINDOW = timedelta(seconds=150)  # schneller Abfrager alle 15 s; Seite zeigt nur die Minute
 OPEN_NOTES = ("öffnen", "open")
 CONVERT_NOTES = ("umwandeln", "convert")
-BUY_NOTES = ("erhalten", "kauf", "purchase", "charge")
 HEADER = re.compile(r"^(Liste der versendeten Artikel|Anfragedatum|Sendungsnummer|Börsenhistorie)", re.I)
 
 
@@ -46,6 +45,19 @@ def _lines(page: Dict) -> List[str]:
     return [line.strip() for line in (page.get("text") or "").splitlines() if line.strip()]
 
 
+def classify(amount: int, yen: int, note: str) -> str:
+    """open / convert / buy / other. Kauf = Coins dazu mit Yen-Betrag, egal wie er heißt
+    ("Münzen erhalten", "PayPal", Kreditkarte …); Gratis-Coins (¥0) sind "other"."""
+    low = (note or "").lower()
+    if any(n in low for n in OPEN_NOTES):
+        return "open"
+    if any(n in low for n in CONVERT_NOTES):
+        return "convert"
+    if amount > 0 and yen > 0:
+        return "buy"
+    return "other"
+
+
 def parse_coins(pages: List[Dict]) -> List[Dict]:
     """Münzen-Verlauf: [{t (JST, naiv), amount, yen, note, kind}] in Seitenreihenfolge (neueste zuerst)."""
     events = []
@@ -58,14 +70,12 @@ def parse_coins(pages: List[Dict]) -> List[Dict]:
                 t = datetime(*map(int, m.groups()))
                 amount = _int(lines[i + 1])
                 yen = lines[i + 2] if i + 2 < len(lines) and lines[i + 2].startswith(("¥", "￥")) else ""
-                note = lines[i + 3] if yen and i + 3 < len(lines) else (lines[i + 2] if i + 2 < len(lines) else "")
-                low = note.lower()
-                kind = ("open" if any(n in low for n in OPEN_NOTES) else
-                        "convert" if any(n in low for n in CONVERT_NOTES) else
-                        "buy" if any(n in low for n in BUY_NOTES) and amount > 0 else "other")
-                events.append({"t": t, "amount": amount, "yen": _int(re.sub(r"[^\d.]", "", yen) or "0"),
-                               "note": note, "kind": kind})
-                i += 4 if yen else 3
+                j = i + (3 if yen else 2)                       # Hinweis ist auf der Seite optional:
+                note = lines[j] if j < len(lines) and not DATE_TIME.match(lines[j]) else ""   # nicht die nächste Buchung schlucken
+                yen_value = _int(re.sub(r"[^\d.]", "", yen) or "0")
+                events.append({"t": t, "amount": amount, "yen": yen_value, "note": note,
+                               "kind": classify(amount, yen_value, note)})
+                i = j + (1 if note else 0)
                 continue
             i += 1
     return events
@@ -351,7 +361,8 @@ def profile(stored: Dict[str, Dict], now: Optional[datetime] = None) -> Dict:
     info = (stored.get("member") or {}).get("info") or {}
     coins = (stored.get("coins") or {}).get("items")
     month = jst_month(now)
-    charge = (sum(e["amount"] for e in coins if e.get("kind") == "buy" and e.get("yen") and e["t"][:7] == month)
+    charge = (sum(e["amount"] for e in coins
+                  if classify(e["amount"], e.get("yen") or 0, e.get("note")) == "buy" and e["t"][:7] == month)
               if coins is not None else None)
     return {"rank": info.get("rank"), "charge": charge,
             "charge_yen": info.get("spent_month_yen") if info.get("month") == month else (0 if info.get("month") else None),
@@ -365,7 +376,9 @@ def build_history(areas: Dict[str, Dict], banners: Dict[int, Dict], moves: Dict[
 
 
 def stored_events(stored: Dict[str, Dict]) -> List[Dict]:
-    return [{**e, "t": datetime.strptime(e["t"], TIME_FMT)} for e in (stored.get("coins") or {}).get("items") or []]
+    # Art neu bestimmen, damit schon gespeicherte Verläufe von verbesserter Erkennung profitieren
+    return [{**e, "t": datetime.strptime(e["t"], TIME_FMT), "kind": classify(e["amount"], e.get("yen") or 0, e.get("note"))}
+            for e in (stored.get("coins") or {}).get("items") or []]
 
 
 def card_worth(card: Dict, banners: Dict[int, Dict]) -> Optional[int]:
