@@ -22,7 +22,7 @@ from loguru import logger
 from database.db import Database
 from utils.app_bridge import MAX_IMPORT_BYTES, AppBridge
 from utils.banner_info import berlin_time
-from webapp.history import JST_OFFSET, build_from_stored, ingest, plan_claims, profile, stored_events
+from webapp.history import JST_OFFSET, build_from_stored, ingest, local_time, plan_claims, profile, stored_events
 from webapp.images import ImageCache, content_type
 from webapp.push import DEFAULTS, EVENTS, WATCH_EVENTS, PushService, build_events
 from webapp.view import BannerView, banner_label
@@ -301,7 +301,7 @@ class App:
         banners, moves = await self.view.history_context(since - JST_OFFSET if since else None)
         # Rechnen außerhalb der Ereignisschleife - die App bleibt währenddessen bedienbar
         data = await asyncio.get_running_loop().run_in_executor(None, build_from_stored, stored, banners, moves)
-        data["saved_at"] = max(a.get("updated_at") or "" for a in stored.values())[:16]
+        data["saved_at"] = local_time(max(a.get("updated_at") or "" for a in stored.values()))
         data["profile"] = profile(stored)
         data["auto_claims"] = await self.bridge.auto_claims(user["user_id"])
         for c in data["auto_claims"]:

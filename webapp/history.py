@@ -141,6 +141,18 @@ def parse_rank(pages: List[Dict]) -> Optional[str]:
     return None
 
 
+def local_time(iso: Optional[str]) -> Optional[str]:
+    """Zeitstempel der App-Datenbank (naive UTC-Zeit des Containers) -> deutsche Zeit "YYYY-MM-DD HH:MM"."""
+    if not iso:
+        return None
+    from utils.banner_info import berlin_time
+    try:
+        utc = datetime.fromisoformat(iso).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return iso[:16]
+    return berlin_time(utc.timestamp()).strftime(TIME_FMT)
+
+
 def jst_month(now: Optional[datetime] = None) -> str:
     return ((now or datetime.now(timezone.utc).replace(tzinfo=None)) + JST_OFFSET).strftime("%Y-%m")
 
@@ -343,7 +355,7 @@ def profile(stored: Dict[str, Dict], now: Optional[datetime] = None) -> Dict:
               if coins is not None else None)
     return {"rank": info.get("rank"), "charge": charge,
             "charge_yen": info.get("spent_month_yen") if info.get("month") == month else (0 if info.get("month") else None),
-            "updated_at": ((stored.get("member") or {}).get("updated_at") or "")[:16] or None}
+            "updated_at": local_time((stored.get("member") or {}).get("updated_at"))}
 
 
 def build_history(areas: Dict[str, Dict], banners: Dict[int, Dict], moves: Dict[int, List[datetime]]) -> Dict:
