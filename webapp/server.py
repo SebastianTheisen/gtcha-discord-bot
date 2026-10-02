@@ -38,6 +38,8 @@ RESULT_PAGE = """<!doctype html><html lang="de"><head><meta charset="utf-8">
 <style>body{{margin:0;font:16px -apple-system,system-ui,sans-serif;background:#eef0f4;color:#1d2433}}
 .box{{max-width:480px;margin:40px auto;padding:20px;background:#fff;border-radius:14px;box-shadow:0 2px 8px rgba(20,30,60,.08)}}
 h1{{font-size:20px;margin:0 0 12px;color:{color}}}p{{margin:8px 0;line-height:1.4}}
+table{{width:100%;border-collapse:collapse;font-size:14px;margin-top:12px}}td,th{{text-align:left;padding:5px 4px;
+border-top:1px solid #dfe3ea}}th{{color:#6b7385;font-weight:600;border-top:0}}
 a{{display:block;margin-top:16px;padding:12px;border-radius:10px;text-align:center;text-decoration:none;font-weight:700;
 background:#2563c4;color:#fff}}a.alt{{background:#e6e8ee;color:#1d2433}}
 @media (prefers-color-scheme:dark){{body{{background:#0f1320;color:#e8ebf5}}.box{{background:#1a2033}}a.alt{{background:#232a40;color:#e8ebf5}}}}
@@ -47,11 +49,21 @@ background:#2563c4;color:#fff}}a.alt{{background:#e6e8ee;color:#1d2433}}
 „Mein Verlauf“ ansehen.</p></div></body></html>"""
 
 
-def import_result_page(lines: list, ok: bool = True) -> web.Response:
+AREA_NAMES = {"undecided-detail": "Gacha – unentschieden", "pending-detail": "Gacha – angefordert",
+              "shipped-detail": "Versand", "downloaded-detail": "Downloads", "buy-point-history": "Münzen",
+              "purchase-history": "Käufe", "ticket-history": "Tickets", "change-member": "Kontoseite (Rang, ¥)"}
+
+
+def import_result_page(lines: list, ok: bool = True, report: list = None) -> web.Response:
     """Ergebnis von "Alles übertragen" als eigenständige Seite (alles eingebettet). Sie öffnet sich im
     Safari-Tab - dort hat die App weder Verknüpfung noch aktuellen Zwischenspeicher, daher nicht die App laden."""
     import html
     body = "".join(f"<p>{html.escape(line)}</p>" for line in lines)
+    if report:   # je Bereich: Seiten und ob komplett / nur Neues / Fehler - zum Prüfen des Ablaufs
+        rows = "".join(
+            f"<tr><td>{html.escape(AREA_NAMES.get(p, p))}</td><td>{'–' if n is None else n}</td>"
+            f"<td>{'⚠️ ' + html.escape(how) if n is None else html.escape(how)}</td></tr>" for p, n, how in report)
+        body += (f"<table><tr><th>Bereich</th><th>Seiten</th><th></th></tr>{rows}</table>")
     return web.Response(text=RESULT_PAGE.format(title="Übertragen" if ok else "Nicht übertragen", lines=body,
                                                 color="#1f3a6e" if ok else "#e5383b"),
                         content_type="text/html", headers={"Cache-Control": "no-store"})
@@ -225,23 +237,35 @@ class App:
             return import_result_page(["⚠️ Dieses Lesezeichen gehört zu keinem verknüpften Gerät mehr – bitte in der "
                                        "App unter „Ich“ neu kopieren."], ok=False)
         saved = pages = partial = 0
-        entries = []
+        entries, report = [], []
         for entry in data.get("pages") or []:
             path = str(entry.get("path", ""))
             if not re.fullmatch(r"[a-z0-9-]{1,40}", path):
                 continue
+            n = len(entry.get("pages") or [])
+            if entry.get("error") or not n:
+                # Bereich nicht geladen: nichts überschreiben (ein leerer Münzverlauf würde sonst alles ersetzen)
+                report.append((path, None, str(entry.get("error") or "keine Seite")))
+                continue
             await self.bridge.add_import(user, "sync", f"https://gtchaxonline.com/{path}",
                                          json.dumps(entry, ensure_ascii=False))
             entries.append({"path": path, "pages": entry.get("pages") or [], "partial": bool(entry.get("partial"))})
+            report.append((path, n, "nur Neues" if entry.get("partial") else "komplett"))
             saved += 1
             partial += bool(entry.get("partial"))
-            pages += len(entry.get("pages") or [])
-        logger.info(f"Sync von {user['name']}: {saved} Bereiche, {pages} Seiten ({partial} nur Neues)")
-        gap = False
+            pages += n
+        seconds = round(int(data.get("ms") or 0) / 1000)
+        logger.info(f"Sync von {user['name']}: {saved} Bereiche, {pages} Seiten ({partial} nur Neues)"
+                    + (f" in {seconds} s" if seconds else "") + " · "
+                    + ", ".join(f"{p}={n if n is not None else 'FEHLER ' + how}" for p, n, how in report))
+        gap, added = False, {}
         try:
-            changed = ingest(await self.bridge.get_history(user["user_id"]), entries)
+            stored = await self.bridge.get_history(user["user_id"])
+            before = {a: len((stored.get(a) or {}).get("items") or []) for a in ("coins", "shipped")}
+            changed = ingest(stored, entries)
             await self.bridge.set_history(user["user_id"], changed)
             gap = any(a.get("gap") for a in changed.values())
+            added = {a: len(changed[a]["items"]) - before[a] for a in before if a in changed}
         except Exception as e:
             logger.warning(f"Verlauf nicht übernommen: {type(e).__name__}: {e}")
         claims = 0
@@ -249,14 +273,23 @@ class App:
             claims = len(await self.auto_claim(user))
         except Exception as e:
             logger.warning(f"Automatische Medaillen fehlgeschlagen: {type(e).__name__}: {e}")
-        lines = [f"✅ {saved} Bereiche mit zusammen {pages} Seiten übertragen."]
+        failed = [p for p, n, _ in report if n is None]
+        lines = [f"✅ {saved} Bereiche mit zusammen {pages} Seiten übertragen"
+                 + (f" in {seconds} Sekunden." if seconds else ".")]
         if partial:
             lines.append(f"➕ {partial} Bereich(e) nur mit neuen Einträgen.")
+        if "coins" in added:
+            lines.append(f"🪙 Münzverlauf: {max(0, added['coins'])} neue Buchung(en).")
+        if "shipped" in added:
+            lines.append(f"📦 Versand: {max(0, added['shipped'])} neue Karte(n).")
+        if failed:
+            lines.append(f"⚠️ Nicht geladen: {', '.join(AREA_NAMES.get(p, p) for p in failed)} – der gespeicherte Stand "
+                         f"bleibt erhalten. Einfach noch einmal übertragen.")
         if gap:
             lines.append("⚠️ Zwischen alt und neu fehlt evtl. etwas – einmal „Komplett übertragen“ benutzen.")
         if claims:
             lines.append(f"🏅 {claims} Medaille(n) automatisch gemeldet.")
-        return import_result_page(lines)
+        return import_result_page(lines, report=report)
 
     async def auto_claim(self, user: Dict) -> list:
         """Angeforderte Karten (noch nicht verschickt) automatisch als Medaille melden, wenn eindeutig."""
