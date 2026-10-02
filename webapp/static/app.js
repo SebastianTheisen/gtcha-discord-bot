@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 61;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 63;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -8,7 +8,7 @@ const STATUS = {
   running: ["🎯", "Läuft"], endspurt: ["⚡", "Endspurt"], hits_out: ["🔴", "Hits raus"], upcoming: ["🕒", "Bald"],
 };
 const CATEGORIES = [["Alle", "Alle"], ["Bonus", "BONUS"], ["MIX", "MIX"], ["Pokémon", "Pokémon"],
-                    ["One piece", "One Piece"], ["Dragon Ball", "Dragon Ball"]];
+                    ["One piece", "One Piece"], ["Dragon Ball", "Dragon Ball"], ["Wunsch", "⭐ Wunschkarten"]];
 const SORTS = {
   site: ["Wie auf der Seite", (a, b) => b.id - a.id],
   ev: ["Ø Rückgabe", (a, b) => (b.ev_pct ?? -1) - (a.ev_pct ?? -1)],
@@ -91,6 +91,8 @@ function flags(b) {
   if (b.per_day) out.push(`Beschränkt auf ${b.per_day} Mal pro Tag`);
   if (b.min_charge) out.push(`${num(b.min_charge)} Coins benötigt diesen Monat`);
   if (b.password) out.push("🔒 Nur mit Passwort");
+  const wished = state.wishBanners?.get(b.id);
+  if (wished) out.push(`⭐ ${wished.join(", ")}`);
   return out.length ? `<div class="flags">${out.map((f) => `<span class="flag">${esc(f)}</span>`).join("")}</div>` : "";
 }
 
@@ -272,6 +274,18 @@ async function showList() {
   }
   view.querySelector("#sort").value = state.sort;
   drawList();
+  // Banner mit Wunschkarten (noch nicht gezogen) für die Kategorie "⭐ Wunschkarten"
+  const wish = wishList();
+  if (wish.length) {
+    api(`/api/cards?ids=${wish.map((w) => w.id).join(",")}`).then((res) => {
+      const map = new Map();
+      for (const c of res.cards) for (const wb of c.banners) {
+        if (!wb.out) map.set(wb.id, [...(map.get(wb.id) || []), c.name]);
+      }
+      state.wishBanners = map;
+      drawList();
+    }).catch(() => {});
+  } else state.wishBanners = new Map();
   // beobachtete Banner für den Filter (aus den Push-Einstellungen dieses Geräts)
   if (state.watchIds === undefined) {
     state.watchIds = new Set();
@@ -285,7 +299,8 @@ function drawList() {
   const sort = SORTS[state.sort] || SORTS.ev;
   const active = [...state.filters].filter((k) => QUICK_FILTERS[k] && (k !== "mine" || myRank()));
   const shown = banners
-    .filter((b) => (q ? matches(b, q) : state.category === "Alle" || b.category === state.category))
+    .filter((b) => (q ? matches(b, q) : state.category === "Alle" || b.category === state.category
+      || (state.category === "Wunsch" && state.wishBanners?.has(b.id) && canBuy(b) !== false)))
     .filter((b) => active.every((k) => QUICK_FILTERS[k][1](b)))
     .sort(sort[1]);
   view.querySelectorAll(".tab").forEach((el) => el.classList.toggle("active", !q && el.dataset.cat === state.category));
@@ -297,6 +312,8 @@ function drawList() {
       ? `<div class="clist">${shown.map(compactRow).join("")}</div>`
       : `<div class="list">${shown.map((b) => row(b)).join("")}</div>`)
       : `<div class="empty">${q ? "Kein aktiver Banner gefunden – mit Enter die ID direkt öffnen"
+        : state.category === "Wunsch" ? (wishList().length ? "Gerade ist keine deiner Wunschkarten in einem für dich kaufbaren Banner."
+          : "Noch keine Wunschkarten – unter 🔍 Suche oder auf einer Banner-Seite Karten mit ⭐ merken.")
         : active.length ? "Keine Banner für diese Filter" : "Keine Banner"}</div>`}
     <div class="updated" id="updated"></div>`);
   view.querySelector("#updated").textContent = `Stand ${time(updated)}`;
@@ -629,15 +646,16 @@ async function showSettings() {
   const watched = Object.keys(prefs.watch);
   const options = banners.filter((b) => !prefs.watch[b.id]).sort((a, b) => b.id - a.id);
   const user = await me();
-  const [medals, hist, acc] = await Promise.all([
+  const [medals, hist, acc, devices] = await Promise.all([
     user ? authApi("/api/me/medals").then((r) => r.medals).catch(() => []) : [],
     user ? authApi("/api/me/history").catch(() => null) : null,
-    api("/api/accuracy").catch(() => null)]);
+    api("/api/accuracy").catch(() => null),
+    user ? authApi("/api/me/devices").then((r) => r.devices).catch(() => []) : []]);
   applyProfile(hist?.profile);
   const prof = hist?.profile;
   view.innerHTML = `
     <div class="section-title">👤 ${user ? esc(user.name) : "Ich"}</div>
-    ${linkPanel(user)}
+    ${linkPanel(user, devices)}
     ${user ? `<h2>🏅 Meine gemeldeten Hits <small>${medals.length} aktiv</small></h2>
       <div class="rows">${medals.length ? medals.map((m) => `
         <a class="line claim-row" href="#/banner/${m.banner_id}">
@@ -845,14 +863,24 @@ function ask(title, html, buttons = ["Nein", "Ja"]) {
 // Tippen auf eine Karte: melden bzw. zurücknehmen (mit Rückfrage), Bot postet es im Discord-Thread
 async function claimFlow(b, card) {
   const units = unitsOf(b, card);
+  // in jedem Dialog: Karte auf die Wunschliste setzen / davon entfernen
+  const star = isWish(card.id) ? "☆ Nicht mehr merken" : "⭐ Merken";
+  const wishPicked = async (choice) => {
+    if (choice !== star) return false;
+    await toggleWish({ id: card.id, name: card.name, image: card.image });
+    await ask(card.name, isWish(card.id) ? "⭐ Auf deiner Wunschliste – Push, sobald ein neuer Banner sie enthält oder sie gezogen wurde."
+      : "Von der Wunschliste entfernt.", ["OK"]);
+    return true;
+  };
   if (!units.length) {
-    await ask(card.name, `${num(card.value)} Coins – unter dem Packpreis, kann nicht gemeldet werden.`, ["OK"]);
+    await wishPicked(await ask(card.name, `${num(card.value)} Coins – unter dem Packpreis, kann nicht gemeldet werden.`, [star, "OK"]));
     return;
   }
   const user = await me();
   if (!user) {
-    if (await ask("Discord verknüpfen", "Zum Melden einmal mit Discord verknüpfen (Reiter „Ich“).", ["Später", "Verknüpfen"]) === "Verknüpfen")
-      location.hash = "#/settings";
+    const choice = await ask("Discord verknüpfen", "Zum Melden einmal mit Discord verknüpfen (Reiter „Ich“).", [star, "Später", "Verknüpfen"]);
+    if (await wishPicked(choice)) return;
+    if (choice === "Verknüpfen") location.hash = "#/settings";
     return;
   }
   const free = units.find((u) => !u.medal_user && u.state !== "pulled");
@@ -862,20 +890,23 @@ async function claimFlow(b, card) {
     // eigenes Exemplar gemeldet und noch eins frei: zurücknehmen oder ein weiteres melden
     const choice = await ask("Was möchtest du tun?", `${esc(card.name)} · ${num(card.value)} Coins<br><br>
         <b>${own.tier}</b> hast du gemeldet. <b>${free.tier}</b> ist noch frei.`,
-      ["Abbrechen", `${own.tier} zurücknehmen`, `${free.tier} melden`]);
+      [star, "Abbrechen", `${own.tier} zurücknehmen`, `${free.tier} melden`]);
+    if (await wishPicked(choice)) return;
     if (choice === `${own.tier} zurücknehmen`) { unit = own; action = "unclaim"; }
     else if (choice === `${free.tier} melden`) { unit = free; action = "claim"; }
     else return;
   } else if (free) {
-    if (await ask("Hit beanspruchen?", `<b>${free.tier}</b> · ${esc(card.name)}<br>${num(card.value)} Coins<br><br>
-        Als von dir gezogen melden? Der Bot postet das im Discord-Thread.`) !== "Ja") return;
+    const choice = await ask("Hit beanspruchen?", `<b>${free.tier}</b> · ${esc(card.name)}<br>${num(card.value)} Coins<br><br>
+        Als von dir gezogen melden? Der Bot postet das im Discord-Thread.`, [star, "Nein", "Ja"]);
+    if (await wishPicked(choice) || choice !== "Ja") return;
     unit = free; action = "claim";
   } else if (own) {
-    if (await ask("Zurücknehmen?", `<b>${own.tier}</b> · ${esc(card.name)} ist als von dir gemeldet.<br><br>
-        Meldung zurücknehmen?`) !== "Ja") return;
+    const choice = await ask("Zurücknehmen?", `<b>${own.tier}</b> · ${esc(card.name)} ist als von dir gemeldet.<br><br>
+        Meldung zurücknehmen?`, [star, "Nein", "Ja"]);
+    if (await wishPicked(choice) || choice !== "Ja") return;
     unit = own; action = "unclaim";
   } else {
-    await ask(card.name, "Alle Exemplare dieser Karte sind schon gemeldet oder als gezogen erkannt.", ["OK"]);
+    await wishPicked(await ask(card.name, "Alle Exemplare dieser Karte sind schon gemeldet oder als gezogen erkannt.", [star, "OK"]));
     return;
   }
   haptic();
@@ -889,10 +920,18 @@ async function claimFlow(b, card) {
   await ask("Gesendet", "Der Bot hat noch nicht geantwortet – die Meldung wird gleich verarbeitet.", ["OK"]);
 }
 
-function linkPanel(user) {
+function linkPanel(user, devices = []) {
+  const when = (t) => (t ? `${t.slice(8, 10)}.${t.slice(5, 7)}. ${t.slice(11, 16)}` : "–");
   return `<h2>🔗 Discord verknüpfen</h2><div class="panel">${user
     ? `<div>Verknüpft als <b>${esc(user.name)}</b> – du kannst Hits melden, sie erscheinen im Discord-Thread.</div>
-       <button class="btn" id="unlink">Verknüpfung trennen</button>`
+       <button class="btn" id="unlink">Verknüpfung trennen</button>
+       ${devices.length ? `<div class="hint" style="margin-top:12px"><b>Verknüpfte Geräte (${devices.length})</b></div>
+       <div class="rows" style="margin:6px 0 0">${devices.map((d) => `
+         <div class="line"><span>${esc(d.agent || "Gerät")}${d.current ? " · <b>dieses Gerät</b>" : ""}<br>
+           <span class="muted">verknüpft ${when(d.created_at)} · zuletzt aktiv ${when(d.last_seen)}</span></span>
+           ${d.current ? "" : `<button class="icon-btn" data-device="${esc(d.id)}" aria-label="Gerät abmelden">✕</button>`}</div>`).join("")}</div>
+       <div class="hint">Safari und die installierte App zählen als eigene Geräte. Mit ✕ meldest du ein Gerät ab
+         (z. B. ein altes Handy) – sein Lesezeichen funktioniert dann nicht mehr.</div>` : ""}`
     : `<div class="hint">1. In Discord <b>/app-verknüpfen</b> eingeben – der Bot zeigt dir einen Code (nur für dich).<br>
        2. Code hier eingeben. Danach kannst du auf jeder Banner-Seite Hits als gezogen melden.</div>
        <div class="add-watch"><input id="link-code" class="code-input" maxlength="8" autocomplete="one-time-code"
@@ -902,6 +941,12 @@ function linkPanel(user) {
 }
 
 function wireLinkPanel() {
+  view.querySelectorAll("[data-device]").forEach((btn) => btn.addEventListener("click", async () => {
+    if (await ask("Gerät abmelden?", "Dieses Gerät ist danach nicht mehr mit Discord verknüpft.") !== "Ja") return;
+    await authApi("/api/me/devices/remove", { id: btn.dataset.device }).catch(() => {});
+    haptic();
+    showSettings();
+  }));
   view.querySelector("#unlink")?.addEventListener("click", async () => {
     await authApi("/api/unlink", {}).catch(() => {});
     save("deviceToken", ""); state.me = undefined;
@@ -1067,6 +1112,31 @@ function cardLine(c) {
     ${c.value ? `<br><span class="claim-value">${num(c.value)} Coins</span>` : ""}</span></div>`;
 }
 
+// Bilanz je Tag (Balken grün/rot) und aufsummiert (Linie), die letzten 30 Tage mit Daten
+function balanceChart(daysNewestFirst) {
+  const days = daysNewestFirst.slice(0, 30).reverse();
+  let sum = 0;
+  const cum = days.map((d) => (sum += d.balance));
+  const W = 600, H = 220, P = 30;
+  const max = Math.max(0, ...days.map((d) => d.balance), ...cum), min = Math.min(0, ...days.map((d) => d.balance), ...cum);
+  const y = (v) => P / 2 + (1 - (v - min) / Math.max(1, max - min)) * (H - P * 1.5);
+  const step = (W - 2 * P) / days.length, bw = Math.max(2, step * 0.6);
+  const x = (i) => P + step * i + step / 2;
+  const bars = days.map((d, i) => `<rect x="${(x(i) - bw / 2).toFixed(1)}" width="${bw.toFixed(1)}"
+    y="${Math.min(y(d.balance), y(0)).toFixed(1)}" height="${Math.max(1, Math.abs(y(d.balance) - y(0))).toFixed(1)}"
+    fill="${d.balance >= 0 ? "#1f9d55" : "#e5383b"}" opacity=".75"/>`).join("");
+  const line = cum.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const label = (d) => d.day.slice(8, 10) + "." + d.day.slice(5, 7) + ".";
+  return `<div class="chart" style="margin:0 10px"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Bilanz pro Tag">
+    <line x1="${P}" x2="${W - P}" y1="${y(0)}" y2="${y(0)}" stroke="#98a1bd" stroke-width="1" vector-effect="non-scaling-stroke"/>
+    ${bars}
+    <polyline points="${line}" fill="none" stroke="#3d7fd9" stroke-width="2.5" vector-effect="non-scaling-stroke"/>
+    <text class="axis" x="${P}" y="${H - 6}">${label(days[0])}</text>
+    <text class="axis" x="${W - P}" y="${H - 6}" text-anchor="end">${label(days[days.length - 1])}</text>
+    <text class="axis" x="${W - P}" y="16" text-anchor="end">gesamt ${sum > 0 ? "+" : ""}${num(sum)}</text>
+  </svg></div>`;
+}
+
 function historySection(h) {
   if (!h || h.empty) {
     return `<h2>📊 Mein Verlauf</h2><div class="panel"><div class="hint">Noch keine Daten – unten bei „Eigene GTCHA-Daten“
@@ -1110,6 +1180,8 @@ function historySection(h) {
     ${s.unassigned_opens ? `<div class="hint pad">${s.unassigned_opens} Öffnungen nicht zugeordnet – nur eindeutige Fälle
       (Preis, Pack-Bewegung, Kartenwert) werden einem Banner zugerechnet.</div>` : ""}
     ${monthRows ? `<h3 class="sub-title">Pro Monat</h3><div class="rows">${monthRows}</div>` : ""}
+    ${s.days.length > 1 ? `<h3 class="sub-title">Bilanz pro Tag <small class="muted">Balken = Tag, Linie = aufsummiert</small></h3>
+      ${balanceChart(s.days)}` : ""}
     ${days ? `<h3 class="sub-title">Pro Tag</h3><div class="rows">${days}</div>` : ""}
     ${h.pending.length ? `<h3 class="sub-title">Angefordert, noch nicht verschickt (${h.pending.length})</h3>
       <div class="rows">${h.pending.map(cardLine).join("")}</div>` : ""}
@@ -1317,6 +1389,8 @@ function post(body) {
 // --- Navigation ---
 async function route() {
   clearInterval(state.timer);
+  // offene Dialoge gehören zur alten Seite
+  document.querySelectorAll(".modal-wrap").forEach((m) => m.remove());
   const hash = location.hash || "#/";
   const tab = hash.startsWith("#/hot") ? "hot" : hash.startsWith("#/settings") ? "settings"
     : hash.startsWith("#/search") ? "search" : "list";

@@ -7,6 +7,7 @@ Start: python -m webapp.server
 """
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -71,6 +72,15 @@ def import_result_page(lines: list, ok: bool = True, report: list = None) -> web
                                                 color="#1f3a6e" if ok else "#e5383b",
                                                 dark_color="#9db8ff" if ok else "#ff6b6e"),
                         content_type="text/html", headers={"Cache-Control": "no-store"})
+
+
+def device_kind(agent: str) -> str:
+    """Grober Gerätetyp aus dem User-Agent (nur zur Anzeige in „Geräte verwalten“)."""
+    for key, name in (("iPhone", "iPhone"), ("iPad", "iPad"), ("Android", "Android"), ("Macintosh", "Mac"),
+                      ("Windows", "Windows"), ("Linux", "Linux")):
+        if key in agent:
+            return name
+    return "Gerät"
 
 
 def search_cards(banners: list, q: str, ids: set) -> list:
@@ -210,7 +220,7 @@ class App:
         if len(self._link_fails) >= 10:
             raise web.HTTPTooManyRequests(text="Zu viele falsche Codes – bitte 10 Minuten warten")
         body = await request.json()
-        device = await self.bridge.redeem_code(str(body.get("code", "")))
+        device = await self.bridge.redeem_code(str(body.get("code", "")), device_kind(request.headers.get("User-Agent", "")))
         if not device:
             self._link_fails.append(now)
             return web.json_response({"error": "Code ungültig oder abgelaufen"}, status=400)
@@ -356,6 +366,24 @@ class App:
         for c in data["auto_claims"]:
             c["title"] = (banners.get(c["pack_id"]) or {}).get("title")
         return web.json_response(data)
+
+    async def api_my_devices(self, request):
+        user = await self._user(request)
+        if not user:
+            raise web.HTTPUnauthorized(text="Gerät nicht mit Discord verknüpft")
+        current = hashlib.sha256(request.headers.get("X-Device-Token", "").encode()).hexdigest()[:16]
+        devices = await self.bridge.devices(user["user_id"])
+        for d in devices:
+            d["current"] = d["id"] == current
+            d["created_at"], d["last_seen"] = local_time(d["created_at"]), local_time(d["last_seen"])
+        return web.json_response({"devices": devices})
+
+    async def api_remove_device(self, request):
+        user = await self._user(request)
+        if not user:
+            raise web.HTTPUnauthorized(text="Gerät nicht mit Discord verknüpft")
+        body = await request.json()
+        return web.json_response({"ok": await self.bridge.remove_device(user["user_id"], str(body.get("id", "")))})
 
     async def api_unlink(self, request):
         token = request.headers.get("X-Device-Token")
@@ -527,6 +555,8 @@ def make_app(app: App) -> web.Application:
         web.get("/api/me/history", app.api_my_history),
         web.get("/api/me/profile", app.api_my_profile),
         web.post("/api/unlink", app.api_unlink),
+        web.get("/api/me/devices", app.api_my_devices),
+        web.post("/api/me/devices/remove", app.api_remove_device),
         web.get("/api/health", app.api_health),
         web.get("/api/accuracy", app.api_accuracy),
         web.post("/api/import-form", app.api_import_form),

@@ -205,3 +205,22 @@ def test_bot_reports_webapp_outage(monkeypatch):
         await server.close()
 
     asyncio.run(run())
+
+
+def test_devices_list_and_remove_only_own(tmp_path):
+    async def run():
+        bridge = AppBridge(str(tmp_path / "w.db"))
+        await bridge.init()
+        mine = [await bridge.redeem_code(await bridge.create_code(42, "Basti"), agent) for agent in ("iPhone", "Mac")]
+        other = await bridge.redeem_code(await bridge.create_code(7, "X"), "Android")
+        devices = await bridge.devices("42")
+        assert sorted(d["agent"] for d in devices) == ["Mac", "iPhone"] and all(len(d["id"]) == 16 for d in devices)
+        other_id = (await bridge.devices("7"))[0]["id"]
+        assert not await bridge.remove_device("42", other_id)          # fremdes Gerät: nein
+        assert not await bridge.remove_device("42", "")                # leere Kennung: nein
+        mac = next(d["id"] for d in devices if d["agent"] == "Mac")
+        assert await bridge.remove_device("42", mac)
+        assert await bridge.device(mine[1]["token"]) is None and await bridge.device(mine[0]["token"])
+        assert await bridge.device(other["token"])
+
+    asyncio.run(run())
