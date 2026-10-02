@@ -4,7 +4,7 @@ Nur lesend - die App schreibt nie in die Datenbank des Bots.
 """
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 import aiosqlite
@@ -241,6 +241,48 @@ class BannerView:
             result.append({"banner_id": banner_id, "tier": tier, "name": unit.get("name") or tier,
                            "value": unit.get("value"), "image": unit.get("image"),
                            "price": to_int(row.get("price_coins")), "t": epoch(created)})
+        return result
+
+    async def history_context(self, since_utc: Optional[datetime]) -> tuple:
+        """Für den eigenen Verlauf: alle bekannten Banner (Preis, Kartenwerte, Titel) und ihre
+        Pack-Bewegungen (naive UTC-Zeiten) seit since_utc."""
+        banners, moves = {}, {}
+        async with aiosqlite.connect(self.db.db_path) as conn:
+            cur = await conn.execute("SELECT pack_id, title, price_coins, image_url, is_active, created_at, card_pool "
+                                     "FROM banners")
+            for pid, title, price, image, active, created, pool_json in await cur.fetchall():
+                try:
+                    pool = json.loads(pool_json) if pool_json else {}
+                except ValueError:
+                    pool = {}
+                banners[pid] = {"price": to_int(price), "title": title, "image": image, "active": bool(active),
+                                "created": (created or "")[:10],
+                                "values": {int(c["value"]) for c in pool.get("cards") or [] if c.get("value")},
+                                "card_ids": {str(c.get("id")) for c in (pool.get("cards") or []) + (pool.get("hits") or [])}}
+            if since_utc:
+                cur = await conn.execute("SELECT banner_id, changed_at FROM pack_history "
+                                         "WHERE new_count < old_count AND changed_at >= ?",
+                                         ((since_utc - timedelta(minutes=10)).isoformat(),))
+                for pid, changed in await cur.fetchall():
+                    try:
+                        moves.setdefault(pid, []).append(datetime.fromisoformat(changed))
+                    except ValueError:
+                        continue
+        return banners, moves
+
+    async def claim_targets(self) -> Dict[int, Dict]:
+        """Aktive Banner: meldbare Plätze (Karten ab Packpreis) und schon vergebene Medaillen."""
+        result = {}
+        for pid, row in (await self.db.get_active_banners()).items():
+            if not row.get('card_pool'):
+                continue
+            pool = json.loads(row['card_pool'])
+            thread = await self.db.get_thread_by_banner_id(pid) or {}
+            if not thread.get('thread_id') or thread.get('is_expired'):
+                continue
+            medals = await self.db.get_medals(int(thread['thread_id']))
+            result[pid] = {"units": claimable_units(pool, to_int(row.get('price_coins')) or None),
+                           "medals": medals}
         return result
 
     async def all_banners(self, with_pool: bool = False) -> List[Dict]:
