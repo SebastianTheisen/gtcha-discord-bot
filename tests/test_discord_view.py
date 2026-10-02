@@ -343,3 +343,54 @@ def test_pack_updates_stay_in_slim_mode(env):
     from bot.scraping import ScrapingMixin
     assert not any("Pack-Update" in p for p in OLD_POST_PREFIXES)
     assert "_slim" not in inspect.getsource(ScrapingMixin._post_pack_update_to_thread)
+
+
+def test_thread_rename_does_not_block(env):
+    """Discord lässt Umbenennungen oft minutenlang warten - der Aufrufer (Scrape) darf darauf nicht warten."""
+    import discord
+
+    from bot.threads import ThreadsMixin
+
+    renamed = []
+
+    class Thread(discord.Thread):
+        archived, name = False, "alt"
+
+        def __init__(self):
+            pass
+
+        async def edit(self, name=None, **kw):
+            await asyncio.sleep(0.5)          # simuliert die Wartezeit bei Discord
+            renamed.append(name)
+
+    class DB:
+        async def get_banner(self, pid):
+            return {"price_coins": 1000, "total_packs": 100}
+
+        async def get_thread_by_banner_id(self, pid):
+            return {"thread_id": 700, "title": "alt"}
+
+        async def set_thread_title(self, tid, title):
+            pass
+
+    class Bot(ThreadsMixin):
+        db = DB()
+
+        def get_channel(self, _id):
+            return Thread()
+
+        async def _thread_status(self, row, data):
+            return "running"
+
+        async def _slim(self):
+            return True
+
+    async def run():
+        bot = Bot()
+        t0 = asyncio.get_running_loop().time()
+        await bot._sync_thread_title(5)
+        assert asyncio.get_running_loop().time() - t0 < 0.2 and renamed == []   # sofort zurück
+        await bot._title_worker
+        assert renamed and "ID 5" in renamed[0]
+
+    asyncio.run(run())
