@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 39;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 40;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -73,12 +73,6 @@ function setHtml(el, html) {
   el.innerHTML = html;
   el.__html = html;
   return true;
-}
-
-// Bilder im Hintergrund in den Gerätespeicher holen (Service Worker), damit sie beim Blättern schon da sind
-function preloadImages(urls, w = 640) {
-  const list = [...new Set(urls.filter((u) => safeUrl(u)).map((u) => imgSrc(u, w)).filter((u) => u.startsWith("/img?")))];
-  if (list.length) navigator.serviceWorker?.controller?.postMessage({ type: "preload", urls: list });
 }
 
 async function api(path, options) {
@@ -213,7 +207,6 @@ function matches(b, q) {
 async function showList() {
   const { banners, updated } = await api("/api/banners");
   state.listData = { banners, updated };
-  if (!state.preloadedList) { state.preloadedList = true; preloadImages(banners.map((b) => b.image)); }
   // Grundgerüst nur einmal bauen, damit das Suchfeld beim Aktualisieren den Fokus behält
   if (!view.querySelector("#search")) {
     view.innerHTML = `
@@ -535,7 +528,6 @@ async function showBanner(id) {
     view.querySelectorAll(".pane").forEach((p) => { p.hidden = p.dataset.pane !== el.dataset.tab; });
   }));
   renderCards(b);
-  if (state.preloaded !== b.id) { state.preloaded = b.id; preloadImages(b.cards.map((c) => c.image), 320); }
   wireWatchButton(String(b.id)).catch(() => {});
   me().then(() => renderCards(b)).catch(() => {});
 }
