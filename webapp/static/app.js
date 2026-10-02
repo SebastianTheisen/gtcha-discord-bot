@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 57;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 58;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -1067,7 +1067,8 @@ function historySection(h) {
     <a class="line" href="#/banner/${c.pack_id}"><span><b>${esc(c.tier)}</b> ${esc(c.title || "Banner " + c.pack_id)}
       ${c.reason ? `<br><span class="muted">${esc(c.reason)}</span>` : ""}</span>
       <span class="muted">${CLAIM_STATUS[c.status] || esc(c.status || "")}</span></a>`).join("");
-  return `<h2>📊 Mein Verlauf <small>Stand ${esc(h.saved_at.replace("T", " "))}</small></h2>
+  const [d, tm] = (h.saved_at || "").split(" ");
+  return `<h2>📊 Mein Verlauf <small>Stand ${esc(d ? d.split("-").reverse().join(".") + " " + (tm || "") : "–")}</small></h2>
     <div class="stats hist-stats">
       ${m.spent_month_yen != null ? stat("Ausgaben diesen Monat", num(m.spent_month_yen) + " ¥", "laut Kontoseite") : ""}
       ${m.coins != null ? stat("Coin-Stand", num(m.coins) + " Coins") : ""}

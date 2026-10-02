@@ -232,3 +232,10 @@ def test_import_result_page_is_standalone():
     res = import_result_page(["✅ 8 Bereiche", "<script>x</script>"])
     assert res.content_type == "text/html" and res.headers["Cache-Control"] == "no-store"
     assert "✅ 8 Bereiche" in res.text and "<script>x" not in res.text and "/static/" not in res.text
+
+
+def test_local_time_is_german_time():
+    from webapp.history import local_time
+    assert local_time("2026-10-02T19:51:12.123456") == "2026-10-02 21:51"     # Sommerzeit UTC+2
+    assert local_time("2026-12-02T19:51:00") == "2026-12-02 20:51"            # Winterzeit UTC+1
+    assert local_time(None) is None
