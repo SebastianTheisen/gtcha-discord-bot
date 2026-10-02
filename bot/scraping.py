@@ -713,5 +713,8 @@ class ScrapingMixin:
             purged = await self.db.purge_archived_data(max_age_hours=1)
             if purged > 0:
                 logger.info(f"Archiv-Bereinigung: {purged} alte Banner aus DB gelöscht")
+            old_moves = await self.db.purge_old_history()
+            if old_moves > 0:
+                logger.info(f"Archiv-Bereinigung: {old_moves} Pack-Bewegungen älter als 90 Tage gelöscht")
         except Exception as e:
             logger.error(f"Fehler bei Archiv-Bereinigung: {e}")
