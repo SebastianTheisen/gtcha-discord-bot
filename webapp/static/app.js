@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 34;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 35;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -651,8 +651,12 @@ async function showSettings() {
     <h2>ℹ️ Über diese App</h2>
     <div class="panel"><div class="hint">Private, inoffizielle App mit den Daten deines GTCHA-Discord-Bots.
       Kein Angebot von GTCHA. Gezogen wird immer auf der offiziellen Seite.</div>
-      <div class="hint">App-Version ${APP_VERSION}</div></div>`;
+      <div class="hint">App-Version ${APP_VERSION}</div></div>
+    <h2>⏱ Geschwindigkeit</h2>
+    <div class="panel"><button class="btn" id="speed">Geschwindigkeit testen</button>
+      <div class="hint" id="speed-out">Lädt 10 Bilder aus dem iPhone-Speicher und frisch vom VPS und zeigt die Zeiten.</div></div>`;
   view.querySelector("#link-mode")?.addEventListener("change", (e) => save("linkMode", e.target.value));
+  view.querySelector("#speed")?.addEventListener("click", () => speedTest(view.querySelector("#speed-out")));
   view.querySelector("#my-rank")?.addEventListener("change", (e) => save("myRank", e.target.value));
   view.querySelector("#my-charge")?.addEventListener("change", (e) => save("myCharge", String(Number(e.target.value.replace(/\D/g, "")) || 0)));
   wireLinkPanel();
@@ -835,6 +839,38 @@ function wireLinkPanel() {
       showSettings();
     } catch (e) { msg.textContent = e.message; }
   });
+}
+
+// Messung: wo geht die Zeit verloren - iPhone-Speicher, VPS über Tailscale oder Server?
+async function speedTest(out) {
+  out.textContent = "Messe …";
+  const ms = (t) => `${Math.round(performance.now() - t)} ms`;
+  const lines = [];
+  let t = performance.now();
+  const { banners } = await api("/api/banners");
+  lines.push(`Daten (Bannerliste): ${ms(t)}`);
+  const urls = banners.map((b) => b.image).filter((u) => safeUrl(u)).slice(0, 10).map(imgSrc).filter((u) => u.startsWith("/img?"));
+  const sw = navigator.serviceWorker?.controller;
+  lines.push(`Hintergrund-Helfer aktiv: ${sw ? "ja" : "nein"}`);
+  if (sw) {
+    const stats = await new Promise((resolve) => {
+      const ch = new MessageChannel();
+      ch.port1.onmessage = (e) => resolve(e.data);
+      sw.postMessage({ type: "stats" }, [ch.port2]);
+      setTimeout(() => resolve(null), 3000);
+    });
+    lines.push(`Bilder im iPhone-Speicher: ${stats ? stats.images : "?"}${stats?.queue ? ` (noch ${stats.queue} in der Warteschlange)` : ""}`);
+  }
+  t = performance.now();
+  await Promise.all(urls.map((u) => fetch(u).then((r) => r.blob())));
+  lines.push(`10 Bilder über die App (Speicher): ${ms(t)}`);
+  t = performance.now();
+  await Promise.all(urls.map((u) => fetch(u + "&nosw=1&r=" + Math.random(), { cache: "no-store" }).then((r) => r.blob())));
+  lines.push(`10 Bilder frisch vom VPS: ${ms(t)}`);
+  t = performance.now();
+  await fetch(urls[0] + "&nosw=1&r=" + Math.random(), { cache: "no-store" }).then((r) => r.blob());
+  lines.push(`1 Bild frisch vom VPS: ${ms(t)}`);
+  out.innerHTML = lines.map(esc).join("<br>");
 }
 
 function post(body) {

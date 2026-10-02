@@ -45,6 +45,10 @@ async function preloadNext() {
   preloadNext();
 }
 self.addEventListener("message", (event) => {
+  if (event.data?.type === "stats") {
+    caches.open(IMG_CACHE).then((c) => c.keys()).then((k) => event.ports[0]?.postMessage({ images: k.length, queue: preloadQueue.length }));
+    return;
+  }
   if (event.data?.type !== "preload") return;
   const urls = (event.data.urls || []).filter((u) => typeof u === "string" && u.startsWith("/img?"));
   // neue Wünsche zuerst (die gerade geöffnete Seite)
@@ -68,7 +72,8 @@ async function trimImages(cachePromise) {
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== "GET" || url.origin !== location.origin) return;
-  if (url.pathname === "/img") { event.respondWith(cachedImage(event.request)); return; }
+  if (url.pathname === "/img" && !url.searchParams.has("nosw")) { event.respondWith(cachedImage(event.request)); return; }
+  if (url.pathname === "/img") return;
   if (url.pathname.startsWith("/api/")) return;
   event.respondWith(fetch(event.request, { cache: "no-cache" })
     .then((res) => {
