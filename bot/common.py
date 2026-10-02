@@ -23,7 +23,6 @@ from config import (
     CHANNEL_IDS, CATEGORIES, SCRAPE_TIMEOUT_SECONDS,
     MENTION_ON_NEW_THREAD, MENTION_ON_PACK_UPDATE,
     HOT_BANNER_CHANNEL_ID, HOT_BANNER_ENABLED,
-    DAILY_RESTART_TIME
 )
 from scraper.gtcha_scraper import GTCHAScraper
 from scraper.models import ScrapedBanner

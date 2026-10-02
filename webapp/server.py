@@ -147,22 +147,10 @@ class App:
             raise web.HTTPUnauthorized(text="Gerät nicht mit Discord verknüpft")
         return web.json_response({"medals": await self.view.my_medals(user["user_id"])})
 
-    async def api_import(self, request):
-        """Eigene GTCHA-Seite (per Lesezeichen) speichern - nur mit verknüpftem Gerät, nur für diese Person."""
-        user = await self._user(request)
-        if not user:
-            raise web.HTTPUnauthorized(text="Gerät nicht mit Discord verknüpft")
-        raw = await request.read()
-        if len(raw) > MAX_IMPORT_BYTES:
-            raise web.HTTPRequestEntityTooLarge(max_size=MAX_IMPORT_BYTES, actual_size=len(raw))
-        body = json.loads(raw)
-        page = body.get("page") or {}
-        if not str(page.get("url", "")).startswith("https://gtchaxonline.com/"):
-            raise web.HTTPBadRequest(text="Nur Seiten von gtchaxonline.com")
-        import_id = await self.bridge.add_import(user, "raw", page["url"], json.dumps(page, ensure_ascii=False))
-        logger.info(f"Import von {user['name']}: {page['url']} ({len(raw) // 1024} KB)")
-        return web.json_response({"id": import_id, "text": len(page.get("text") or ""),
-                                  "links": len(page.get("links") or []), "images": len(page.get("images") or [])})
+    async def api_health(self, request):
+        """Für die Überwachung durch den Bot: läuft, und wie alt die berechneten Daten sind."""
+        age = int(time.time()) - self._updated if self._updated else None
+        return web.json_response({"ok": True, "data_age": age})
 
     async def api_import_form(self, request):
         """"Alles übertragen"-Lesezeichen: Formular-POST von gtchaxonline.com (kein CORS nötig).
@@ -387,7 +375,7 @@ def make_app(app: App) -> web.Application:
         web.get("/api/me/history", app.api_my_history),
         web.get("/api/me/profile", app.api_my_profile),
         web.post("/api/unlink", app.api_unlink),
-        web.post("/api/import", app.api_import),
+        web.get("/api/health", app.api_health),
         web.post("/api/import-form", app.api_import_form),
         web.post("/api/medal", app.api_medal),
         web.get(r"/api/medal/{id:\d+}", app.api_medal_status),

@@ -117,5 +117,3 @@ HOT_BANNER_ENABLED = os.getenv("HOT_BANNER_ENABLED", "false").lower() == "true"
 # Discord-Benachrichtigungen: nur Fehler melden (true = nur Fehler, false = alles)
 DISCORD_NOTIFY_ERRORS_ONLY = os.getenv("DISCORD_NOTIFY_ERRORS_ONLY", "false").lower() == "true"
 
-# Täglicher Auto-Restart (Railway) - Uhrzeit im Format "HH:MM" (UTC), leer = deaktiviert
-DAILY_RESTART_TIME = os.getenv("DAILY_RESTART_TIME", "")

@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 51;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 52;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -665,16 +665,14 @@ async function showSettings() {
         ${watched.length ? watched.sort((a, b) => b - a).map((id) => watchCard(id, prefs.watch[id], byId[id])).join("")
           : `<div class="hint">Noch kein Banner beobachtet. Auch auf jeder Banner-Seite über „🔔 Beobachten“.</div>`}
       </div>` : ""}
-    ${user ? `<h2>📥 Eigene GTCHA-Daten (Test)</h2>
+    ${user ? `<h2>📥 Eigene GTCHA-Daten</h2>
       <div class="panel">
-        <div class="hint">Erster Schritt: Ein Lesezeichen überträgt <b>die gerade offene Seite</b> deines eigenen
-          GTCHA-Kontos (z. B. Transaktionen) an deinen VPS – kein Passwort, nur das, was dir dort angezeigt wird.
-          Damit prüfe ich, welche Angaben sich auslesen lassen.</div>
+        <div class="hint">Ein Lesezeichen überträgt deine eigenen GTCHA-Verlaufsseiten an deinen VPS – kein Passwort,
+          nur das, was dir dort angezeigt wird. Daraus entstehen „Mein Verlauf“, Rang/Aufladung und automatische Medaillen.</div>
         <div class="gt-links">
-          <a class="btn primary" href="${esc(buyHref("https://gtchaxonline.com/buy-point-history"))}" target="_blank" rel="noopener">📥 Münzen öffnen</a>
-          <a class="btn primary" href="${esc(buyHref("https://gtchaxonline.com/pending-detail"))}" target="_blank" rel="noopener">📥 Gacha öffnen</a>
+          <a class="btn primary" href="${esc(buyHref("https://gtchaxonline.com/pending-detail"))}" target="_blank" rel="noopener">📥 GTCHA öffnen</a>
         </div>
-        <div class="hint">Öffnet die Seite in Safari – dort Adressleiste antippen und „An GTCHA Tracker“ wählen.</div>
+        <div class="hint">Öffnet GTCHA in Safari – dort Adressleiste antippen und „An GTCHA Tracker“ wählen.</div>
         <button class="btn primary" id="bm-sync">Lesezeichen „Alles übertragen“ kopieren</button>
         <div class="hint">Auf irgendeiner gtchaxonline-Seite antippen: lädt deine Verlaufsseiten (Gacha, Versand,
           Münzen, Käufe, Tickets, Ausgaben in ¥) samt allen Seitenzahlen und überträgt sie. Von der Kontoseite nur
@@ -682,11 +680,9 @@ async function showSettings() {
           zu blättern, sobald es bekannte Einträge sieht (alle 30 Tage einmal komplett).</div>
         <button class="btn" id="bm-full">Lesezeichen „Komplett übertragen“ kopieren</button>
         <div class="hint">Nur nötig, wenn im Verlauf eine Lücke gemeldet wird – überträgt wieder alle Seiten.</div>
-        <button class="btn" id="bm-copy">Lesezeichen „Nur diese Seite“ kopieren</button>
         <div class="hint">Einrichten (einmalig): 1. In Safari irgendeine Seite als Lesezeichen sichern (Teilen → Lesezeichen),
-          Name „An GTCHA Tracker“. 2. Lesezeichen bearbeiten, Adresse löschen und den kopierten Code einfügen.<br>
-          Benutzen: Auf gtchaxonline.com die Seite öffnen (z. B. Transaktionen → Münzen), Adressleiste antippen und
-          „An GTCHA Tracker“ wählen. Der Code enthält deinen persönlichen Schlüssel – nicht weitergeben.</div>
+          Name „An GTCHA Tracker“. 2. Lesezeichen bearbeiten, Adresse löschen und den kopierten Code einfügen.
+          Der Code enthält deinen persönlichen Schlüssel – nicht weitergeben.</div>
         <div class="hint" id="bm-msg"></div>
       </div>` : ""}
     <h2>🔗 GTCHA-Seite öffnen in</h2>
@@ -709,12 +705,6 @@ async function showSettings() {
     try { await navigator.clipboard.writeText(code); msg.textContent = "Kopiert ✓"; haptic(); }
     catch (e) { msg.innerHTML = `<textarea class="bm-code" readonly>${esc(code)}</textarea>`; msg.querySelector("textarea").select(); }
   }));
-  view.querySelector("#bm-copy")?.addEventListener("click", async () => {
-    const code = bookmarkletCode(deviceToken());
-    const msg = view.querySelector("#bm-msg");
-    try { await navigator.clipboard.writeText(code); msg.textContent = "Kopiert ✓"; haptic(); }
-    catch (e) { msg.innerHTML = `<textarea class="bm-code" readonly>${esc(code)}</textarea>`; msg.querySelector("textarea").select(); }
-  });
   makeCollapsible(view);
   view.querySelector("#link-mode")?.addEventListener("change", (e) => save("linkMode", e.target.value));
   view.querySelector("#speed")?.addEventListener("click", () => speedTest(view.querySelector("#speed-out")));
@@ -989,18 +979,6 @@ function haptic() {
   navigator.vibrate?.(12);
 }
 
-// Lesezeichen für gtchaxonline.com: liest NUR die gerade offene eigene Seite (Text, Links, Bilder) und öffnet
-// damit die App. Läuft in Safari - dort kennt die App das Gerät nicht, daher steckt der Schlüssel im Lesezeichen.
-function bookmarkletCode(token) {
-  const app = location.origin;
-  const src = `(()=>{if(!/gtchaxonline\\.com$/.test(location.hostname)){alert('Bitte auf gtchaxonline.com öffnen');return}`
-    + `const L=[...document.querySelectorAll('a')].slice(0,400).map(a=>[a.textContent.trim().slice(0,80),a.getAttribute('href')]);`
-    + `const I=[...document.querySelectorAll('img')].slice(0,300).map(i=>[i.alt||'',i.getAttribute('src')]);`
-    + `const d={t:${JSON.stringify(token)},page:{url:location.href,title:document.title,text:document.body.innerText.slice(0,60000),links:L,images:I}};`
-    + `location.href=${JSON.stringify(app)}+'/#/import?d='+encodeURIComponent(JSON.stringify(d))})()`;
-  return "javascript:" + src;
-}
-
 // "Alles übertragen": lädt die eigenen Verlaufsseiten nacheinander unsichtbar (iframe, gleiche Seite),
 // blättert jeweils durch alle Seitenzahlen und schickt alles per Formular an den VPS. change-member
 // liefert die Ausgaben in Yen; von dort gehen nur Zeilen mit Beträgen/Rang/Datum mit (keine Name/Adresse).
@@ -1195,23 +1173,6 @@ function showImportDone(query) {
   history.replaceState(null, "", "#/settings");
 }
 
-async function showImport(raw) {
-  view.innerHTML = `<div class="section-title">📥 Übertragen</div><div class="panel"><div class="hint" id="imp">Übertrage …</div></div>`;
-  const out = view.querySelector("#imp");
-  try {
-    const d = JSON.parse(decodeURIComponent(raw));
-    const res = await fetch("/api/import", { method: "POST", cache: "no-store",
-      headers: { "Content-Type": "application/json", "X-Device-Token": d.t }, body: JSON.stringify({ page: d.page }) });
-    const r = await res.json().catch(async () => ({ error: await res.text() }));
-    if (!res.ok) throw new Error(r.error || r.text || res.status);
-    out.innerHTML = `✅ Übertragen: ${esc(d.page.title || d.page.url)}<br>${num(r.text)} Zeichen Text · ${r.links} Links · ${r.images} Bilder.<br><br>
-      Du kannst zurück zu GTCHA. Die Daten liegen nur auf deinem VPS.`;
-    history.replaceState(null, "", "#/settings");
-  } catch (e) {
-    out.textContent = "Übertragen fehlgeschlagen: " + e.message;
-  }
-}
-
 function post(body) {
   return { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
 }
@@ -1233,8 +1194,6 @@ async function route() {
   }
   const done = hash.match(/^#\/import-done\?(.*)$/);
   if (done) { showImportDone(done[1]); return; }
-  const imp = hash.match(/^#\/import\?d=(.*)$/s);
-  if (imp) { await showImport(imp[1]); return; }
   const banner = hash.match(/^#\/banner\/(\d+)/);
   document.querySelectorAll(".tabbar a").forEach((a) => a.classList.toggle("active", a.dataset.tab === tab && !banner));
   const render = banner ? () => showBanner(banner[1]) : tab === "hot" ? showHot : tab === "settings" ? showSettings : showList;

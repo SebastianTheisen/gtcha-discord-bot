@@ -134,3 +134,74 @@ def test_medal_migration_keeps_medals_on_the_same_card(tmp_path, monkeypatch):
         assert await db.get_medals(500) == {"T2": 11, "T1": 22, "T3": 33}
 
     asyncio.run(run())
+
+
+def test_init_prunes_old_imports(tmp_path):
+    from utils import app_bridge
+
+    async def run():
+        bridge = AppBridge(str(tmp_path / "w.db"))
+        await bridge.init()
+        for i in range(app_bridge.KEEP_IMPORTS + 5):
+            await bridge.add_import({"user_id": "1"}, "sync", f"https://gtchaxonline.com/p{i}", "{}")
+        async with aiosqlite.connect(bridge.db_path) as db:   # wie aus der Zeit mit 100 je Person
+            for i in range(10):
+                await db.execute("INSERT INTO user_imports (discord_user_id, kind, url, data) VALUES ('1', 'sync', 'x', '{}')")
+            await db.commit()
+        await bridge.init()
+        async with aiosqlite.connect(bridge.db_path) as db:
+            cur = await db.execute("SELECT count(*), max(url) FROM user_imports")
+            count, _ = await cur.fetchone()
+        assert count == app_bridge.KEEP_IMPORTS
+
+    asyncio.run(run())
+
+
+def test_bot_reports_webapp_outage(monkeypatch):
+    """Meldung erst nach 3 Fehlschlägen und nur, wenn die App vorher erreichbar war; danach Entwarnung."""
+    monkeypatch.setenv("DISCORD_TOKEN", "x")
+    monkeypatch.setenv("GUILD_ID", "1")
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+
+    import bot.monitoring as monitoring
+
+    alerts = []
+
+    async def fake_notify(text):
+        alerts.append(text)
+
+    monkeypatch.setattr(monitoring, "notify_critical_error", fake_notify)
+
+    class Bot(monitoring.MonitoringMixin):
+        _webapp_seen, _webapp_fails = False, 0
+
+    async def run():
+        state = {"up": True}
+
+        async def health(request):
+            if not state["up"]:
+                raise web.HTTPServiceUnavailable()
+            return web.json_response({"ok": True})
+
+        app = web.Application()
+        app.router.add_get("/api/health", health)
+        server = TestServer(app)
+        await server.start_server()
+        monkeypatch.setattr(monitoring, "WEBAPP_HEALTH_URL", str(server.make_url("/api/health")))
+        bot = Bot()
+        state["up"] = False
+        await bot._check_webapp()                 # noch nie erreichbar -> keine Meldung
+        assert alerts == [] and bot._webapp_fails == 0
+        state["up"] = True
+        await bot._check_webapp()
+        state["up"] = False
+        for _ in range(4):
+            await bot._check_webapp()
+        assert len(alerts) == 1 and "antwortet seit 15 Minuten nicht" in alerts[0]
+        state["up"] = True
+        await bot._check_webapp()
+        assert len(alerts) == 2 and "wieder erreichbar" in alerts[1]
+        await server.close()
+
+    asyncio.run(run())

@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS auto_claims (
     PRIMARY KEY (discord_user_id, card_key));
 """
 MAX_IMPORT_BYTES = 8_000_000
-KEEP_IMPORTS = 100   # je Person
+KEEP_IMPORTS = 24    # je Person (~3 Läufe; der Verlauf liegt zusammengeführt in user_history)
 
 
 def _hash(token: str) -> str:
@@ -54,7 +54,14 @@ class AppBridge:
     async def init(self):
         async with aiosqlite.connect(self.db_path) as db:
             await db.executescript(SCHEMA)
+            # alte Rohdaten der Lesezeichen aufräumen (früher 100 je Person) und Platz freigeben
+            cur = await db.execute(
+                "DELETE FROM user_imports WHERE id NOT IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER "
+                "(PARTITION BY discord_user_id ORDER BY id DESC) AS n FROM user_imports) WHERE n <= ?)", (KEEP_IMPORTS,))
+            removed = cur.rowcount
             await db.commit()
+            if removed > 0:
+                await db.execute("VACUUM")
 
     # --- Verknüpfung (Bot legt Code an, App löst ihn ein) ---
     async def create_code(self, user_id: int, name: str) -> str:
