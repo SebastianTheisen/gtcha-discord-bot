@@ -23,6 +23,7 @@ PAGES = [
     ("#/search", "Suche"),
     ("#/settings", "Ich"),
     ("#/inbox", "Glocke"),
+    ("#/users", "Nutzer (Admin)"),
 ]
 
 

@@ -170,6 +170,34 @@ class AppBridge:
                              (str(user_id), _now()))
             await db.commit()
 
+    async def set_admins(self, user_ids) -> None:
+        """Admin-Liste ersetzen (nicht ergänzen)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("DELETE FROM app_admins")
+            await db.executemany("INSERT INTO app_admins (discord_user_id, added_at) VALUES (?, ?)",
+                                 [(str(u), _now()) for u in dict.fromkeys(user_ids)])
+            await db.commit()
+
+    async def admins(self) -> List[Dict]:
+        """Admins mit dem Namen aus der Discord-Verknüpfung (falls verknüpft)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute(
+                "SELECT a.discord_user_id, (SELECT discord_name FROM devices d WHERE d.discord_user_id = a.discord_user_id "
+                "ORDER BY created_at DESC LIMIT 1) FROM app_admins a")
+            return [{"user_id": u, "name": n} for u, n in await cur.fetchall()]
+
+    async def known_users(self) -> List[Dict]:
+        """Alle Personen mit verknüpftem Gerät oder übertragenen Daten: ID, Name, Geräte, zuletzt aktiv."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute(
+                "SELECT discord_user_id, max(discord_name), count(*), max(COALESCE(last_seen, created_at)) "
+                "FROM devices GROUP BY discord_user_id")
+            users = {u: {"user_id": u, "name": n, "devices": c, "last_seen": s} for u, n, c, s in await cur.fetchall()}
+            cur = await db.execute("SELECT DISTINCT discord_user_id FROM user_history")
+            for (u,) in await cur.fetchall():
+                users.setdefault(u, {"user_id": u, "name": None, "devices": 0, "last_seen": None})
+        return list(users.values())
+
     async def is_admin(self, user_id) -> bool:
         async with aiosqlite.connect(self.db_path) as db:
             cur = await db.execute("SELECT 1 FROM app_admins WHERE discord_user_id = ?", (str(user_id),))

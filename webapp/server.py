@@ -24,7 +24,8 @@ from database.db import Database
 from utils.app_bridge import MAX_DELAY_MINUTES, MAX_IMPORT_BYTES, AppBridge
 from utils.banner_info import berlin_time
 from webapp.accuracy import AccuracyStore
-from webapp.history import JST_OFFSET, build_from_stored, ingest, local_time, plan_claims, profile, stored_events
+from webapp.history import (JST_OFFSET, build_from_stored, ingest, local_time, plan_claims, profile, stored_events,
+                            summarize)
 from webapp.images import ImageCache, content_type
 from webapp.push import DEFAULTS, EVENTS, WATCH_EVENTS, PushService, build_events
 from webapp.view import BannerView, banner_label
@@ -256,7 +257,8 @@ class App:
             await self.bridge.set_setting("discord_delay", str(delay))
             logger.info(f"Discord-Ansicht von {user['name']} geändert: {mode}, {delay} Min")
         view = await self.bridge.discord_view()
-        return web.json_response({"mode": "slim" if view["slim"] else "full", "delay_minutes": view["delay_minutes"]})
+        return web.json_response({"mode": "slim" if view["slim"] else "full", "delay_minutes": view["delay_minutes"],
+                                  "admins": await self.bridge.admins(), "you": user["user_id"]})
 
     async def api_my_medals(self, request):
         user = await self._user(request)
@@ -380,9 +382,13 @@ class App:
         user = await self._user(request)
         if not user:
             raise web.HTTPUnauthorized(text="Gerät nicht mit Discord verknüpft")
+        return web.json_response(await self.history_payload(user))
+
+    async def history_payload(self, user: Dict) -> Dict:
+        """Kompletter Verlauf einer Person (eigener Verlauf bzw. Admin-Ansicht)."""
         stored = await self.history(user)
         if not stored:
-            return web.json_response({"empty": True})
+            return {"empty": True}
         since = min((e["t"] for e in stored_events(stored)), default=None)
         banners, moves = await self.view.history_context(since - JST_OFFSET if since else None)
         # Rechnen außerhalb der Ereignisschleife - die App bleibt währenddessen bedienbar
@@ -392,6 +398,37 @@ class App:
         data["auto_claims"] = await self.bridge.auto_claims(user["user_id"])
         for c in data["auto_claims"]:
             c["title"] = (banners.get(c["pack_id"]) or {}).get("title")
+        return data
+
+    # --- Admin: Statistiken aller Nutzer (nur was sie selbst per Lesezeichen übertragen bzw. gemeldet haben) ---
+    async def api_admin_users(self, request):
+        await self._admin(request)
+        users = []
+        for u in await self.bridge.known_users():
+            stored = await self.bridge.get_history(u["user_id"])
+            events = stored_events(stored) if stored else []
+            total = summarize(events)["total"] if events else None
+            medals = await self.view.my_medals(u["user_id"])
+            users.append({**u, "profile": profile(stored) if stored else None, "total": total,
+                          "saved_at": local_time(max((a.get("updated_at") or "" for a in stored.values()), default="")
+                                                 if stored else None),
+                          "last_seen": local_time(u.get("last_seen")), "medals": len(medals),
+                          "pending": len(((stored or {}).get("pending") or {}).get("items") or []),
+                          "shipped": len(((stored or {}).get("shipped") or {}).get("items") or [])})
+        users.sort(key=lambda x: (x["saved_at"] or "", x["last_seen"] or ""), reverse=True)
+        return web.json_response({"users": users})
+
+    async def api_admin_user(self, request):
+        await self._admin(request)
+        user_id = request.match_info["id"]
+        known = {u["user_id"]: u for u in await self.bridge.known_users()}
+        if user_id not in known:
+            raise web.HTTPNotFound()
+        user = {"user_id": user_id, "name": known[user_id]["name"]}
+        data = await self.history_payload(user)
+        data["medals"] = await self.view.my_medals(user_id)
+        data["devices"] = [{**d, "created_at": local_time(d["created_at"]), "last_seen": local_time(d["last_seen"])}
+                           for d in await self.bridge.devices(user_id)]
         return web.json_response(data)
 
     async def api_my_devices(self, request):
@@ -585,6 +622,8 @@ def make_app(app: App) -> web.Application:
         web.get("/api/me/devices", app.api_my_devices),
         web.get("/api/admin/settings", app.api_admin_settings),
         web.post("/api/admin/settings", app.api_admin_settings),
+        web.get("/api/admin/users", app.api_admin_users),
+        web.get(r"/api/admin/user/{id:\d+}", app.api_admin_user),
         web.post("/api/me/devices/remove", app.api_remove_device),
         web.get("/api/health", app.api_health),
         web.get("/api/accuracy", app.api_accuracy),
