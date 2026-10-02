@@ -178,7 +178,7 @@ class App:
         saved = pages = 0
         for entry in data.get("pages") or []:
             path = str(entry.get("path", ""))
-            if not re.fullmatch(r"[a-z0-9-]{1,40}", path) or path == "change-member":
+            if not re.fullmatch(r"[a-z0-9-]{1,40}", path):
                 continue
             await self.bridge.add_import(user, "sync", f"https://gtchaxonline.com/{path}",
                                          json.dumps(entry, ensure_ascii=False))
