@@ -75,6 +75,15 @@ def import_result_page(lines: list, ok: bool = True, report: list = None) -> web
                         content_type="text/html", headers={"Cache-Control": "no-store"})
 
 
+def admin_ids() -> list:
+    """Admins = genau die Discord-IDs in APP_ADMIN_IDS (.env, bei jeder Anfrage gelesen). Leer = niemand."""
+    return [i.strip() for i in os.getenv("APP_ADMIN_IDS", "").split(",") if i.strip().isdigit()]
+
+
+def is_admin(user_id) -> bool:
+    return str(user_id) in admin_ids()
+
+
 def device_kind(agent: str) -> str:
     """Grober Gerätetyp aus dem User-Agent (nur zur Anzeige in „Geräte verwalten“)."""
     for key, name in (("iPhone", "iPhone"), ("iPad", "iPad"), ("Android", "Android"), ("Macintosh", "Mac"),
@@ -231,13 +240,13 @@ class App:
     async def api_me(self, request):
         user = await self._user(request)
         if user:
-            user = {**user, "admin": await self.bridge.is_admin(user["user_id"])}
+            user = {**user, "admin": is_admin(user["user_id"])}
         return web.json_response(user or {}, status=200 if user else 401)
 
     async def _admin(self, request):
-        """Nur verknüpfte Geräte von Discord-Admins (Server-Inhaber oder Administrator bei /app-verknüpfen)."""
+        """Nur verknüpfte Geräte der Discord-IDs aus APP_ADMIN_IDS (.env) - bei jeder Anfrage geprüft."""
         user = await self._user(request)
-        if not user or not await self.bridge.is_admin(user["user_id"]):
+        if not user or not is_admin(user["user_id"]):
             raise web.HTTPForbidden(text="Nur für Admins")
         return user
 
@@ -258,7 +267,7 @@ class App:
             logger.info(f"Discord-Ansicht von {user['name']} geändert: {mode}, {delay} Min")
         view = await self.bridge.discord_view()
         return web.json_response({"mode": "slim" if view["slim"] else "full", "delay_minutes": view["delay_minutes"],
-                                  "admins": await self.bridge.admins(), "you": user["user_id"]})
+                                  "admins": await self.bridge.names(admin_ids()), "you": user["user_id"]})
 
     async def api_my_medals(self, request):
         user = await self._user(request)

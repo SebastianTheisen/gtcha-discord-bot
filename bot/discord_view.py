@@ -176,16 +176,15 @@ class DiscordViewMixin:
             logger.warning(f"[DISCORD] Ansicht nicht übernommen: {e}")
 
     async def _remember_owner_as_admin(self):
-        """App-Admins komplett neu setzen: APP_ADMIN_IDS aus der .env, sonst nur der Server-Inhaber.
-        Alle anderen Einträge fliegen raus - Admin sieht die Daten aller Nutzer."""
+        """Admin-Tabelle = genau APP_ADMIN_IDS aus der .env (nur Anzeige/Protokoll; die App prüft die .env selbst).
+        Leer = niemand ist Admin. Alle anderen Einträge fliegen raus."""
         from config import APP_ADMIN_IDS
         try:
             await self.app_bridge.init()
-            ids = list(APP_ADMIN_IDS) or [str(g.owner_id) for g in self.guilds if g.owner_id]
-            if not ids:
-                logger.warning("[APP] Kein App-Admin gesetzt (APP_ADMIN_IDS leer, Server-Inhaber unbekannt)")
-                return
-            await self.app_bridge.set_admins(ids)
-            logger.info(f"[APP] App-Admins: {', '.join(ids)}" + ("" if APP_ADMIN_IDS else " (Server-Inhaber)"))
+            await self.app_bridge.set_admins(list(APP_ADMIN_IDS))
+            if APP_ADMIN_IDS:
+                logger.info(f"[APP] App-Admins: {', '.join(APP_ADMIN_IDS)}")
+            else:
+                logger.warning("[APP] Kein App-Admin: APP_ADMIN_IDS in der .env ist leer")
         except Exception as e:
             logger.warning(f"[APP] Admins nicht gesetzt: {e}")
