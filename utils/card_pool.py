@@ -99,11 +99,17 @@ def _units(pool: Dict) -> List[Dict]:
         normal = [c for c in pool.get("cards") or [] if not c.get("hit")]
     else:
         normal = pool.get("cards") or pool.get("top", [])
+    # Normale Karten sind nach Wert sortiert; für T1-T50 reichen die 50 teuersten Exemplare
+    # (große Pools haben über 100.000 Exemplare - alle zu erzeugen machte den Server langsam)
+    normal_units = 0
     for c in normal:
         key = str(c.get("id") or c["name"])
+        card = {k: v for k, v in c.items() if k != "copies"}
         for n in range(int(c.get("copies") or 1)):
-            card = {k: v for k, v in c.items() if k != "copies"}
+            if normal_units >= MAX_MEDALS:
+                return units
             units.append({**card, "key": key if n == 0 else f"{key}#{n + 1}", "shipping_only": False})
+            normal_units += 1
     return units
 
 
