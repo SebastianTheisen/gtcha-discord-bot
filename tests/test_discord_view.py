@@ -333,3 +333,13 @@ def test_old_posts_deleted_in_bulk(env):
     deleted = asyncio.run(DiscordViewMixin()._delete_messages(Thread(), msgs))
     assert deleted == 153
     assert calls == [("bulk", 100), ("bulk", 50), "single", "single", "single"]
+
+
+def test_pack_updates_stay_in_slim_mode(env):
+    """Pack-Updates werden im schlanken Modus weiter gepostet und beim Aufräumen nie gelöscht."""
+    import inspect
+
+    from bot.discord_view import OLD_POST_PREFIXES
+    from bot.scraping import ScrapingMixin
+    assert not any("Pack-Update" in p for p in OLD_POST_PREFIXES)
+    assert "_slim" not in inspect.getsource(ScrapingMixin._post_pack_update_to_thread)

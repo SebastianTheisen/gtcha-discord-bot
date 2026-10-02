@@ -4,7 +4,7 @@ Einstellung (in der App, nur für Admins): Modus "slim"/"full" und Verzögerung 
 
 Schlank:
   - Startbeitrag ohne Auswertungen, nur Ampel 🟢/🟡/🔴 und "Hits noch drin"; neutraler Thread-Titel
-  - keine Pack-Updates, kein "Lohnt sich", kein Endspurt, keine Hit-Chance, kein Top-10-Kanal
+  - Pack-Updates kommen weiter; kein "Lohnt sich", kein Endspurt, keine Hit-Chance, kein Top-10-Kanal
   - automatisch erkannte Hits und in der App gemeldete Medaillen erscheinen erst nach der Verzögerung -
     auch in Hit-Liste und "Hits noch drin" (öffentlicher Stand in discord_public, Posts in discord_outbox)
   - im Thread geschriebene Medaillen ("T2") zählen sofort
@@ -18,8 +18,8 @@ from bot.common import *  # noqa: F401,F403
 
 SETTINGS_CACHE_SECONDS = 20
 # Posts, die es im schlanken Modus nicht mehr gibt - beim Umstellen löscht der Bot seine alten
-OLD_POST_PREFIXES = ("📉 **Pack-Update", "📈 **Pack-Update", "@everyone\n📉 **Pack-Update", "@everyone\n📈 **Pack-Update",
-                     "💰 **Lohnt sich", "@everyone 💰 **Lohnt sich", "⚡ **Endspurt", "@everyone ⚡ **Endspurt",
+# (Pack-Updates bleiben in Discord - die werden nie gelöscht)
+OLD_POST_PREFIXES = ("💰 **Lohnt sich", "@everyone 💰 **Lohnt sich", "⚡ **Endspurt", "@everyone ⚡ **Endspurt",
                      "🎯 **Hit-Chance")
 CLEANUP_VERSION = "1"
 
@@ -112,7 +112,7 @@ class DiscordViewMixin:
 
     # --- Umstellen: alte Posts der wegfallenden Arten löschen ---
     async def _cleanup_old_posts(self):
-        """Einmalig nach dem Umstellen auf schlank: eigene Pack-Updates, "Lohnt sich", Endspurt und
+        """Einmalig nach dem Umstellen auf schlank: eigene "Lohnt sich"-, Endspurt- und
         Hit-Chance-Nachrichten in allen aktiven Threads löschen; Top-10-Thread entfernen."""
         try:
             if not await self._slim() or await self.db.get_meta("slim_cleanup") == CLEANUP_VERSION:
