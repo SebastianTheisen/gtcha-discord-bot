@@ -42,7 +42,8 @@ table{{width:100%;border-collapse:collapse;font-size:14px;margin-top:12px}}td,th
 border-top:1px solid #dfe3ea}}th{{color:#6b7385;font-weight:600;border-top:0}}
 a{{display:block;margin-top:16px;padding:12px;border-radius:10px;text-align:center;text-decoration:none;font-weight:700;
 background:#2563c4;color:#fff}}a.alt{{background:#e6e8ee;color:#1d2433}}
-@media (prefers-color-scheme:dark){{body{{background:#0f1320;color:#e8ebf5}}.box{{background:#1a2033}}a.alt{{background:#232a40;color:#e8ebf5}}}}
+@media (prefers-color-scheme:dark){{body{{background:#0f1320;color:#e8ebf5}}.box{{background:#1a2033}}
+a.alt{{background:#232a40;color:#e8ebf5}}h1{{color:{dark_color}}}td,th{{border-top-color:#2e3753}}th{{color:#98a1bd}}}}
 </style></head><body><div class="box"><h1>{title}</h1>{lines}
 <a href="https://gtchaxonline.com/">Zurück zu GTCHA</a><a class="alt" href="/#/settings">GTCHA Tracker öffnen</a>
 <p style="font-size:13px;color:#6b7385">Die Daten liegen nur auf deinem VPS. In der installierten App unter „Ich“ →
@@ -65,7 +66,8 @@ def import_result_page(lines: list, ok: bool = True, report: list = None) -> web
             f"<td>{'⚠️ ' + html.escape(how) if n is None else html.escape(how)}</td></tr>" for p, n, how in report)
         body += (f"<table><tr><th>Bereich</th><th>Seiten</th><th></th></tr>{rows}</table>")
     return web.Response(text=RESULT_PAGE.format(title="Übertragen" if ok else "Nicht übertragen", lines=body,
-                                                color="#1f3a6e" if ok else "#e5383b"),
+                                                color="#1f3a6e" if ok else "#e5383b",
+                                                dark_color="#9db8ff" if ok else "#ff6b6e"),
                         content_type="text/html", headers={"Cache-Control": "no-store"})
 
 
