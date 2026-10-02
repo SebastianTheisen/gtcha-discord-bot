@@ -308,3 +308,28 @@ def test_admin_tools_status_block_push_medal(tmp_path, monkeypatch):
         await client.close()
 
     asyncio.run(run())
+
+
+def test_old_posts_deleted_in_bulk(env):
+    """Junge Nachrichten gesammelt (max. 100 je Aufruf), ältere als 14 Tage einzeln."""
+    from datetime import timezone
+
+    from bot.discord_view import DiscordViewMixin
+
+    calls = []
+
+    class Msg:
+        def __init__(self, days):
+            self.created_at = datetime.now(timezone.utc) - timedelta(days=days)
+
+        async def delete(self):
+            calls.append("single")
+
+    class Thread:
+        async def delete_messages(self, chunk):
+            calls.append(("bulk", len(chunk)))
+
+    msgs = [Msg(1) for _ in range(150)] + [Msg(20) for _ in range(3)]
+    deleted = asyncio.run(DiscordViewMixin()._delete_messages(Thread(), msgs))
+    assert deleted == 153
+    assert calls == [("bulk", 100), ("bulk", 50), "single", "single", "single"]
