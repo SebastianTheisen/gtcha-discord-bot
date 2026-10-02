@@ -36,15 +36,31 @@ def buy_url(row: Dict) -> str:
     return row.get('detail_page_url') or f"{BASE_URL}/pack-detail?packId={row['pack_id']}"
 
 
-def _history_banners(rows) -> Dict[int, Dict]:
+def banner_label(title, best_hit, category, price) -> str:
+    """Lesbarer Name, auch wenn der Banner keinen Titel hat (sonst nur "Banner 24114")."""
+    if title:
+        return title
+    if best_hit:
+        return best_hit
+    return " · ".join(x for x in (category, f"{fmt_coins(to_int(price))} Coins" if to_int(price) else None) if x) or ""
+
+
+def _history_banners(rows, archived) -> Dict[int, Dict]:
     banners = {}
-    for pid, title, price, image, active, created, pool_json in rows:
+    for pid, title, category, best_hit, price, image, created, ended, values, ids in archived:
+        try:
+            values, ids = set(json.loads(values or "[]")), set(json.loads(ids or "[]"))
+        except ValueError:
+            values, ids = set(), set()
+        banners[pid] = {"price": to_int(price), "title": banner_label(title, best_hit, category, price), "image": image,
+                        "active": False, "created": (created or "")[:10], "values": values, "card_ids": ids}
+    for pid, title, category, best_hit, price, image, active, created, pool_json in rows:
         try:
             pool = json.loads(pool_json) if pool_json else {}
         except ValueError:
             pool = {}
-        banners[pid] = {"price": to_int(price), "title": title, "image": image, "active": bool(active),
-                        "created": (created or "")[:10],
+        banners[pid] = {"price": to_int(price), "title": banner_label(title, best_hit, category, price), "image": image,
+                        "active": bool(active), "created": (created or "")[:10],
                         "values": {int(c["value"]) for c in pool.get("cards") or [] if c.get("value")},
                         "card_ids": {str(c.get("id")) for c in (pool.get("cards") or []) + (pool.get("hits") or [])}}
     return banners
@@ -98,7 +114,8 @@ class BannerView:
             pool = None
         low = pool_minimum(pool) if pool else None
         data = {
-            "id": pid, "title": row.get('title') or f"Pack {pid}", "category": row.get('category'),
+            "id": pid, "title": banner_label(row.get('title'), row.get('best_hit'), row.get('category'),
+                                                     row.get('price_coins')) or f"Pack {pid}", "category": row.get('category'),
             "price": price, "remaining": remaining, "total": total,
             "per_day": row.get('entries_per_day'), "image": row.get('image_url'), "buy_url": buy_url(row),
             "end": row.get('sale_end_date'), "end_ts": sale_end_timestamp(row.get('sale_end_date')),
@@ -255,7 +272,9 @@ class BannerView:
             unit = next((u for u in medal_units(pool) if u["tier"] == tier), {}) if pool else {}
             result.append({"banner_id": banner_id, "tier": tier, "name": unit.get("name") or tier,
                            "value": unit.get("value"), "image": unit.get("image"),
-                           "price": to_int(row.get("price_coins")), "t": epoch(created)})
+                           "price": to_int(row.get("price_coins")), "t": epoch(created),
+                           "title": banner_label(row.get('title'), row.get('best_hit'), row.get('category'),
+                                                 row.get('price_coins'))})
         return result
 
     async def history_context(self, since_utc: Optional[datetime]) -> tuple:
@@ -263,11 +282,17 @@ class BannerView:
         Pack-Bewegungen (naive UTC-Zeiten) seit since_utc."""
         banners, moves = {}, {}
         async with aiosqlite.connect(self.db.db_path) as conn:
-            cur = await conn.execute("SELECT pack_id, title, price_coins, image_url, is_active, created_at, card_pool "
-                                     "FROM banners")
+            cur = await conn.execute("SELECT pack_id, title, category, best_hit, price_coins, image_url, is_active, "
+                                     "created_at, card_pool FROM banners")
             rows = await cur.fetchall()
+            try:
+                cur = await conn.execute("SELECT pack_id, title, category, best_hit, price_coins, image_url, created_at, "
+                                         "ended_at, card_values, card_ids FROM banner_archive")
+                archived = await cur.fetchall()
+            except aiosqlite.OperationalError:   # Bot noch nicht aktualisiert
+                archived = []
             # Kartenpools aller Banner einlesen dauert - außerhalb der Ereignisschleife
-            banners = await asyncio.get_running_loop().run_in_executor(None, _history_banners, rows)
+            banners = await asyncio.get_running_loop().run_in_executor(None, _history_banners, rows, archived)
             if since_utc:
                 cur = await conn.execute("SELECT banner_id, changed_at FROM pack_history "
                                          "WHERE new_count < old_count AND changed_at >= ?",

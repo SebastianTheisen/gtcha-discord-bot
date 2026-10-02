@@ -14,6 +14,20 @@ from config import DATABASE_PATH
 from utils.card_pool import card_value, fmt_coins
 
 
+
+PACK_HISTORY_DAYS = 90
+
+
+def archive_pool(pool_json) -> tuple:
+    """(Kartenwerte, Karten-IDs) eines Kartenpools als JSON für banner_archive."""
+    try:
+        pool = json.loads(pool_json) if pool_json else {}
+    except ValueError:
+        pool = {}
+    cards = (pool.get("cards") or []) + (pool.get("hits") or [])
+    values = sorted({int(c["value"]) for c in pool.get("cards") or [] if c.get("value")})
+    return json.dumps(values), json.dumps(sorted({str(c.get("id")) for c in cards if c.get("id") is not None}))
+
 class Database:
     def __init__(self, db_path: str = DATABASE_PATH):
         self.db_path = db_path
@@ -97,6 +111,15 @@ class Database:
                     new_count INTEGER,
                     changed_at TEXT,
                     FOREIGN KEY (banner_id) REFERENCES banners(pack_id)
+                );
+                CREATE INDEX IF NOT EXISTS pack_history_changed ON pack_history (changed_at);
+
+                -- Schlankes Archiv beendeter Banner (für den eigenen Verlauf in der App:
+                -- Preis, Kartenwerte und Karten-IDs, damit ältere Züge noch zugeordnet werden können)
+                CREATE TABLE IF NOT EXISTS banner_archive (
+                    pack_id INTEGER PRIMARY KEY,
+                    title TEXT, category TEXT, best_hit TEXT, price_coins INTEGER, image_url TEXT,
+                    created_at TEXT, ended_at TEXT, card_values TEXT, card_ids TEXT
                 );
             """)
 
@@ -701,6 +724,16 @@ class Database:
 
             placeholders = ','.join('?' * len(old_ids))
 
+            # Vor dem Löschen ins Archiv (nur was der Verlauf braucht)
+            cursor = await db.execute(
+                f"SELECT pack_id, title, category, best_hit, price_coins, image_url, created_at, updated_at, card_pool "
+                f"FROM banners WHERE pack_id IN ({placeholders})", old_ids)
+            for row in await cursor.fetchall():
+                await db.execute(
+                    "INSERT OR REPLACE INTO banner_archive (pack_id, title, category, best_hit, price_coins, image_url, "
+                    "created_at, ended_at, card_values, card_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (*row[:7], datetime.now().isoformat(), *archive_pool(row[8])))
+
             # Medals löschen
             await db.execute(f"""
                 DELETE FROM medals WHERE thread_id IN (
@@ -708,11 +741,7 @@ class Database:
                 )
             """, old_ids)
 
-            # Pack-History und Umwandlungs-Verlauf löschen
-            await db.execute(
-                f"DELETE FROM pack_history WHERE banner_id IN ({placeholders})",
-                old_ids
-            )
+            # Pack-Bewegungen bleiben PACK_HISTORY_DAYS Tage (Zuordnung im eigenen Verlauf), siehe unten
             await db.execute(f"DELETE FROM convert_history WHERE banner_id IN ({placeholders})", old_ids)
             await db.execute(f"DELETE FROM card_value_history WHERE banner_id IN ({placeholders})", old_ids)
 
@@ -730,6 +759,16 @@ class Database:
 
             await db.commit()
             return len(old_ids)
+
+    async def purge_old_history(self) -> int:
+        """Pack-Bewegungen und Archiv älter als PACK_HISTORY_DAYS Tage löschen."""
+        cutoff = (datetime.now() - timedelta(days=PACK_HISTORY_DAYS)).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("DELETE FROM pack_history WHERE changed_at < ?", (cutoff,))
+            removed = cur.rowcount
+            await db.execute("DELETE FROM banner_archive WHERE ended_at < ?", (cutoff,))
+            await db.commit()
+            return removed
 
     async def mark_banner_inactive(self, pack_id: int) -> None:
         """Markiert einen Banner als inaktiv (statt löschen)."""

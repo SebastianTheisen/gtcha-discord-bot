@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 52;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 53;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -121,7 +121,7 @@ function canBuy(b) {
 function whyNot(b) {
   if (b.password) return "nur mit Passwort";
   if (b.ranks?.length && !b.ranks.includes(myRank())) return "nicht für deinen Mitgliedsrang";
-  if (b.min_charge && myCharge() < b.min_charge) return `erst ab ${num(b.min_charge)} Aufladung im Monat`;
+  if (b.min_charge && myCharge() < b.min_charge) return `erst ab ${num(b.min_charge)} Coins Aufladung im Monat`;
   return "";
 }
 const notMineNote = (b) => (canBuy(b) === false ? `<div class="notice warn">🚫 Für dich nicht kaufbar: ${whyNot(b)}</div>` : "");
@@ -619,7 +619,7 @@ async function showSettings() {
           <span class="claim-thumb">${img(m.image, m.name, false, 320)}</span>
           <span class="claim-text"><b>${m.tier}</b> ${esc(m.name)}<br>
             <span class="claim-value">${m.value != null ? num(m.value) + " Coins" : ""}</span>
-            <span class="muted"> · Banner ${m.banner_id}${m.t ? " · " + time(m.t) : ""}</span></span>
+            <span class="muted"> · ${esc(m.title || "Banner " + m.banner_id)}${m.t ? " · " + time(m.t) : ""}</span></span>
           <span class="muted">›</span></a>`).join("")
         : `<div class="line muted">Noch nichts gemeldet – auf einer Banner-Seite unter „Karten“ eine Karte antippen.</div>`}</div>` : ""}
     ${user ? historySection(hist) : ""}
@@ -630,7 +630,7 @@ async function showSettings() {
           ${RANKS.map(([k, l]) => `<option value="${k}" ${k === myRank() ? "selected" : ""}>${l}</option>`).join("")}</select>
         <input id="my-charge" class="code-input plain" inputmode="numeric" placeholder="Aufladung" value="${myCharge() || ""}">
       </div>
-      <div class="hint">Rang und diesen Monat aufgeladen (¥, „Ausgaben in diesem Monat“ auf deiner Kontoseite). Damit graut
+      <div class="hint">Rang und diesen Monat gekaufte Coins (laut deinem Münzverlauf). Damit graut
         die App Banner aus, die du nicht kaufen kannst, und der Filter „✅ Für mich“ funktioniert.</div>
       <div class="hint">${prof && prof.updated_at && (prof.rank || prof.charge != null)
         ? `🔄 Wird beim „Alles übertragen“ automatisch ausgefüllt (zuletzt ${esc(prof.updated_at.slice(8, 10) + "." + prof.updated_at.slice(5, 7) + ". " + prof.updated_at.slice(11, 16))}).

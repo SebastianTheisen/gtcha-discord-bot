@@ -57,7 +57,7 @@ def test_attribution_unique_only():
         3: {"price": 500, "values": {660}, "title": "C"},        # Preis teilt 1.000, aber keine Bewegung
     }
     utc = lambda h, m: datetime(2026, 10, 1, h - 9, m, 30)
-    moves = {1: [utc(21, 9)], 2: [utc(21, 9), utc(21, 6)]}
+    moves = {1: [utc(21, 9), utc(21, 6)], 2: [utc(21, 9), utc(21, 6)]}
     data = build_history({"buy-point-history": {"pages": [{"text": COINS}]}}, banners, moves)
     ev = data["events"]
     assert ev[1]["banner"] == 1 and ev[1]["pulls"] == 1    # 1 Zug, Umwandlung 660 nur in Banner 1
@@ -146,10 +146,58 @@ def test_profile_rank_and_monthly_charge():
     stored = ingest({}, [{"path": "pending-detail", "pages": [rank_page]},
                          {"path": "change-member", "pages": [member]}], now=oct_)
     assert stored["member"]["info"]["rank"] == "white"
-    assert profile(stored, now=oct_)["charge"] == 8000 and profile(stored, now=oct_)["rank"] == "white"
+    assert profile(stored, now=oct_)["charge_yen"] == 8000 and profile(stored, now=oct_)["rank"] == "white"
+    assert profile(stored, now=oct_)["charge"] is None          # ohne Münzverlauf keine Coins-Angabe
+    # Aufladung in Coins = diesen Monat gekaufte Coins (COINS: 10.000 am 01.10. für ¥8.000)
+    stored.update(ingest(stored, [{"path": "buy-point-history", "pages": [{"text": COINS}]}], now=oct_))
+    assert profile(stored, now=oct_)["charge"] == 10000
     # neuer Monat (JST): Aufladung zählt nicht mehr
-    assert profile(stored, now=datetime(2026, 10, 31, 15, 30))["charge"] == 0
+    nov = datetime(2026, 10, 31, 15, 30)
+    assert profile(stored, now=nov)["charge"] == 0 and profile(stored, now=nov)["charge_yen"] == 0
     # Rang bleibt erhalten, wenn ein späterer Lauf keinen liefert
     later = ingest(stored, [{"path": "change-member", "pages": [{"text": "1.000\nCoin"}]}], now=oct_)
     assert later["member"]["info"]["rank"] == "white" and later["member"]["info"]["coins"] == 1000
     assert profile({})["rank"] is None and profile({})["charge"] is None
+
+
+def test_attribution_prefers_near_window():
+    """Pack-Zahlen kommen alle 15 s: eine Bewegung 1 Min danach schlägt eine 5 Min danach."""
+    from webapp.history import attribute_opens
+    banners = {1: {"price": 1000, "values": set()}, 2: {"price": 1000, "values": set()}}
+    t = datetime(2026, 10, 1, 21, 7)
+    utc = t - __import__("datetime").timedelta(hours=9)
+    moves = {1: [utc.replace(minute=8)], 2: [utc.replace(minute=12)]}
+    ev = [{"t": t, "amount": -1000, "kind": "open", "note": ""}]
+    attribute_opens(ev, banners, moves)
+    assert ev[0]["banner"] == 1
+    # nur der 5-Minuten-Scrape: weites Fenster als Rückfall
+    ev = [{"t": t, "amount": -1000, "kind": "open", "note": ""}]
+    attribute_opens(ev, banners, {2: [utc.replace(minute=12)]})
+    assert ev[0]["banner"] == 2
+
+
+def test_archive_keeps_ended_banners_for_history(tmp_path):
+    import json as _json
+
+    from database.db import Database
+
+    async def run():
+        db = Database(str(tmp_path / "b.db"))
+        await db.init()
+        import aiosqlite
+        pool = {"cards": [{"id": 7, "name": "A", "value": 660, "copies": 3}], "hits": [{"id": 9, "name": "H", "value": 9000}]}
+        async with aiosqlite.connect(db.db_path) as conn:
+            await conn.execute("INSERT INTO banners (pack_id, title, best_hit, price_coins, is_active, created_at, updated_at, "
+                               "card_pool) VALUES (5, NULL, 'Glurak', 1000, 0, '2026-09-01', '2000-01-01', ?)",
+                               (_json.dumps(pool),))
+            await conn.execute("INSERT INTO pack_history (banner_id, old_count, new_count, changed_at) "
+                               "VALUES (5, 10, 9, ?), (5, 9, 8, '2000-01-01')", (datetime.now().isoformat(),))
+            await conn.commit()
+        assert await db.purge_archived_data(max_age_hours=1) == 1
+        assert await db.purge_old_history() == 1            # nur die uralte Bewegung
+        from webapp.view import BannerView
+        banners, moves = await BannerView(db).history_context(datetime(2026, 1, 1))
+        assert banners[5]["title"] == "Glurak" and banners[5]["values"] == {660} and banners[5]["card_ids"] == {"7", "9"}
+        assert not banners[5]["active"] and len(moves[5]) == 1
+
+    asyncio.run(run())

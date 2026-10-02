@@ -20,6 +20,7 @@ DATE = re.compile(r"(\d{2,4})/(\d{2})/(\d{2})")
 NUMBER = re.compile(r"^-?[\d.]+$")
 JST_OFFSET = timedelta(hours=9)
 MOVE_WINDOW = timedelta(minutes=7)   # Scrape alle 5 Minuten + Laufzeit
+NEAR_WINDOW = timedelta(seconds=150)  # schneller Abfrager alle 15 s; Seite zeigt nur die Minute
 OPEN_NOTES = ("öffnen", "open")
 CONVERT_NOTES = ("umwandeln", "convert")
 BUY_NOTES = ("erhalten", "kauf", "purchase", "charge")
@@ -159,6 +160,25 @@ def parse_member(pages: List[Dict]) -> Dict:
     return info
 
 
+def _candidates(banners: Dict[int, Dict], sorted_moves: Dict[int, List[datetime]], cost: int, value,
+                lo: datetime, hi: datetime) -> List[int]:
+    found = []
+    for pid, b in banners.items():
+        price = b.get("price") or 0
+        if not price or cost % price:
+            continue
+        times = sorted_moves.get(pid)
+        if not times:
+            continue
+        i = bisect_left(times, lo)    # erste Bewegung ab lo - liegt sie vor hi, passt es
+        if i == len(times) or times[i] > hi:
+            continue
+        if value is not None and cost == price and b.get("values") and value not in b["values"]:
+            continue
+        found.append(pid)
+    return found
+
+
 def attribute_opens(events: List[Dict], banners: Dict[int, Dict], moves: Dict[int, List[datetime]],
                     window: timedelta = MOVE_WINDOW) -> None:
     """Ordnet Öffnungen einem Banner zu (setzt e["banner"], e["pulls"]) - nur wenn eindeutig.
@@ -186,20 +206,11 @@ def attribute_opens(events: List[Dict], banners: Dict[int, Dict], moves: Dict[in
                 value = nxt["amount"]
                 break
         candidates = []
-        lo, hi = utc - timedelta(seconds=60), utc + window
-        for pid, b in banners.items():
-            price = b.get("price") or 0
-            if not price or cost % price:
-                continue
-            times = sorted_moves.get(pid)
-            if not times:
-                continue
-            i = bisect_left(times, lo)    # erste Bewegung ab lo - liegt sie vor hi, passt es
-            if i == len(times) or times[i] > hi:
-                continue
-            if value is not None and cost == price and b.get("values") and value not in b["values"]:
-                continue
-            candidates.append(pid)
+        # erst eng (Pack-Zahlen kommen alle 15 s), sonst weit (nur der 5-Minuten-Scrape lief)
+        for lo, hi in ((utc - timedelta(seconds=30), utc + NEAR_WINDOW), (utc - timedelta(seconds=60), utc + window)):
+            candidates = _candidates(banners, sorted_moves, cost, value, lo, hi)
+            if candidates:
+                break
         e["candidates"] = candidates
         if len(candidates) == 1:
             e["banner"] = candidates[0]
@@ -320,11 +331,18 @@ def ingest(stored: Dict[str, Dict], entries: List[Dict], now: Optional[datetime]
 
 
 def profile(stored: Dict[str, Dict], now: Optional[datetime] = None) -> Dict:
-    """Rang und Aufladung (¥ diesen Monat) zum automatischen Ausfüllen in der App.
-    Ausgaben aus einem früheren Monat zählen nicht - im neuen Monat ist die Aufladung 0."""
+    """Rang und Aufladung zum automatischen Ausfüllen in der App.
+
+    Aufladung = diesen Monat (JST) gekaufte Coins laut Münzverlauf ("Münzen erhalten" mit Yen-Betrag;
+    Gratis-Münzen zählen nicht). Ohne Münzverlauf None (dann bleibt die Angabe von Hand).
+    """
     info = (stored.get("member") or {}).get("info") or {}
-    charge = info.get("spent_month_yen") if info.get("month") == jst_month(now) else (0 if info.get("month") else None)
+    coins = (stored.get("coins") or {}).get("items")
+    month = jst_month(now)
+    charge = (sum(e["amount"] for e in coins if e.get("kind") == "buy" and e.get("yen") and e["t"][:7] == month)
+              if coins is not None else None)
     return {"rank": info.get("rank"), "charge": charge,
+            "charge_yen": info.get("spent_month_yen") if info.get("month") == month else (0 if info.get("month") else None),
             "updated_at": ((stored.get("member") or {}).get("updated_at") or "")[:16] or None}
 
 
