@@ -10,6 +10,7 @@ Minute + Wert der umgewandelten Karte im Kartenpool).
 """
 
 import re
+from bisect import bisect_left
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Dict, List
@@ -148,6 +149,7 @@ def attribute_opens(events: List[Dict], banners: Dict[int, Dict], moves: Dict[in
     Umwandlungen direkt nach einer zugeordneten Öffnung zählen zum selben Banner.
     """
     chrono = list(reversed(events))   # Seite: neueste zuerst
+    sorted_moves = {pid: sorted(times) for pid, times in moves.items() if times}
     opens = []
     for pos, e in enumerate(chrono):
         if e["kind"] != "open" or e["amount"] >= 0:
@@ -162,11 +164,16 @@ def attribute_opens(events: List[Dict], banners: Dict[int, Dict], moves: Dict[in
                 value = nxt["amount"]
                 break
         candidates = []
+        lo, hi = utc - timedelta(seconds=60), utc + window
         for pid, b in banners.items():
             price = b.get("price") or 0
             if not price or cost % price:
                 continue
-            if not any(-60 <= (m - utc).total_seconds() <= window.total_seconds() for m in moves.get(pid, [])):
+            times = sorted_moves.get(pid)
+            if not times:
+                continue
+            i = bisect_left(times, lo)    # erste Bewegung ab lo - liegt sie vor hi, passt es
+            if i == len(times) or times[i] > hi:
                 continue
             if value is not None and cost == price and b.get("values") and value not in b["values"]:
                 continue
@@ -227,21 +234,87 @@ def summarize(events: List[Dict]) -> Dict:
                         for b, v in sorted(per_banner.items(), key=lambda x: -x[1]["spent"])]}
 
 
+TIME_FMT = "%Y-%m-%d %H:%M"
+COIN_KEY = ("t", "amount", "note")
+CARD_KEY = ("date", "tracking", "name", "number")
+
+
+def merge_newest_first(old: List[Dict], new: List[Dict], key: tuple) -> tuple:
+    """Neue Einträge vor die gespeicherten setzen (beide neueste zuerst).
+
+    Das Lesezeichen hört auf zu blättern, sobald eine Seite den zuletzt bekannten Eintrag enthält - die
+    neuen Daten enden also mit einem Anfang der alten Liste. Den längsten solchen Überlapp abschneiden.
+    Rückgabe: (zusammengeführt, Überlapp gefunden). Ohne Überlapp fehlt evtl. etwas dazwischen.
+    """
+    if not old:
+        return list(new), True
+    sig = lambda e: tuple(e.get(k) for k in key)
+    new_s, old_s = [sig(e) for e in new], [sig(e) for e in old]
+    for k in range(min(len(new_s), len(old_s)), 0, -1):
+        if new_s[-k:] == old_s[:k]:
+            return list(new[:-k]) + list(old), True
+    return list(new) + list(old), not new
+
+
+def ingest(stored: Dict[str, Dict], entries: List[Dict]) -> Dict[str, Dict]:
+    """Ein "Alles übertragen" in den gespeicherten Verlauf übernehmen.
+
+    entries: [{path, pages, partial}] - partial = nur die neuesten Seiten (Lesezeichen hat am bekannten
+    Eintrag aufgehört), sonst vollständig (ersetzt das Gespeicherte). Rückgabe: geänderte Bereiche
+    {coins|shipped|pending|member: {items/info, gap}}.
+    """
+    changed = {}
+    for entry in entries:
+        path, pages, partial = entry.get("path"), entry.get("pages") or [], bool(entry.get("partial"))
+        if path == "buy-point-history":
+            area, key = "coins", COIN_KEY
+            new = [{**e, "t": e["t"].strftime(TIME_FMT)} for e in parse_coins(pages)]
+        elif path == "shipped-detail":
+            area, key, new = "shipped", CARD_KEY, parse_cards(pages)
+        elif path == "pending-detail":
+            changed["pending"] = {"items": parse_cards(pages), "gap": False}
+            continue
+        elif path == "change-member":
+            info = {k: v for k, v in parse_member(pages).items() if v is not None}
+            changed["member"] = {"info": {**((stored.get("member") or {}).get("info") or {}), **info}}
+            continue
+        else:
+            continue
+        old = (stored.get(area) or {}).get("items") or []
+        if partial:
+            items, ok = merge_newest_first(old, new, key)
+            gap = (stored.get(area) or {}).get("gap", False) or not ok
+        else:
+            items, gap = new, False
+        changed[area] = {"items": items, "gap": gap}
+    return changed
+
+
 def build_history(areas: Dict[str, Dict], banners: Dict[int, Dict], moves: Dict[int, List[datetime]]) -> Dict:
-    """Komplette Auswertung aus den Bereichen eines "Alles übertragen"-Laufs (path -> {pages})."""
-    pages = lambda path: (areas.get(path) or {}).get("pages") or []
-    events = parse_coins(pages("buy-point-history"))
+    """Auswertung eines vollständigen "Alles übertragen"-Laufs (path -> {pages})."""
+    stored = ingest({}, [{"path": p, "pages": a.get("pages") or []} for p, a in areas.items()])
+    return build_from_stored(stored, banners, moves)
+
+
+def stored_events(stored: Dict[str, Dict]) -> List[Dict]:
+    return [{**e, "t": datetime.strptime(e["t"], TIME_FMT)} for e in (stored.get("coins") or {}).get("items") or []]
+
+
+def build_from_stored(stored: Dict[str, Dict], banners: Dict[int, Dict], moves: Dict[int, List[datetime]]) -> Dict:
+    """Auswertung aus dem gespeicherten (zusammengeführten) Verlauf."""
+    events = stored_events(stored)
     attribute_opens(events, banners, moves)
     summary = summarize(events)
     for row in summary["banners"]:
         b = banners.get(row["banner"]) or {}
         row.update(title=b.get("title"), image=b.get("image"), price=b.get("price"))
     return {
-        "member": parse_member(pages("change-member")),
+        "member": (stored.get("member") or {}).get("info") or {"coins": None, "spent_month_yen": None},
         "summary": summary,
-        "pending": parse_cards(pages("pending-detail")),
-        "shipped": parse_cards(pages("shipped-detail")),
-        "events": [{k: v for k, v in {**e, "t": e["t"].strftime("%Y-%m-%d %H:%M")}.items() if k != "candidates"}
+        "pending": (stored.get("pending") or {}).get("items") or [],
+        "shipped": (stored.get("shipped") or {}).get("items") or [],
+        "gap": any((stored.get(a) or {}).get("gap") for a in ("coins", "shipped")),
+        "events": [{k: v for k, v in {**e, "t": e["t"].strftime(TIME_FMT)}.items() if k != "candidates"}
                    for e in events[:300]],
     }
 

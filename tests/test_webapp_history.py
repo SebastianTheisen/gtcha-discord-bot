@@ -2,7 +2,8 @@ import asyncio
 from datetime import datetime
 
 from utils.app_bridge import AppBridge
-from webapp.history import build_history, parse_cards, parse_coins, parse_member, plan_claims
+from webapp.history import (build_history, ingest, merge_newest_first, parse_cards, parse_coins, parse_member,
+                            plan_claims)
 
 HEAD = "949\n1\n×\nMitglieds-ID\nTransaktionen\nGacha\nMünzen\nVerkauf\nTicket\n"
 FOOT = "Xero Place Co., Ltd.\n\n〒330-0854\nTEL : +81 00\nMy Page"
@@ -107,3 +108,31 @@ def test_bridge_latest_sync_and_auto_claims(tmp_path):
         assert [r["action"] for r in await bridge.pending()] == ["claim"]
 
     asyncio.run(run())
+
+
+def test_merge_newest_first_cuts_overlap():
+    key = ("t",)
+    old = [{"t": x} for x in "EDCBA"]
+    merged, ok = merge_newest_first(old, [{"t": x} for x in "GFED"], key)    # Seite mit E, D am Ende
+    assert ok and [e["t"] for e in merged] == list("GFEDCBA")
+    merged, ok = merge_newest_first(old, [{"t": x} for x in "ED"], key)      # nichts Neues
+    assert ok and [e["t"] for e in merged] == list("EDCBA")
+    merged, ok = merge_newest_first(old, [{"t": x} for x in "ZY"], key)      # kein Überlapp -> Lücke
+    assert not ok and [e["t"] for e in merged] == list("ZYEDCBA")
+
+
+def test_ingest_incremental_coins_and_member():
+    page = lambda rows: {"text": HEAD + "Datum\n" + "\n".join(
+        f"2026/10/0{d} 12:00\n-1.000\n¥0\nÖffnen" for d in rows) + "\n" + FOOT}
+    stored = ingest({}, [{"path": "buy-point-history", "pages": [page("54"), page("321")]},
+                         {"path": "change-member", "pages": [{"text": "949\nAusgaben in diesem Monat\n8.000円"}]}])
+    assert len(stored["coins"]["items"]) == 5 and stored["member"]["info"]["spent_month_yen"] == 8000
+    # nur Neues: Seite 1 enthält schon den alten neuesten Eintrag (5)
+    changed = ingest(stored, [{"path": "buy-point-history", "pages": [page("7654")], "partial": True},
+                              {"path": "change-member", "pages": [{"text": "1.200\nCoin"}]}])
+    assert [e["t"][:10] for e in changed["coins"]["items"]] == [
+        "2026-10-07", "2026-10-06", "2026-10-05", "2026-10-04", "2026-10-03", "2026-10-02", "2026-10-01"]
+    assert changed["coins"]["gap"] is False
+    assert changed["member"]["info"] == {"coins": 1200, "spent_month_yen": 8000}   # alter ¥-Wert bleibt
+    # vollständiger Lauf ersetzt
+    assert len(ingest(stored, [{"path": "buy-point-history", "pages": [page("9")]}])["coins"]["items"]) == 1

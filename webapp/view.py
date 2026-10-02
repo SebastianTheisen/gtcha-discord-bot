@@ -3,6 +3,7 @@
 Nur lesend - die App schreibt nie in die Datenbank des Bots.
 """
 
+import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
@@ -33,6 +34,20 @@ def epoch(iso: Optional[str]) -> Optional[int]:
 
 def buy_url(row: Dict) -> str:
     return row.get('detail_page_url') or f"{BASE_URL}/pack-detail?packId={row['pack_id']}"
+
+
+def _history_banners(rows) -> Dict[int, Dict]:
+    banners = {}
+    for pid, title, price, image, active, created, pool_json in rows:
+        try:
+            pool = json.loads(pool_json) if pool_json else {}
+        except ValueError:
+            pool = {}
+        banners[pid] = {"price": to_int(price), "title": title, "image": image, "active": bool(active),
+                        "created": (created or "")[:10],
+                        "values": {int(c["value"]) for c in pool.get("cards") or [] if c.get("value")},
+                        "card_ids": {str(c.get("id")) for c in (pool.get("cards") or []) + (pool.get("hits") or [])}}
+    return banners
 
 
 class BannerView:
@@ -250,15 +265,9 @@ class BannerView:
         async with aiosqlite.connect(self.db.db_path) as conn:
             cur = await conn.execute("SELECT pack_id, title, price_coins, image_url, is_active, created_at, card_pool "
                                      "FROM banners")
-            for pid, title, price, image, active, created, pool_json in await cur.fetchall():
-                try:
-                    pool = json.loads(pool_json) if pool_json else {}
-                except ValueError:
-                    pool = {}
-                banners[pid] = {"price": to_int(price), "title": title, "image": image, "active": bool(active),
-                                "created": (created or "")[:10],
-                                "values": {int(c["value"]) for c in pool.get("cards") or [] if c.get("value")},
-                                "card_ids": {str(c.get("id")) for c in (pool.get("cards") or []) + (pool.get("hits") or [])}}
+            rows = await cur.fetchall()
+            # Kartenpools aller Banner einlesen dauert - außerhalb der Ereignisschleife
+            banners = await asyncio.get_running_loop().run_in_executor(None, _history_banners, rows)
             if since_utc:
                 cur = await conn.execute("SELECT banner_id, changed_at FROM pack_history "
                                          "WHERE new_count < old_count AND changed_at >= ?",
