@@ -222,6 +222,10 @@ class PushService:
                     banner_id INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP, read INTEGER DEFAULT 0);
                 CREATE INDEX IF NOT EXISTS push_log_endpoint ON push_log (endpoint, id);
             """)
+            try:   # Gerät gehört zu einer Discord-Verknüpfung (für eigene Pushes: Medaillen, Erinnerung)
+                await db.execute("ALTER TABLE subscriptions ADD COLUMN user_id TEXT")
+            except aiosqlite.OperationalError:
+                pass
             await db.commit()
 
     def public_key(self) -> str:
@@ -231,12 +235,30 @@ class PushService:
                                                   serialization.PublicFormat.UncompressedPoint)
         return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
 
-    async def subscribe(self, subscription: Dict, prefs: Dict):
+    async def subscribe(self, subscription: Dict, prefs: Dict, user_id: str = None):
         prefs = clean_prefs(prefs)
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("INSERT OR REPLACE INTO subscriptions (endpoint, data, prefs) VALUES (?, ?, ?)",
-                             (subscription["endpoint"], json.dumps(subscription), json.dumps(prefs)))
+            await db.execute(
+                "INSERT INTO subscriptions (endpoint, data, prefs, user_id) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(endpoint) DO UPDATE SET data = excluded.data, prefs = excluded.prefs, "
+                "user_id = COALESCE(excluded.user_id, subscriptions.user_id)",
+                (subscription["endpoint"], json.dumps(subscription), json.dumps(prefs), user_id))
             await db.commit()
+
+    async def set_user(self, endpoint: str, user_id: str):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE subscriptions SET user_id = ? WHERE endpoint = ? AND user_id IS NOT ?",
+                             (str(user_id), endpoint, str(user_id)))
+            await db.commit()
+
+    async def send_user(self, user_id: str, kind: str, title: str, body: str, url: str = "/") -> int:
+        """Eigene Nachricht an alle Geräte einer Discord-Verknüpfung (landet auch in der Glocke)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT endpoint, data FROM subscriptions WHERE user_id = ?", (str(user_id),))
+            rows = await cur.fetchall()
+        for endpoint, sub in rows:
+            await self._push(endpoint, json.loads(sub), title, body, None, kind, url=url)
+        return len(rows)
 
     async def unsubscribe(self, endpoint: str):
         async with aiosqlite.connect(self.db_path) as db:
@@ -254,15 +276,15 @@ class PushService:
             cur = await db.execute("SELECT endpoint, data, prefs FROM subscriptions")
             return [(e, json.loads(d), json.loads(p)) for e, d, p in await cur.fetchall()]
 
-    async def load_state(self) -> Dict:
+    async def load_state(self, key: str = "events") -> Dict:
         async with aiosqlite.connect(self.db_path) as db:
-            cur = await db.execute("SELECT value FROM state WHERE key = 'events'")
+            cur = await db.execute("SELECT value FROM state WHERE key = ?", (key,))
             row = await cur.fetchone()
         return json.loads(row[0]) if row else {}
 
-    async def save_state(self, state: Dict):
+    async def save_state(self, state: Dict, key: str = "events"):
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("INSERT OR REPLACE INTO state (key, value) VALUES ('events', ?)", (json.dumps(state),))
+            await db.execute("INSERT OR REPLACE INTO state (key, value) VALUES (?, ?)", (key, json.dumps(state)))
             await db.commit()
 
     async def deliver(self, messages: List[tuple]):
@@ -313,10 +335,14 @@ class PushService:
                                      [(endpoint, int(i)) for i in ids])
             await db.commit()
 
-    async def _push(self, endpoint: str, sub: Dict, title: str, body: str, banner_id=None, kind: str = ""):
+    async def _push(self, endpoint: str, sub: Dict, title: str, body: str, banner_id=None, kind: str = "",
+                    url: str = None):
         from pywebpush import WebPushException, webpush
         log_id = await self._log(endpoint, kind, title, body, banner_id)
-        url = f"/#/banner/{banner_id}?n={log_id}" if banner_id else f"/#/inbox?n={log_id}"
+        if url:
+            url = f"{url}{'&' if '?' in url else '?'}n={log_id}"
+        else:
+            url = f"/#/banner/{banner_id}?n={log_id}" if banner_id else f"/#/inbox?n={log_id}"
         unread = (await self.inbox(endpoint, 1))["unread"]
         payload = json.dumps({"title": title, "body": body, "url": url, "id": log_id, "unread": unread})
         loop = asyncio.get_running_loop()

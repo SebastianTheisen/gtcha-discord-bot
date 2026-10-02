@@ -12,6 +12,7 @@ import os
 import re
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Dict
 
@@ -20,10 +21,11 @@ from loguru import logger
 
 from database.db import Database
 from utils.app_bridge import MAX_IMPORT_BYTES, AppBridge
+from utils.banner_info import berlin_time
 from webapp.history import JST_OFFSET, build_from_stored, ingest, plan_claims, profile, stored_events
 from webapp.images import ImageCache, content_type
 from webapp.push import DEFAULTS, EVENTS, WATCH_EVENTS, PushService, build_events
-from webapp.view import BannerView
+from webapp.view import BannerView, banner_label
 
 STATIC = Path(__file__).parent / "static"
 REFRESH_SECONDS = 20
@@ -52,6 +54,7 @@ def search_cards(banners: list, q: str, ids: set) -> list:
     return cards
 IMAGE_MAX_AGE = 30 * 24 * 3600
 PUSH_CHECK_SECONDS = 60
+REMIND_AFTER = 3 * 86400
 
 
 class App:
@@ -313,7 +316,8 @@ class App:
         sub = body.get("subscription") or {}
         if not str(sub.get("endpoint", "")).startswith("https://") or not sub.get("keys"):
             raise web.HTTPBadRequest(text="ungültiges Abo")
-        await self.push.subscribe(sub, body.get("prefs") or {})
+        user = await self._user(request)
+        await self.push.subscribe(sub, body.get("prefs") or {}, user["user_id"] if user else None)
         return web.json_response({"ok": True})
 
     async def api_push_unsubscribe(self, request):
@@ -331,6 +335,9 @@ class App:
         endpoint = str(body.get("endpoint", ""))
         if not endpoint:
             return web.json_response({"items": [], "unread": 0, "more": False})
+        user = await self._user(request)
+        if user:   # Gerät mit Discord verknüpft -> eigene Pushes (Medaillen, Erinnerung) gehen hierhin
+            await self.push.set_user(endpoint, user["user_id"])
         limit = max(1, min(100, int(body.get("limit") or 30)))
         return web.json_response(await self.push.inbox(endpoint, limit, int(body.get("before") or 0)))
 
@@ -360,6 +367,38 @@ class App:
         return web.FileResponse(STATIC / "manifest.webmanifest",
                                 headers={"Content-Type": "application/manifest+json"})
 
+    # --- Eigene Pushes: Ergebnis automatischer Medaillen, Erinnerung ans Übertragen ---
+    async def personal_pushes(self, now: float = None):
+        now = now or time.time()
+        for c in await self.bridge.finished_auto_claims():
+            row = await self.view.db.get_banner(c["pack_id"]) or {}
+            title = banner_label(row.get("title"), row.get("best_hit"), row.get("category"), row.get("price_coins")) \
+                or f"Banner {c['pack_id']}"
+            if c["status"] == "ok":
+                await self.push.send_user(c["discord_user_id"], "auto_ok", f"🏅 Medaille {c['tier']} gemeldet",
+                                          f"Automatisch aus deinen angeforderten Karten · {title}",
+                                          f"/#/banner/{c['pack_id']}")
+            else:
+                await self.push.send_user(c["discord_user_id"], "auto_rejected", "❌ Automatische Medaille abgelehnt",
+                                          f"{c['tier']} · {title}: {c.get('reason') or 'ohne Grund'}", "/#/settings")
+            await self.bridge.mark_auto_claim_notified(c["discord_user_id"], c["card_key"])
+        # Erinnerung: 3 Tage nichts übertragen -> einmal (dann wieder nach 3 Tagen), nur tagsüber
+        if not 10 <= berlin_time(now).hour < 21:
+            return
+        state = await self.push.load_state("reminders")
+        changed = False
+        for user_id, last in (await self.bridge.last_syncs()).items():
+            age = now - datetime.fromisoformat(last).timestamp()
+            if age < REMIND_AFTER or now - state.get(user_id, 0) < REMIND_AFTER:
+                continue
+            if await self.push.send_user(user_id, "remind", "📥 Zeit zum Übertragen",
+                                         f"Seit {int(age // 86400)} Tagen nichts übertragen – auf gtchaxonline.com das "
+                                         f"Lesezeichen „Alles übertragen“ antippen.", "/#/settings"):
+                state[user_id] = now
+                changed = True
+        if changed:
+            await self.push.save_state(state, "reminders")
+
     # --- Push-Überwachung ---
     async def push_loop(self):
         while True:
@@ -372,6 +411,7 @@ class App:
                         logger.info(f"Ereignis: {title} - {body}")
                 await self.push.deliver(messages)
                 await self.push.save_state(new_state)
+                await self.personal_pushes()
             except Exception as e:
                 logger.warning(f"Push-Prüfung fehlgeschlagen: {type(e).__name__}: {e}")
             await asyncio.sleep(PUSH_CHECK_SECONDS)
@@ -438,7 +478,6 @@ def make_app(app: App) -> web.Application:
 
 
 def main():
-    from utils.banner_info import berlin_time
     logger.remove()
     logger.configure(patcher=lambda r: r["extra"].update(berlin=f"{berlin_time(r['time'].timestamp()):%H:%M:%S}"))
     logger.add(sys.stderr, level=os.getenv("LOG_LEVEL", "INFO").upper(),

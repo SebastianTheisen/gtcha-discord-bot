@@ -59,6 +59,11 @@ class AppBridge:
                 "DELETE FROM user_imports WHERE id NOT IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER "
                 "(PARTITION BY discord_user_id ORDER BY id DESC) AS n FROM user_imports) WHERE n <= ?)", (KEEP_IMPORTS,))
             removed = cur.rowcount
+            try:   # Push zum Ergebnis automatischer Medaillen - bisherige gelten als erledigt
+                await db.execute("ALTER TABLE auto_claims ADD COLUMN notified INTEGER DEFAULT 0")
+                await db.execute("UPDATE auto_claims SET notified = 1")
+            except aiosqlite.OperationalError:
+                pass
             await db.commit()
             if removed > 0:
                 await db.execute("VACUUM")
@@ -171,6 +176,27 @@ class AppBridge:
                 "LEFT JOIN medal_requests r ON r.id = a.request_id WHERE a.discord_user_id = ? "
                 "ORDER BY a.created_at DESC LIMIT 50", (str(user_id),))
             return [dict(r) for r in await cur.fetchall()]
+
+    async def finished_auto_claims(self) -> List[Dict]:
+        """Automatische Medaillen, die der Bot erledigt hat und zu denen noch kein Push ging."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT a.discord_user_id, a.card_key, a.pack_id, a.tier, r.status, r.reason FROM auto_claims a "
+                "JOIN medal_requests r ON r.id = a.request_id WHERE a.notified = 0 AND r.status != 'pending'")
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def mark_auto_claim_notified(self, user_id: str, card_key: str):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE auto_claims SET notified = 1 WHERE discord_user_id = ? AND card_key = ?",
+                             (str(user_id), card_key))
+            await db.commit()
+
+    async def last_syncs(self) -> Dict[str, str]:
+        """Discord-ID -> Zeitpunkt des letzten Übertragens (nur wer schon einmal übertragen hat)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT discord_user_id, max(updated_at) FROM user_history GROUP BY discord_user_id")
+            return {u: t for u, t in await cur.fetchall() if t}
 
     # --- Medaillen-Meldungen (App legt an, Bot arbeitet ab) ---
     async def add_request(self, pack_id: int, tier: str, user: Dict, action: str) -> int:

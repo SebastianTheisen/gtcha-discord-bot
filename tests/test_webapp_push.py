@@ -126,3 +126,55 @@ def test_card_search_groups_banners():
     assert [(b["id"], b["out"]) for b in cards[0]["banners"]] == [(2, False), (1, True)]   # noch drin zuerst
     assert [c["id"] for c in search_cards(banners, "", {"8"})] == ["8"]
     assert search_cards(banners, "xyz", set()) == []
+
+
+def test_personal_pushes_auto_medal_and_reminder(tmp_path, monkeypatch):
+    import asyncio
+    import json
+    import sys
+    import types
+    from datetime import datetime, timedelta
+
+    sent = []
+    fake = types.ModuleType("pywebpush")
+    fake.WebPushException = type("WebPushException", (Exception,), {})
+    fake.webpush = lambda **kw: sent.append((kw["subscription_info"]["endpoint"], json.loads(kw["data"])))
+    monkeypatch.setitem(sys.modules, "pywebpush", fake)
+
+    from database.db import Database
+    from webapp.server import App
+
+    async def run():
+        await Database(str(tmp_path / "gtcha_bot.db")).init()
+        app = App(str(tmp_path / "gtcha_bot.db"), str(tmp_path), "x")
+        await app.push.init()
+        await app.bridge.init()
+        user = {"user_id": "42", "name": "Basti"}
+        await app.push.subscribe({"endpoint": "E42", "keys": {}}, {}, "42")
+        await app.push.subscribe({"endpoint": "E7", "keys": {}}, {})          # fremdes Gerät ohne Verknüpfung
+        await app.push.subscribe({"endpoint": "E42", "keys": {}}, {"new": False})   # Einstellungen ändern: bleibt verknüpft
+        rid = await app.bridge.add_auto_claim(user, "1@2026-10-01#0", 24114, "T3")
+        noon = datetime(2026, 10, 2, 12, 0).timestamp()   # 14 Uhr deutscher Zeit
+        await app.personal_pushes(now=noon)
+        assert sent == []                                   # Bot hat noch nicht entschieden
+        await app.bridge.finish(rid, False, "T3 ist schon vergeben")
+        await app.personal_pushes(now=noon)
+        await app.personal_pushes(now=noon)                 # nur einmal
+        assert [(e, p["title"]) for e, p in sent] == [("E42", "❌ Automatische Medaille abgelehnt")]
+        assert "T3 ist schon vergeben" in sent[0][1]["body"]
+        # Erinnerung: letztes Übertragen vor 4 Tagen
+        await app.bridge.set_history("42", {"coins": {"items": []}})
+        import aiosqlite
+        async with aiosqlite.connect(app.bridge.db_path) as db:
+            await db.execute("UPDATE user_history SET updated_at = ?",
+                             ((datetime.fromtimestamp(noon) - timedelta(days=4)).isoformat(),))
+            await db.commit()
+        sent.clear()
+        await app.personal_pushes(now=datetime(2026, 10, 2, 22, 0).timestamp())   # nachts: nichts
+        assert sent == []
+        await app.personal_pushes(now=noon)
+        await app.personal_pushes(now=noon + 3600)        # nicht gleich wieder
+        assert [p["title"] for _, p in sent] == ["📥 Zeit zum Übertragen"]
+        assert sent[0][1]["url"].startswith("/#/settings?n=")
+
+    asyncio.run(run())
