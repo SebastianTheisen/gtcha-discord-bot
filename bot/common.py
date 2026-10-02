@@ -49,7 +49,7 @@ from utils.card_pool import (
 
 
 # Erhöhen, wenn der Startbeitrag neue Felder bekommt: alle Threads werden dann einmal aktualisiert
-EMBED_VERSION = 8
+EMBED_VERSION = 9   # 9 = schlanke Discord-Ansicht
 # Endspurt-Alarm, sobald höchstens so viel Prozent der Packs übrig sind und noch Hits drin sind
 ENDSPURT_PERCENT = float(os.getenv("ENDSPURT_PERCENT") or "10")
 # Zeitraum für das Abverkaufs-Tempo

@@ -68,6 +68,7 @@ def test_bot_applies_app_medals(tmp_path, monkeypatch):
         def get_channel(self, _id): return Thread()
         async def _update_probability_message(self, *a): pass
         async def _refresh_pool_views(self, *a): pass
+        async def _view(self): return {"slim": False, "delay": 0, "delay_minutes": 0}
 
     async def run():
         db = Database(str(tmp_path / "bot.db"))
