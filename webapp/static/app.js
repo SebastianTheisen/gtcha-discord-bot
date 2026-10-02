@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 66;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 67;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -936,6 +936,7 @@ function linkPanel(user, devices = []) {
   const when = (t) => (t ? `${t.slice(8, 10)}.${t.slice(5, 7)}. ${t.slice(11, 16)}` : "–");
   return `<h2>🔗 Discord verknüpfen</h2><div class="panel">${user
     ? `<div>Verknüpft als <b>${esc(user.name)}</b> – du kannst Hits melden, sie erscheinen im Discord-Thread.</div>
+       <div class="hint">Deine Discord-ID: <b>${esc(user.user_id)}</b>${user.admin ? " · Admin" : ""}</div>
        <button class="btn" id="unlink">Verknüpfung trennen</button>
        ${devices.length ? `<div class="hint" style="margin-top:12px"><b>Verknüpfte Geräte (${devices.length})</b></div>
        <div class="rows" style="margin:6px 0 0">${devices.map((d) => `
