@@ -1,9 +1,9 @@
 // Service Worker: App-Hülle offline verfügbar halten, Push-Benachrichtigungen anzeigen.
-const CACHE = "gtcha-tracker-v40";
+const CACHE = "gtcha-tracker-v41";
 // Bilder dauerhaft auf dem Gerät halten (iOS leert den normalen Browser-Cache installierter Apps oft)
 const IMG_CACHE = "gtcha-img-v2";
 const IMG_MAX = 4000;
-const SHELL = ["/", "/static/style.css?v=40", "/static/app.js?v=40", "/static/icon-180.png?v=4", "/manifest.webmanifest"];
+const SHELL = ["/", "/static/style.css?v=41", "/static/app.js?v=41", "/static/icon-180.png?v=4", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -11,8 +11,7 @@ self.addEventListener("install", (event) => {
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(caches.keys()
-    .then((keys) => Promise.all(keys.filter((k) => k !== CACHE && k !== IMG_CACHE).map((k) => caches.delete(k))))
-    .then(() => trimImages(caches.open(IMG_CACHE)))
+    .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
     .then(() => self.clients.claim()));
 });
 
@@ -46,7 +45,8 @@ async function trimImages(cachePromise) {
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== "GET" || url.origin !== location.origin) return;
-  if (url.pathname === "/img" && !url.searchParams.has("nosw")) { event.respondWith(cachedImage(event.request)); return; }
+  // Bilder nicht über den Hintergrund-Helfer: beim Kaltstart muss iOS ihn und seinen Speicher erst
+  // hochfahren (~2 s bis zum ersten Bild). Direkt vom VPS kommen sie in ~40 ms (plus Safari-Cache).
   if (url.pathname === "/img") return;
   if (url.pathname.startsWith("/api/")) return;
   event.respondWith(fetch(event.request, { cache: "no-cache" })
