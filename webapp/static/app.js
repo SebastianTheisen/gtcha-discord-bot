@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 41;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 42;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -443,6 +443,7 @@ function glance(b) {
       ${diff != null ? `<span>💰 Rest kaufen: <b class="${diff >= 0 ? "pos" : "neg"}">${diff >= 0 ? "+" : "−"}${num(Math.abs(diff))}</b></span>` : ""}
       ${b.cost_to_hit ? `<span>⏱ Ø <b>${num(b.cost_to_hit)}</b> bis Hit</span>` : ""}
     </div>
+    ${b.end ? `<div class="glance-until">⏳ ${esc(untilText(b))}</div>` : ""}
     <div class="glance-note">${b.ev_from_site ? "aus den Zahlen der Seite" : "geschätzt"} · nicht abgeholte Karten zählen noch als drin</div>
   </div>`;
 }
@@ -517,10 +518,9 @@ async function showBanner(id) {
 
     <div class="buybar">
       <div class="big">${coins(b.price)}</div>
+      <div class="remaining"><b>${num(b.remaining)}</b> / ${num(b.total)}
+        <div class="bar"><span style="width:${left}%"></span></div></div>
       ${openLink(b)}
-      <div class="remaining">Verbleibend: <b>${num(b.remaining)} / ${num(b.total)}</b>
-        <div class="bar" style="margin-top:4px"><span style="width:${left}%"></span></div></div>
-      ${b.end ? `<div class="until">${esc(untilText(b))}</div>` : ""}
     </div>`;
   view.querySelectorAll(".dtab").forEach((el) => el.addEventListener("click", () => {
     state.detailTab[b.id] = el.dataset.tab;
@@ -659,6 +659,7 @@ async function showSettings() {
     <h2>⏱ Geschwindigkeit</h2>
     <div class="panel"><button class="btn" id="speed">Geschwindigkeit testen</button>
       <div class="hint" id="speed-out">Lädt 10 Bilder aus dem iPhone-Speicher und frisch vom VPS und zeigt die Zeiten.</div></div>`;
+  makeCollapsible(view);
   view.querySelector("#link-mode")?.addEventListener("change", (e) => save("linkMode", e.target.value));
   view.querySelector("#speed")?.addEventListener("click", () => speedTest(view.querySelector("#speed-out")));
   view.querySelector("#my-rank")?.addEventListener("change", (e) => save("myRank", e.target.value));
@@ -726,6 +727,7 @@ async function wireWatchButton(id) {
   btn.addEventListener("click", async () => {
     if (!sub) { location.hash = "#/settings"; return; }
     if (prefs.watch[id]) delete prefs.watch[id]; else prefs.watch[id] = [...WATCH_DEFAULT];
+    haptic();
     await savePrefs(sub, prefs);
     paint();
   });
@@ -804,11 +806,12 @@ async function claimFlow(b, card) {
     await ask(card.name, "Alle Exemplare dieser Karte sind schon gemeldet oder als gezogen erkannt.", ["OK"]);
     return;
   }
+  haptic();
   const { id } = await authApi("/api/medal", { pack_id: b.id, tier: unit.tier, action });
   for (let i = 0; i < 20; i++) {        // der Bot arbeitet Meldungen alle 5 s ab
     await new Promise((r) => setTimeout(r, 1500));
     const r = await authApi(`/api/medal/${id}`);
-    if (r.status === "ok") { await state.current(); return; }
+    if (r.status === "ok") { haptic(); await state.current(); return; }
     if (r.status === "rejected") { await ask("Nicht übernommen", esc(r.reason || ""), ["OK"]); await state.current(); return; }
   }
   await ask("Gesendet", "Der Bot hat noch nicht geantwortet – die Meldung wird gleich verarbeitet.", ["OK"]);
@@ -891,6 +894,45 @@ async function speedTest(out) {
   out.innerHTML = lines.map(esc).join("<br>");
 }
 
+// Abschnitte im Reiter "Ich" auf-/zuklappbar; offen/zu wird pro Abschnitt gemerkt
+function makeCollapsible(root) {
+  const open = JSON.parse(load("openSections", '["Discord verknüpfen","Meine gemeldeten Hits"]'));
+  [...root.querySelectorAll(":scope > h2")].forEach((h2) => {
+    const title = h2.textContent.replace(/^\W+/u, "").replace(/\s+\d.*$/, "").trim();
+    const det = document.createElement("details");
+    det.className = "section";
+    det.open = open.some((t) => title.startsWith(t));
+    const sum = document.createElement("summary");
+    sum.innerHTML = h2.innerHTML;
+    det.appendChild(sum);
+    let el = h2.nextElementSibling;
+    while (el && el.tagName !== "H2") {
+      const next = el.nextElementSibling;
+      det.appendChild(el);
+      el = next;
+    }
+    h2.replaceWith(det);
+    det.addEventListener("toggle", () => {
+      const now = new Set(JSON.parse(load("openSections", "[]")));
+      det.open ? now.add(title) : now.delete(title);
+      save("openSections", JSON.stringify([...now]));
+    });
+  });
+}
+
+// Haptisches Feedback: iOS 18 vibriert beim Umschalten eines Schalters (input switch), sonst navigator.vibrate
+const hapticBox = (() => {
+  const label = document.createElement("label");
+  label.style.cssText = "position:fixed;left:-99px;width:1px;height:1px;overflow:hidden";
+  label.innerHTML = '<input type="checkbox" switch>';
+  document.body.appendChild(label);
+  return label;
+})();
+function haptic() {
+  try { hapticBox.click(); } catch (e) { /* egal */ }
+  navigator.vibrate?.(12);
+}
+
 function post(body) {
   return { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
 }
@@ -944,6 +986,48 @@ refreshBtn?.addEventListener("click", async () => {
   } finally {
     setTimeout(() => refreshBtn.classList.remove("spinning"), 300);
   }
+});
+
+// Wischgesten: vom linken Rand nach rechts = zurück (Banner-Seite), oben nach unten ziehen = aktualisieren
+const ptr = document.createElement("div");
+ptr.className = "ptr";
+ptr.textContent = "↻";
+document.body.appendChild(ptr);
+let touch = null;
+document.addEventListener("touchstart", (e) => {
+  if (e.touches.length !== 1 || document.querySelector(".modal-wrap")) return;
+  const t = e.touches[0];
+  touch = { x: t.clientX, y: t.clientY, edge: t.clientX < 24, top: window.scrollY <= 0, dx: 0, dy: 0 };
+}, { passive: true });
+document.addEventListener("touchmove", (e) => {
+  if (!touch) return;
+  const t = e.touches[0];
+  touch.dx = t.clientX - touch.x;
+  touch.dy = t.clientY - touch.y;
+  if (touch.edge && touch.dx > 0 && Math.abs(touch.dx) > Math.abs(touch.dy)) {
+    view.style.transform = `translateX(${Math.min(touch.dx, 160)}px)`;
+  } else if (touch.top && touch.dy > 0 && touch.dy > Math.abs(touch.dx)) {
+    const d = Math.min(touch.dy, 120);
+    ptr.style.transform = `translate(-50%, ${d - 50}px) rotate(${d * 3}deg)`;
+    ptr.classList.toggle("ready", d >= 80);
+  }
+}, { passive: true });
+document.addEventListener("touchend", async () => {
+  if (!touch) return;
+  const { edge, top, dx, dy } = touch;
+  touch = null;
+  view.style.transform = "";
+  if (edge && dx > 90 && location.hash.startsWith("#/banner/")) {
+    haptic();
+    history.back();
+  } else if (top && dy >= 80 && state.current) {
+    haptic();
+    ptr.classList.add("spinning");
+    try { await state.current(); } catch (e) { /* Hinweis kommt über die Seite */ }
+    ptr.classList.remove("spinning");
+  }
+  ptr.style.transform = "";
+  ptr.classList.remove("ready");
 });
 
 // Zurück aus dem Hintergrund: sofort frische Daten statt bis zu 30 s alte
