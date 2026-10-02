@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 43;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 44;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -650,7 +650,12 @@ async function showSettings() {
         <div class="hint">Erster Schritt: Ein Lesezeichen überträgt <b>die gerade offene Seite</b> deines eigenen
           GTCHA-Kontos (z. B. Transaktionen) an deinen VPS – kein Passwort, nur das, was dir dort angezeigt wird.
           Damit prüfe ich, welche Angaben sich auslesen lassen.</div>
-        <button class="btn primary" id="bm-copy">Lesezeichen-Code kopieren</button>
+        <div class="gt-links">
+          <a class="btn primary" href="${esc(buyHref("https://gtchaxonline.com/buy-point-history"))}" target="_blank" rel="noopener">📥 Münzen öffnen</a>
+          <a class="btn primary" href="${esc(buyHref("https://gtchaxonline.com/pending-detail"))}" target="_blank" rel="noopener">📥 Gacha öffnen</a>
+        </div>
+        <div class="hint">Öffnet die Seite in Safari – dort Adressleiste antippen und „An GTCHA Tracker“ wählen.</div>
+        <button class="btn" id="bm-copy">Lesezeichen-Code kopieren</button>
         <div class="hint">Einrichten (einmalig): 1. In Safari irgendeine Seite als Lesezeichen sichern (Teilen → Lesezeichen),
           Name „An GTCHA Tracker“. 2. Lesezeichen bearbeiten, Adresse löschen und den kopierten Code einfügen.<br>
           Benutzen: Auf gtchaxonline.com die Seite öffnen (z. B. Transaktionen → Münzen), Adressleiste antippen und
