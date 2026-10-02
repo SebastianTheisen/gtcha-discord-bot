@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 58;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 59;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -999,7 +999,7 @@ let M={};try{M=JSON.parse(localStorage.getItem(LS)||'{}')}catch(e){}
 const FULL=${full ? "true" : "false"}||!M.at||Date.now()-M.at>30*864e5;
 const lines=t=>t.split('\\n').map(l=>l.trim()).filter(Boolean);
 const sig=t=>{const L=lines(t);const i=L.findIndex(l=>/\\d{2,4}\\/\\d{2}\\/\\d{2}/.test(l));return i<0?'':L.slice(i,i+4).join('\\n')};
-const NM={at:FULL?Date.now():M.at};const PAR=${SYNC_PARALLEL};
+const NM={at:FULL?Date.now():M.at};const PAR=${SYNC_PARALLEL};const T0=Date.now();
 const box=document.createElement('div');box.style.cssText='position:fixed;z-index:2147483647;left:10px;right:10px;top:10px;padding:12px;background:#1f3a6e;color:#fff;font:15px sans-serif;border-radius:10px';document.body.appendChild(box);
 const say=t=>{box.textContent='GTCHA Tracker: '+t};
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -1026,7 +1026,7 @@ say('lade '+P.length+' Bereiche gleichzeitig …');
 let next=0;await Promise.all(Array.from({length:PAR},async()=>{while(next<P.length){const i=next++;await area(P[i],i)}}));
 say('sende …');try{localStorage.setItem(LS,JSON.stringify(NM))}catch(e){}
 const f=document.createElement('form');f.method='POST';f.action=${JSON.stringify(location.origin)}+'/api/import-form';
-const i=document.createElement('input');i.type='hidden';i.name='d';i.value=JSON.stringify({t:${JSON.stringify(token)},at:new Date().toISOString(),pages:out});
+const i=document.createElement('input');i.type='hidden';i.name='d';i.value=JSON.stringify({t:${JSON.stringify(token)},at:new Date().toISOString(),ms:Date.now()-T0,pages:out.filter(Boolean)});
 f.appendChild(i);document.body.appendChild(f);f.submit()})()`;
   return "javascript:" + src.replace(/\n/g, "");
 }

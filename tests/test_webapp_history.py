@@ -239,3 +239,36 @@ def test_local_time_is_german_time():
     assert local_time("2026-10-02T19:51:12.123456") == "2026-10-02 21:51"     # Sommerzeit UTC+2
     assert local_time("2026-12-02T19:51:00") == "2026-12-02 20:51"            # Winterzeit UTC+1
     assert local_time(None) is None
+
+
+def test_failed_area_keeps_stored_history(tmp_path):
+    import json as _json
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from database.db import Database
+    from webapp.server import App, make_app
+
+    async def run():
+        await Database(str(tmp_path / "gtcha_bot.db")).init()
+        app = App(str(tmp_path / "gtcha_bot.db"), str(tmp_path), "x")
+        await app.bridge.init()
+        code = await app.bridge.create_code(42, "Basti")
+        token = (await app.bridge.redeem_code(code))["token"]
+        web_app = make_app(app)
+        web_app.on_startup.clear()
+        web_app.on_cleanup.clear()
+        client = TestClient(TestServer(web_app))
+        await client.start_server()
+        post = lambda pages: client.post("/api/import-form", data={"d": _json.dumps({"t": token, "ms": 7400, "pages": pages})})
+        res = await post([{"path": "buy-point-history", "pages": [{"text": COINS}]}])
+        assert "in 7 Sekunden" in await res.text()
+        res = await post([{"path": "buy-point-history", "error": "kein Zugriff"},
+                          {"path": "pending-detail", "pages": [{"text": PENDING}]}])
+        text = await res.text()
+        assert "Nicht geladen: Münzen" in text and "kein Zugriff" in text
+        stored = await app.bridge.get_history("42")
+        assert len(stored["coins"]["items"]) == 6 and len(stored["pending"]["items"]) == 3
+        await client.close()
+
+    asyncio.run(run())
