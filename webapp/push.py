@@ -23,6 +23,8 @@ DEFAULTS = {"new": True, "value": True, "hit": True, "packs": False, "ship": Fal
 # pro beobachtetem Banner: Hit raus, Packs weniger, Versandschub, über 100 %, Endspurt, beendet
 WATCH_EVENTS = ("hit", "packs", "ship", "ev", "low", "end")
 MAX_WATCHED = 50
+WISH_EVENTS = ("wish_new", "wish_out")
+MAX_WISH = 100
 MAX_PACK_LINES = 6
 INBOX_KEEP = 300      # je Gerät
 INBOX_DAYS = 30
@@ -103,8 +105,43 @@ def build_events(banners: List[Dict], hot: List[Dict], state: Dict) -> tuple:
             messages.append(("end", f"🏁 Banner {bid} beendet", f"{old.get('title') or ''} ist nicht mehr online",
                              int(bid), True))
 
-    new_state = {"known": sorted(by_id), "alerted": sorted(alerted), "banners": new_banners}
+    wish, cards, outc = wish_events(banners, state, first)
+    messages += wish
+    new_state = {"known": sorted(by_id), "alerted": sorted(alerted), "banners": new_banners,
+                 "cards": cards, "outc": outc}
     return messages, new_state
+
+
+def wish_events(banners: List[Dict], state: Dict, first: bool) -> tuple:
+    """Wunschkarten: ("wish_new", …) wenn ein Banner eine Karte neu enthält (neuer Banner oder Kartenpool
+    erst später geladen), ("wish_out", …) wenn sie in einem Banner sicher gezogen wurde. Fünftes Feld =
+    Karten-ID; wer es bekommt, entscheidet recipients() anhand der Wunschliste des Geräts.
+    Beim ersten Mal (auch nach dem Update auf diese Version) wird nur gemerkt."""
+    old_cards, old_out = state.get("cards"), state.get("outc") or {}
+    remember_only = first or old_cards is None
+    cards, outc, messages = {}, {}, []
+    for b in banners:
+        bid = str(b["id"])
+        brief = b.get("cards_brief") or {}
+        if not brief:
+            continue
+        cards[bid] = sorted(brief)
+        outc[bid] = sorted(b.get("out_ids") or [])
+        if remember_only:
+            continue
+        price = f"{fmt_coins(b['price'])} Coins" if b.get("price") else "gratis"
+        if bid not in old_cards:
+            for cid, (name, value, _, _) in brief.items():
+                messages.append(("wish_new", "⭐ Wunschkarte in neuem Banner",
+                                 f"{name} ({fmt_coins(value)} Coins) · {b.get('title') or 'Banner ' + bid} · {price}",
+                                 b["id"], cid))
+        for cid in set(outc[bid]) - set(old_out.get(bid, [])):
+            if bid in old_out and cid in brief:
+                name, value = brief[cid][0], brief[cid][1]
+                messages.append(("wish_out", "🎯 Wunschkarte gezogen",
+                                 f"{name} ({fmt_coins(value)} Coins) ist in {b.get('title') or 'Banner ' + bid} raus",
+                                 b["id"], cid))
+    return messages, cards, outc
 
 
 def clean_prefs(prefs: Dict) -> Dict:
@@ -118,6 +155,7 @@ def clean_prefs(prefs: Dict) -> Dict:
             continue
         watch[bid] = [k for k in WATCH_EVENTS if k in (kinds or [])]
     clean["watch"] = watch
+    clean["wish"] = [str(c) for c in (prefs.get("wish") or []) if str(c).isdigit()][:MAX_WISH]
     return clean
 
 
@@ -128,10 +166,15 @@ def recipients(messages: List[tuple], prefs: Dict) -> List[tuple]:
     Pack-Bewegung aller übrigen Banner kommt als ein zusammengefasster Push. Jede Meldung nur einmal.
     """
     watch = prefs.get("watch") or {}
+    wish = set(prefs.get("wish") or [])
     on = lambda e: prefs.get(e, DEFAULTS.get(e, False))
     picked, packs = [], []
     for m in messages:
         kind, _, _, bid, banner_event = m
+        if kind in WISH_EVENTS:
+            if banner_event in wish:
+                picked.append(m)
+            continue
         if not banner_event:
             continue
         if kind in watch.get(str(bid), []):
@@ -142,7 +185,7 @@ def recipients(messages: List[tuple], prefs: Dict) -> List[tuple]:
             picked.append(m)
     covered = {(m[3], m[0]) for m in picked}
     for m in messages:
-        if not m[4] and on(m[0]) and not (m[0] == "value" and (m[3], "ev") in covered):
+        if m[0] not in WISH_EVENTS and not m[4] and on(m[0]) and not (m[0] == "value" and (m[3], "ev") in covered):
             picked.append(m)
     if packs:
         lines = [m[1].split(": ", 1)[-1].replace(" Packs", "") for m in packs]

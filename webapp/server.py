@@ -27,6 +27,29 @@ from webapp.view import BannerView
 
 STATIC = Path(__file__).parent / "static"
 REFRESH_SECONDS = 20
+POOL_KEYS = ("hits", "hit_keys_detected", "cards_brief", "out_ids")   # nur intern / Detailseite
+SEARCH_LIMIT = 40
+
+
+def search_cards(banners: list, q: str, ids: set) -> list:
+    """Karten (gleiche Karten-ID = gleiche Karte) mit allen aktiven Bannern, in denen sie stecken."""
+    found = {}
+    for b in banners:
+        for cid, (name, value, image, copies) in (b.get("cards_brief") or {}).items():
+            if ids:
+                if cid not in ids:
+                    continue
+            elif q not in (name or "").lower() and q != cid:
+                continue
+            card = found.setdefault(cid, {"id": cid, "name": name, "image": image, "value": value, "banners": []})
+            card["value"] = max(card["value"] or 0, value or 0)
+            card["banners"].append({"id": b["id"], "title": b["title"], "price": b["price"], "value": value,
+                                    "copies": copies, "remaining": b["remaining"], "ev_pct": b["ev_pct"],
+                                    "status": b["status"], "out": cid in (b.get("out_ids") or [])})
+    cards = sorted(found.values(), key=lambda c: (-(c["value"] or 0), c["name"] or ""))[:SEARCH_LIMIT]
+    for c in cards:
+        c["banners"].sort(key=lambda x: (x["out"], -(x["ev_pct"] or 0)))
+    return cards
 IMAGE_MAX_AGE = 30 * 24 * 3600
 PUSH_CHECK_SECONDS = 60
 
@@ -87,13 +110,20 @@ class App:
 
     # --- API ---
     async def api_banners(self, request):
-        lite = [{k: v for k, v in b.items() if k not in ("hits", "hit_keys_detected")} for b in await self.banners()]
+        lite = [{k: v for k, v in b.items() if k not in POOL_KEYS} for b in await self.banners()]
         return web.json_response({"banners": lite, "updated": self._updated or int(time.time())})
 
     async def api_hot(self, request):
         hot = self.view.hot(await self.banners())
-        return web.json_response({"hot": [{k: v for k, v in b.items() if k not in ("hits", "hit_keys_detected")}
-                                          for b in hot]})
+        return web.json_response({"hot": [{k: v for k, v in b.items() if k not in POOL_KEYS} for b in hot]})
+
+    async def api_cards(self, request):
+        """Kartensuche über alle aktiven Banner (Name oder Kartennummer-ID) bzw. bestimmte Karten (ids=1,2)."""
+        q = request.query.get("q", "").strip().lower()
+        ids = [i for i in request.query.get("ids", "").split(",") if i.strip().isdigit()][:200]
+        if len(q) < 2 and not ids:
+            return web.json_response({"cards": []})
+        return web.json_response({"cards": search_cards(await self.banners(), q, set(ids))})
 
     async def api_banner(self, request):
         try:
@@ -104,6 +134,7 @@ class App:
         if not data:
             raise web.HTTPNotFound()
         data.pop("hit_keys_detected", None)
+        data.pop("cards_brief", None)
         return web.json_response(data)
 
     async def image(self, request):
@@ -367,6 +398,7 @@ def make_app(app: App) -> web.Application:
         web.get("/manifest.webmanifest", app.manifest),
         web.get("/api/banners", app.api_banners),
         web.get("/api/hot", app.api_hot),
+        web.get("/api/cards", app.api_cards),
         web.get(r"/api/banner/{id}", app.api_banner),
         web.get("/img", app.image),
         web.post("/api/link", app.api_link),

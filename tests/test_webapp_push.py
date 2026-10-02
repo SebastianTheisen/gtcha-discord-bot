@@ -90,3 +90,39 @@ def test_push_inbox_per_device_and_mark_read(tmp_path, monkeypatch):
     payloads = [__import__("json").loads(d) for d in sent]
     assert payloads[1]["url"].startswith("/#/banner/24114?n=") and payloads[0]["url"].startswith("/#/inbox?n=")
     assert [p["unread"] for p in payloads[:3]] == [1, 2, 3]
+
+
+def test_wish_events_new_banner_and_pulled():
+    from webapp.push import wish_events
+
+    def banner(bid, ids, out=()):
+        return {"id": bid, "title": f"B{bid}", "price": 1000,
+                "cards_brief": {i: [f"Karte {i}", 5000, None, 1] for i in ids}, "out_ids": list(out)}
+
+    # nach dem Update: nur merken
+    msgs, cards, outc = wish_events([banner(1, ["7"])], {"known": [1]}, first=False)
+    assert msgs == [] and cards == {"1": ["7"]}
+    state = {"cards": cards, "outc": outc}
+    # neuer Banner (oder Pool erst jetzt geladen) mit Karte 7; in Banner 1 wurde Karte 7 gezogen
+    msgs, cards, outc = wish_events([banner(1, ["7"], out=["7"]), banner(2, ["7", "8"])], state, first=False)
+    kinds = sorted((m[0], m[3], m[4]) for m in msgs)
+    assert kinds == [("wish_new", 2, "7"), ("wish_new", 2, "8"), ("wish_out", 1, "7")]
+    # nur wer die Karte auf der Wunschliste hat, bekommt sie
+    got = recipients(msgs, clean_prefs({"wish": ["8"], "new": False}))
+    assert [(m[0], m[4]) for m in got] == [("wish_new", "8")]
+    assert recipients(msgs, clean_prefs({})) == []
+
+
+def test_card_search_groups_banners():
+    from webapp.server import search_cards
+    banners = [
+        {"id": 1, "title": "A", "price": 1000, "remaining": 50, "ev_pct": 95.0, "status": "running",
+         "cards_brief": {"7": ["Glurak ex", 9000, "img", 1], "8": ["Bisasam", 500, None, 3]}, "out_ids": ["7"]},
+        {"id": 2, "title": "B", "price": 2000, "remaining": 9, "ev_pct": 110.0, "status": "endspurt",
+         "cards_brief": {"7": ["Glurak ex", 9500, "img", 2]}, "out_ids": []},
+    ]
+    cards = search_cards(banners, "glurak", set())
+    assert len(cards) == 1 and cards[0]["value"] == 9500
+    assert [(b["id"], b["out"]) for b in cards[0]["banners"]] == [(2, False), (1, True)]   # noch drin zuerst
+    assert [c["id"] for c in search_cards(banners, "", {"8"})] == ["8"]
+    assert search_cards(banners, "xyz", set()) == []
