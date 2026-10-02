@@ -144,6 +144,12 @@ class BannerView:
         if with_pool:
             data["hits"] = self._hit_list(pool, pulled, sure, winners, unsure, price) if pool else []
             data["hit_keys_detected"] = sorted(sure)
+            # für Kartensuche und Wunschliste: alle Karten (ID -> Name, Wert, Bild, Exemplare) und sicher gezogene
+            data["cards_brief"] = {str(c.get("id")): [c.get("name"), to_int(c.get("value")), c.get("image"),
+                                                      to_int(c.get("copies")) or 1]
+                                   for c in (pool.get("cards") or []) + (pool.get("hits") or [])
+                                   if c.get("id") is not None} if pool else {}
+            data["out_ids"] = sorted({str(k).split("#")[0] for k in set(sure) | set(winners)})
         return data
 
     @staticmethod

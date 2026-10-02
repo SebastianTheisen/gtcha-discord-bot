@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 53;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 54;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -1076,6 +1076,79 @@ function historySection(h) {
       <div class="rows">${h.shipped.map(cardLine).join("")}</div></details>` : ""}`;
 }
 
+// --- Kartensuche und Wunschliste ---
+// Wunschliste liegt auf dem Gerät; mit eingeschalteten Pushes zusätzlich beim Server (für die Wunschkarten-Pushes)
+const wishList = () => JSON.parse(load("wish", "[]"));
+const isWish = (id) => wishList().some((w) => w.id === id);
+async function toggleWish(card) {
+  const list = wishList();
+  const next = isWish(card.id) ? list.filter((w) => w.id !== card.id) : [...list, { id: card.id, name: card.name, image: card.image }];
+  save("wish", JSON.stringify(next.slice(-100)));
+  haptic();
+  try {
+    const { sub, prefs } = await pushState();
+    if (sub) await savePrefs(sub, { ...prefs, wish: next.map((w) => w.id) });
+  } catch (e) { /* ohne Pushes bleibt die Liste nur auf dem Gerät */ }
+}
+
+function findCard(c) {
+  const banners = c.banners.map((b) => `
+    <a class="find-b ${b.out ? "out" : ""}" href="#/banner/${b.id}">
+      <span>${b.out ? "✅ raus · " : ""}<b>${esc(b.title)}</b> · ${coins(b.price)}${b.copies > 1 ? ` · ×${b.copies}` : ""}</span>
+      <span class="muted">${b.ev_pct != null ? `<span class="ev ${evClass(b.ev_pct)}">${pct(b.ev_pct)}</span> · ` : ""}${num(b.remaining)} Packs</span></a>`).join("");
+  return `<div class="find-card">
+    <div class="find-art">${img(c.image, c.name, false, 320)}</div>
+    <div><div class="find-head"><b>${esc(c.name)}</b>
+      <button class="star ${isWish(c.id) ? "on" : ""}" data-wish="${esc(c.id)}">${isWish(c.id) ? "⭐ Gemerkt" : "☆ Merken"}</button></div>
+      <div class="muted">${c.value != null ? coins(c.value) : ""}</div></div>
+    <div class="find-banners">${banners || `<div class="hint">Gerade in keinem laufenden Banner.</div>`}</div>
+  </div>`;
+}
+
+async function showSearch() {
+  const q = load("searchQ", "");
+  view.innerHTML = `<div class="section-title">🔍 Karten suchen</div>
+    <form class="search" id="card-search" role="search">
+      <input id="card-q" type="search" autocomplete="off" placeholder="Kartenname, z. B. Glurak" value="${esc(q)}">
+    </form>
+    <div id="find-out" style="margin-top:12px"></div>`;
+  const out = view.querySelector("#find-out");
+  const input = view.querySelector("#card-q");
+  const wire = (cards) => out.querySelectorAll("[data-wish]").forEach((btn) => btn.addEventListener("click", async () => {
+    const card = cards.find((c) => c.id === btn.dataset.wish);
+    await toggleWish(card);
+    btn.classList.toggle("on", isWish(card.id));
+    btn.textContent = isWish(card.id) ? "⭐ Gemerkt" : "☆ Merken";
+  }));
+  const run = async () => {
+    const text = input.value.trim();
+    save("searchQ", text);
+    if (text.length < 2) {
+      const wish = wishList();
+      if (!wish.length) {
+        out.innerHTML = `<div class="panel"><div class="hint">Sucht in allen laufenden Bannern. Mit „☆ Merken“ kommt eine Karte
+          auf deine Wunschliste: Push, sobald ein neuer Banner sie enthält oder sie irgendwo gezogen wurde
+          (Pushes müssen dafür unter „Ich“ an sein).</div></div>`;
+        return;
+      }
+      const res = await api(`/api/cards?ids=${wish.map((w) => w.id).join(",")}`);
+      const byId = Object.fromEntries(res.cards.map((c) => [c.id, c]));
+      const cards = wish.map((w) => byId[w.id] || { ...w, value: null, banners: [] }).reverse();
+      out.innerHTML = `<div class="sub-title">⭐ Meine Wunschliste (${wish.length})</div><div class="find">${cards.map(findCard).join("")}</div>`;
+      wire(cards);
+      return;
+    }
+    const res = await api(`/api/cards?q=${encodeURIComponent(text)}`);
+    out.innerHTML = res.cards.length ? `<div class="find">${res.cards.map(findCard).join("")}</div>`
+      : `<div class="empty">Keine Karte „${esc(text)}“ in den laufenden Bannern.</div>`;
+    wire(res.cards);
+  };
+  let timer;
+  input.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => run().catch(() => {}), 300); });
+  view.querySelector("#card-search").addEventListener("submit", (e) => { e.preventDefault(); input.blur(); run().catch(() => {}); });
+  await run();
+}
+
 // --- Benachrichtigungen: Verlauf der Pushes dieses Geräts (Glocke oben) ---
 async function inboxApi(path, body = {}) {
   const sub = await currentSubscription().catch(() => null);
@@ -1181,7 +1254,8 @@ function post(body) {
 async function route() {
   clearInterval(state.timer);
   const hash = location.hash || "#/";
-  const tab = hash.startsWith("#/hot") ? "hot" : hash.startsWith("#/settings") ? "settings" : "list";
+  const tab = hash.startsWith("#/hot") ? "hot" : hash.startsWith("#/settings") ? "settings"
+    : hash.startsWith("#/search") ? "search" : "list";
   const readId = hash.match(/[?&]n=(\d+)/);
   if (readId) markRead([Number(readId[1])]);
   document.getElementById("bell")?.classList.toggle("active", hash.startsWith("#/inbox"));
@@ -1196,8 +1270,9 @@ async function route() {
   if (done) { showImportDone(done[1]); return; }
   const banner = hash.match(/^#\/banner\/(\d+)/);
   document.querySelectorAll(".tabbar a").forEach((a) => a.classList.toggle("active", a.dataset.tab === tab && !banner));
-  const render = banner ? () => showBanner(banner[1]) : tab === "hot" ? showHot : tab === "settings" ? showSettings : showList;
-  state.render = tab === "settings" ? null : render;
+  const render = banner ? () => showBanner(banner[1]) : tab === "hot" ? showHot : tab === "settings" ? showSettings
+    : tab === "search" ? showSearch : showList;
+  state.render = tab === "settings" || tab === "search" ? null : render;
   state.current = render;
   if (!view.innerHTML || banner) view.innerHTML = `<div class="loading">Lädt …</div>`;
   try {
@@ -1208,7 +1283,7 @@ async function route() {
       ? `<div class="empty">Banner nicht gefunden.<br><a class="back" href="#/">‹ Zur Übersicht</a></div>`
       : `<div class="empty">Daten nicht erreichbar (${esc(e.message)})</div>`;
   }
-  if (tab !== "settings") state.timer = setInterval(() => render().catch(() => {}), REFRESH_MS);
+  if (tab !== "settings" && tab !== "search") state.timer = setInterval(() => render().catch(() => {}), REFRESH_MS);
 }
 
 // Bilder, die nicht laden, ausblenden statt Alt-Text zu zeigen
