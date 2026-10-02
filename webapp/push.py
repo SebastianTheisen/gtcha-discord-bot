@@ -295,11 +295,28 @@ class PushService:
             for kind, title, body, banner_id, _ in recipients(messages, prefs):
                 await self._push(endpoint, sub, title, body, banner_id, kind)
 
-    async def send(self, event: str, title: str, body: str, banner_id=None, only: str = None):
-        """Einzelne Nachricht (Test-Push) an ein Gerät oder alle."""
+    async def send(self, event: str, title: str, body: str, banner_id=None, only: str = None) -> int:
+        """Einzelne Nachricht an ein Gerät (Test-Push) oder an alle (Admin). Rückgabe: Anzahl Geräte."""
+        sent = 0
         for endpoint, sub, prefs in await self._subscriptions():
             if not only or endpoint == only:
                 await self._push(endpoint, sub, title, body, banner_id, event)
+                sent += 1
+        return sent
+
+    async def remove_user(self, user_id: str) -> None:
+        """Gesperrte Person: ihre Push-Abos (und deren Verlauf) entfernen."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT endpoint FROM subscriptions WHERE user_id = ?", (str(user_id),))
+            endpoints = [r[0] for r in await cur.fetchall()]
+            await db.executemany("DELETE FROM push_log WHERE endpoint = ?", [(e,) for e in endpoints])
+            await db.execute("DELETE FROM subscriptions WHERE user_id = ?", (str(user_id),))
+            await db.commit()
+
+    async def count(self) -> int:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT count(*) FROM subscriptions")
+            return (await cur.fetchone())[0]
 
     # --- Verlauf der Pushes je Gerät (Glocke in der App) ---
     async def _log(self, endpoint: str, kind: str, title: str, body: str, banner_id) -> int:

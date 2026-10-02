@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS user_history (
     discord_user_id TEXT, area TEXT, data TEXT, updated_at TEXT, PRIMARY KEY (discord_user_id, area));
 CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS app_admins (discord_user_id TEXT PRIMARY KEY, added_at TEXT);
+CREATE TABLE IF NOT EXISTS blocked_users (discord_user_id TEXT PRIMARY KEY, discord_name TEXT, blocked_at TEXT);
 CREATE TABLE IF NOT EXISTS auto_claims (
     discord_user_id TEXT, card_key TEXT, pack_id INTEGER, tier TEXT, request_id INTEGER, created_at TEXT,
     PRIMARY KEY (discord_user_id, card_key));
@@ -96,7 +97,8 @@ class AppBridge:
         cutoff = (datetime.now() - timedelta(minutes=CODE_MINUTES)).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             cur = await db.execute("SELECT discord_user_id, discord_name FROM link_codes "
-                                   "WHERE code = ? AND used = 0 AND created_at >= ?", (code, cutoff))
+                                   "WHERE code = ? AND used = 0 AND created_at >= ? AND discord_user_id NOT IN "
+                                   "(SELECT discord_user_id FROM blocked_users)", (code, cutoff))
             row = await cur.fetchone()
             if not row:
                 return None
@@ -196,6 +198,26 @@ class AppBridge:
                 out.append({"user_id": str(u), "name": row[0] if row else None})
         return out
 
+    # --- Sperren (Admin) ---
+    async def block(self, user_id: str, name: Optional[str] = None) -> None:
+        """Alle Geräte abmelden, offene Codes löschen, neues Verknüpfen verhindern."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("INSERT OR REPLACE INTO blocked_users (discord_user_id, discord_name, blocked_at) "
+                             "VALUES (?, ?, ?)", (str(user_id), name, _now()))
+            await db.execute("DELETE FROM devices WHERE discord_user_id = ?", (str(user_id),))
+            await db.execute("DELETE FROM link_codes WHERE discord_user_id = ?", (str(user_id),))
+            await db.commit()
+
+    async def unblock(self, user_id: str) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("DELETE FROM blocked_users WHERE discord_user_id = ?", (str(user_id),))
+            await db.commit()
+
+    async def is_blocked(self, user_id) -> bool:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT 1 FROM blocked_users WHERE discord_user_id = ?", (str(user_id),))
+            return await cur.fetchone() is not None
+
     async def known_users(self) -> List[Dict]:
         """Alle Personen mit verknüpftem Gerät oder übertragenen Daten: ID, Name, Geräte, zuletzt aktiv."""
         async with aiosqlite.connect(self.db_path) as db:
@@ -206,6 +228,18 @@ class AppBridge:
             cur = await db.execute("SELECT DISTINCT discord_user_id FROM user_history")
             for (u,) in await cur.fetchall():
                 users.setdefault(u, {"user_id": u, "name": None, "devices": 0, "last_seen": None})
+            cur = await db.execute("SELECT discord_user_id, discord_name FROM blocked_users")
+            for u, n in await cur.fetchall():
+                users.setdefault(u, {"user_id": u, "name": n, "devices": 0, "last_seen": None})
+                users[u]["blocked"] = True
+                users[u]["name"] = users[u]["name"] or n
+            # Name auch für Personen ohne Gerät (z. B. gesperrt) aus früheren Codes
+            for u in users.values():
+                if not u["name"]:
+                    cur = await db.execute("SELECT discord_name FROM link_codes WHERE discord_user_id = ? "
+                                           "ORDER BY created_at DESC LIMIT 1", (u["user_id"],))
+                    row = await cur.fetchone()
+                    u["name"] = row[0] if row else None
         return list(users.values())
 
     async def is_admin(self, user_id) -> bool:

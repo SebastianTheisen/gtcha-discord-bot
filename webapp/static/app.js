@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 70;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 71;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -1214,22 +1214,54 @@ async function showUsers() {
     view.innerHTML = `<div class="empty">Nur für den Admin.</div>`;
     return;
   }
-  const { users } = await authApi("/api/admin/users");
+  const [{ users }, st] = await Promise.all([authApi("/api/admin/users"), authApi("/api/admin/status").catch(() => null)]);
+  const ago = (sec) => (sec == null ? "–" : sec < 120 ? `${sec} s` : sec < 7200 ? `${Math.round(sec / 60)} Min` : `${Math.round(sec / 3600)} Std`);
+  const ok = (good) => (good ? "🟢" : "🔴");
+  const statusHtml = st ? `<div class="rows">
+      <div class="line"><span>${ok(st.heartbeat_age != null && st.heartbeat_age < 900)} Bot (letzter Scrape)</span><span>vor ${ago(st.heartbeat_age)}</span></div>
+      <div class="line"><span>Letzte Pack-Bewegung</span><span>${esc(st.last_pack_move ? st.last_pack_move.slice(11, 16) : "–")}</span></div>
+      <div class="line"><span>${ok(st.data_age != null && st.data_age < 120)} App-Daten</span><span>vor ${ago(st.data_age)}</span></div>
+      <div class="line"><span>Aktive Banner</span><span>${num(st.active_banners)}</span></div>
+      <div class="line"><span>${ok(!!st.backup_last)} Letztes Backup</span><span>${esc(st.backup_last ? st.backup_last.slice(8, 10) + "." + st.backup_last.slice(5, 7) + ". " + st.backup_last.slice(11, 16) : "–")}</span></div>
+      <div class="line"><span>Datenbank / App</span><span>${st.db_mb} / ${st.app_db_mb} MB</span></div>
+      <div class="line"><span>Discord</span><span>${st.slim ? `schlank · ${st.delay_minutes} Min` : "voll"} · ${st.outbox ?? "–"} wartend${st.slim && !st.cleanup_done ? " · räumt auf" : ""}</span></div>
+      <div class="line"><span>Nutzer / gesperrt / Push-Geräte</span><span>${st.users} / ${st.blocked} / ${st.push_devices}</span></div>
+    </div>` : `<div class="hint pad">Status nicht verfügbar</div>`;
   view.innerHTML = `<div class="section-title">👥 Nutzer <small class="muted">${users.length}</small></div>
+    <details class="user-card"><summary><b>🩺 System-Status</b><span>${st ? ok(st.heartbeat_age != null && st.heartbeat_age < 900) : ""}</span></summary>
+      <div class="user-body" style="padding-top:8px">${statusHtml}</div></details>
+    <details class="user-card"><summary><b>📢 Push an alle</b><span></span></summary>
+      <div class="user-body" style="padding:10px 12px">
+        <input id="ap-title" class="code-input plain" maxlength="80" placeholder="Titel" style="width:100%;margin-bottom:8px">
+        <input id="ap-body" class="code-input plain" maxlength="300" placeholder="Text" style="width:100%;margin-bottom:8px">
+        <button class="btn primary" id="ap-send">Senden</button><div class="hint" id="ap-msg"></div>
+      </div></details>
     ${users.map((u) => {
       const p = u.profile || {}, t = u.total;
       return `<details class="user-card" data-user="${esc(u.user_id)}">
-        <summary><span><b>${esc(u.name || "Unbekannt")}</b><br>
+        <summary><span><b>${esc(u.name || "Unbekannt")}</b>${u.blocked ? " ⛔" : ""}<br>
           <span class="muted">${esc(rankLabel(p.rank))} · ${u.medals} Medaille${u.medals === 1 ? "" : "n"}
-            · ${u.saved_at ? "übertragen " + esc(u.saved_at.slice(8, 10) + "." + u.saved_at.slice(5, 7) + ". " + u.saved_at.slice(11, 16)) : "nie übertragen"}</span></span>
+            · ${u.saved_at ? "übertragen " + esc(u.saved_at.slice(8, 10) + "." + u.saved_at.slice(5, 7) + ".") : "nie übertragen"}</span></span>
           <span>${t ? signed(t.balance) : `<span class="muted">–</span>`}</span></summary>
         <div class="user-body"><div class="loading">Lädt …</div></div>
       </details>`;
     }).join("") || `<div class="empty">Keine Nutzer.</div>`}`;
-  view.querySelectorAll(".user-card").forEach((card) => card.addEventListener("toggle", async () => {
+  view.querySelector("#ap-send").addEventListener("click", async () => {
+    const msg = view.querySelector("#ap-msg");
+    const title = view.querySelector("#ap-title").value.trim();
+    if (!title) { msg.textContent = "Titel fehlt"; return; }
+    if (await ask("An alle senden?", esc(title), ["Abbrechen", "Senden"]) !== "Senden") return;
+    try {
+      const r = await authApi("/api/admin/push", { title, body: view.querySelector("#ap-body").value.trim() });
+      msg.textContent = `Gesendet an ${r.sent} Geräte ✓`; haptic();
+    } catch (e) { msg.textContent = e.message; }
+  });
+  const others = users.filter((u) => !u.blocked);
+  view.querySelectorAll(".user-card[data-user]").forEach((card) => card.addEventListener("toggle", async () => {
     if (!card.open || card.dataset.loaded) return;
     card.dataset.loaded = "1";
     const body = card.querySelector(".user-body");
+    const u = users.find((x) => x.user_id === card.dataset.user);
     try {
       const h = await authApi(`/api/admin/user/${card.dataset.user}`);
       const p = h.profile || {};
@@ -1237,16 +1269,41 @@ async function showUsers() {
           ${stat("Mitgliedsrang", esc(rankLabel(p.rank)))}
           ${stat("Aufgeladen (Monat)", p.charge != null ? num(p.charge) + " Coins" : "–", p.charge_yen != null ? num(p.charge_yen) + " ¥" : "")}
           ${stat("Coin-Stand", h.member?.coins != null ? num(h.member.coins) + " Coins" : "–")}
-          ${stat("Geräte", String((h.devices || []).length), (h.devices || []).map((d) => esc(d.agent || "Gerät")).join(", "))}
+          ${stat("Geräte", String((h.devices || []).length))}
         </div>
+        ${u.user_id !== String(user.user_id) ? `<div style="margin:0 10px 6px"><button class="btn" data-block="${u.blocked ? 0 : 1}">
+          ${u.blocked ? "Entsperren" : "⛔ Sperren"}</button></div>` : ""}
         <h3 class="sub-title">🏅 Medaillen (${(h.medals || []).length})</h3>
-        <div class="rows">${(h.medals || []).map((m) => `
-          <a class="line claim-row" href="#/banner/${m.banner_id}"><span class="claim-thumb">${img(m.image, m.name, false, 320)}</span>
-            <span class="claim-text"><b>${esc(m.tier)}</b> ${esc(m.name)}<br><span class="muted">${esc(m.title || "Banner " + m.banner_id)}
-            ${m.value != null ? " · " + num(m.value) + " Coins" : ""}</span></span></a>`).join("")
-          || `<div class="line muted">Keine aktiven Medaillen</div>`}</div>
+        <div class="rows">${(h.medals || []).map((m, i) => `
+          <div class="line claim-row"><span class="claim-thumb">${img(m.image, m.name, false, 320)}</span>
+            <span class="claim-text"><b>${esc(m.tier)}</b> ${esc(m.name)}<br><span class="muted">${esc(m.title || "Banner " + m.banner_id)}</span></span>
+            <button class="icon-btn" data-medal="${i}" aria-label="Medaille bearbeiten">✎</button></div>`).join("")
+          || `<div class="line muted">Keine</div>`}</div>
         ${h.empty ? `<div class="hint pad">Nichts übertragen.</div>`
           : historySection(h).replace(/<h2>📊 Mein Verlauf/, "<h2>📊 Verlauf")}`;
+      body.querySelector("[data-block]")?.addEventListener("click", async (e) => {
+        const block = e.target.dataset.block === "1";
+        if (block && await ask("Sperren?", `${esc(u.name || "")}: alle Geräte abmelden, Verknüpfen blockieren.`,
+          ["Abbrechen", "Sperren"]) !== "Sperren") return;
+        await authApi("/api/admin/block", { user_id: u.user_id, blocked: block });
+        haptic(); showUsers();
+      });
+      body.querySelectorAll("[data-medal]").forEach((btn) => btn.addEventListener("click", async () => {
+        const m = h.medals[Number(btn.dataset.medal)];
+        const targets = others.filter((x) => x.user_id !== u.user_id).slice(0, 8);
+        const choice = await ask(`${m.tier} · ${m.name}`, "Korrigieren:",
+          ["Abbrechen", "Entfernen", ...targets.map((x) => `→ ${x.name || "Unbekannt"}`)]);
+        if (!choice || choice === "Abbrechen") return;
+        const payload = { pack_id: m.banner_id, tier: m.tier, action: "remove" };
+        if (choice.startsWith("→ ")) {
+          payload.action = "assign";
+          payload.user_id = targets[["Abbrechen", "Entfernen", ...targets.map((x) => `→ ${x.name || "Unbekannt"}`)].indexOf(choice) - 2].user_id;
+        }
+        await authApi("/api/admin/medal", payload);
+        haptic();
+        await ask("Gesendet", "Der Bot übernimmt es in wenigen Sekunden.", ["OK"]);
+        showUsers();
+      }));
     } catch (e) { body.innerHTML = `<div class="hint pad">Nicht ladbar: ${esc(e.message)}</div>`; }
   }));
 }
