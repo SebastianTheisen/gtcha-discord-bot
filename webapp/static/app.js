@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 65;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 66;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -723,7 +723,6 @@ async function showSettings() {
           Münzen, Käufe, Tickets, Ausgaben in ¥) samt allen Seitenzahlen und überträgt sie. Von der Kontoseite nur
           Zeilen mit Beträgen, Rang und Datum – Name und Adresse nicht. Ab dem zweiten Mal nur Neues: es hört auf
           zu blättern, sobald es bekannte Einträge sieht (alle 30 Tage einmal komplett).</div>
-        <div class="hint">ℹ️ Der Betreiber dieses Servers (Admin) kann deine übertragenen Daten und deine Statistik sehen.</div>
         <button class="btn" id="bm-full">Lesezeichen „Komplett übertragen“ kopieren</button>
         <div class="hint">Nur nötig, wenn im Verlauf eine Lücke gemeldet wird – überträgt wieder alle Seiten.</div>
         <div class="hint">Einrichten (einmalig): 1. In Safari irgendeine Seite als Lesezeichen sichern (Teilen → Lesezeichen),
