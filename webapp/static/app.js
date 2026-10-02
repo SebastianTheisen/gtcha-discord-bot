@@ -64,6 +64,12 @@ function buyHref(url) {
 const openLink = (b, label = "Öffnen ↗") => (safeUrl(b.buy_url)
   ? `<a class="open-btn" href="${esc(buyHref(b.buy_url))}" target="_blank" rel="noopener noreferrer" data-stop>${label}</a>` : "");
 
+// Bilder im Hintergrund in den Gerätespeicher holen (Service Worker), damit sie beim Blättern schon da sind
+function preloadImages(urls) {
+  const list = [...new Set(urls.filter((u) => safeUrl(u)).map(imgSrc).filter((u) => u.startsWith("/img?")))];
+  if (list.length) navigator.serviceWorker?.controller?.postMessage({ type: "preload", urls: list });
+}
+
 async function api(path, options) {
   const res = await fetch(path, { cache: "no-store", ...options });
   if (!res.ok) throw new Error(`${res.status}`);
@@ -197,6 +203,7 @@ function matches(b, q) {
 async function showList() {
   const { banners, updated } = await api("/api/banners");
   state.listData = { banners, updated };
+  if (!state.preloadedList) { state.preloadedList = true; preloadImages(banners.map((b) => b.image)); }
   // Grundgerüst nur einmal bauen, damit das Suchfeld beim Aktualisieren den Fokus behält
   if (!view.querySelector("#search")) {
     view.innerHTML = `
@@ -514,6 +521,7 @@ async function showBanner(id) {
     view.querySelectorAll(".pane").forEach((p) => { p.hidden = p.dataset.pane !== el.dataset.tab; });
   }));
   renderCards(b);
+  if (state.preloaded !== b.id) { state.preloaded = b.id; preloadImages(b.cards.map((c) => c.image)); }
   wireWatchButton(String(b.id)).catch(() => {});
   me().then(() => renderCards(b)).catch(() => {});
 }
