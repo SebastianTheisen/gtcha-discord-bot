@@ -1,5 +1,7 @@
 "use strict";
 
+const APP_VERSION = 34;   // zusammen mit ?v= in index.html und sw.js erhöhen
+
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
 const STATUS = {
@@ -648,7 +650,8 @@ async function showSettings() {
     </div>
     <h2>ℹ️ Über diese App</h2>
     <div class="panel"><div class="hint">Private, inoffizielle App mit den Daten deines GTCHA-Discord-Bots.
-      Kein Angebot von GTCHA. Gezogen wird immer auf der offiziellen Seite.</div></div>`;
+      Kein Angebot von GTCHA. Gezogen wird immer auf der offiziellen Seite.</div>
+      <div class="hint">App-Version ${APP_VERSION}</div></div>`;
   view.querySelector("#link-mode")?.addEventListener("change", (e) => save("linkMode", e.target.value));
   view.querySelector("#my-rank")?.addEventListener("change", (e) => save("myRank", e.target.value));
   view.querySelector("#my-charge")?.addEventListener("change", (e) => save("myCharge", String(Number(e.target.value.replace(/\D/g, "")) || 0)));

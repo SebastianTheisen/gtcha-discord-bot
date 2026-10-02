@@ -227,6 +227,10 @@ class App:
 @web.middleware
 async def security_headers(request, handler):
     response = await handler(request)
+    # App-Dateien (JS/CSS/Manifest) nie ungefragt aus dem Browser-Cache nehmen - sonst sieht man
+    # nach einem Update noch tagelang die alte Version
+    if request.path.startswith("/static/") and not request.path.endswith(".png"):
+        response.headers["Cache-Control"] = "no-cache"
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("Referrer-Policy", "no-referrer")
     response.headers.setdefault("X-Frame-Options", "DENY")
