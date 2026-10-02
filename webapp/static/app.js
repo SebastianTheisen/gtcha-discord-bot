@@ -46,8 +46,8 @@ const safeUrl = (u) => (typeof u === "string" && /^https:\/\//.test(u) ? u : "")
 const IMG_VERSION = 2;
 const imgSrc = (u) => (/^https:\/\/([\w-]+\.)*gtchaxonline\.com\//.test(u)
   ? `/img?v=${IMG_VERSION}&u=${encodeURIComponent(u)}` : u);
-const img = (u, alt = "") => (safeUrl(u)
-  ? `<img src="${esc(imgSrc(u))}" data-orig="${esc(u)}" alt="${esc(alt)}" loading="lazy" decoding="async">` : "");
+const img = (u, alt = "", eager = false) => (safeUrl(u)
+  ? `<img src="${esc(imgSrc(u))}" data-orig="${esc(u)}" alt="${esc(alt)}" loading="${eager ? "eager" : "lazy"}" decoding="async">` : "");
 const evClass = (p) => (p == null ? "" : p >= 100 ? "good" : p >= 70 ? "ok" : "");
 const time = (t) => new Date(t * 1000).toLocaleString("de-DE", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 const coins = (n) => `<span class="coin"></span>${n ? num(n) : "Gratis"}`;
@@ -448,7 +448,7 @@ async function showBanner(id) {
   view.innerHTML = `
     <a class="back" href="javascript:history.back()">‹ Zurück</a>
     ${flags(b)}
-    <div class="hero">${img(b.image, b.title)}${b.status !== "running" ? `<span class="status ${b.status}">${icon} ${label}</span>` : ""}
+    <div class="hero">${img(b.image, b.title, true)}${b.status !== "running" ? `<span class="status ${b.status}">${icon} ${label}</span>` : ""}
       <span class="price-pill">${coins(b.price)}</span></div>
     ${notMineNote(b)}
     ${glance(b)}
