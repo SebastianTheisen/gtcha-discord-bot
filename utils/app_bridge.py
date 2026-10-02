@@ -26,7 +26,11 @@ CREATE TABLE IF NOT EXISTS devices (
 CREATE TABLE IF NOT EXISTS medal_requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT, pack_id INTEGER, tier TEXT, discord_user_id TEXT, discord_name TEXT,
     action TEXT, status TEXT DEFAULT 'pending', reason TEXT, created_at TEXT, done_at TEXT);
+CREATE TABLE IF NOT EXISTS user_imports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, discord_user_id TEXT, kind TEXT, url TEXT, data TEXT, created_at TEXT);
 """
+MAX_IMPORT_BYTES = 2_000_000
+KEEP_IMPORTS = 50   # je Person
 
 
 def _hash(token: str) -> str:
@@ -86,6 +90,19 @@ class AppBridge:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("DELETE FROM devices WHERE token_hash = ?", (_hash(token),))
             await db.commit()
+
+    # --- Eigene GTCHA-Daten, per Lesezeichen von der eigenen Seite übertragen ---
+    async def add_import(self, user: Dict, kind: str, url: str, data: str) -> int:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute(
+                "INSERT INTO user_imports (discord_user_id, kind, url, data, created_at) VALUES (?, ?, ?, ?, ?)",
+                (user["user_id"], kind, url[:500], data, _now()))
+            await db.execute(
+                "DELETE FROM user_imports WHERE discord_user_id = ? AND id NOT IN "
+                "(SELECT id FROM user_imports WHERE discord_user_id = ? ORDER BY id DESC LIMIT ?)",
+                (user["user_id"], user["user_id"], KEEP_IMPORTS))
+            await db.commit()
+            return cur.lastrowid
 
     # --- Medaillen-Meldungen (App legt an, Bot arbeitet ab) ---
     async def add_request(self, pack_id: int, tier: str, user: Dict, action: str) -> int:

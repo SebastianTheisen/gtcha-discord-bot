@@ -427,3 +427,5 @@ details.section > summary small { font-size: 13px; color: var(--muted); font-wei
 .ptr.spinning { animation: ptrspin .8s linear infinite; color: var(--blue-dark); }
 @keyframes ptrspin { from { transform: translate(-50%, 20px) rotate(0); } to { transform: translate(-50%, 20px) rotate(360deg); } }
 #view { transition: transform .15s; }
+
+.bm-code { width: 100%; height: 90px; font-size: 11px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface-2); color: var(--text); }
