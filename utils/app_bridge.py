@@ -29,8 +29,8 @@ CREATE TABLE IF NOT EXISTS medal_requests (
 CREATE TABLE IF NOT EXISTS user_imports (
     id INTEGER PRIMARY KEY AUTOINCREMENT, discord_user_id TEXT, kind TEXT, url TEXT, data TEXT, created_at TEXT);
 """
-MAX_IMPORT_BYTES = 2_000_000
-KEEP_IMPORTS = 50   # je Person
+MAX_IMPORT_BYTES = 8_000_000
+KEEP_IMPORTS = 100   # je Person
 
 
 def _hash(token: str) -> str:

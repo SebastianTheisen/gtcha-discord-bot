@@ -162,6 +162,31 @@ class App:
         return web.json_response({"id": import_id, "text": len(page.get("text") or ""),
                                   "links": len(page.get("links") or []), "images": len(page.get("images") or [])})
 
+    async def api_import_form(self, request):
+        """"Alles übertragen"-Lesezeichen: Formular-POST von gtchaxonline.com (kein CORS nötig).
+
+        Der Schlüssel steckt im Formular (Safari kennt die App-Verknüpfung nicht). Danach zurück in die App.
+        """
+        form = await request.post()
+        try:
+            data = json.loads(form.get("d", ""))
+        except ValueError:
+            raise web.HTTPBadRequest(text="Ungültige Daten")
+        user = await self.bridge.device(str(data.get("t", "")))
+        if not user:
+            raise web.HTTPFound("/#/import-done?error=unlinked")
+        saved = pages = 0
+        for entry in data.get("pages") or []:
+            path = str(entry.get("path", ""))
+            if not re.fullmatch(r"[a-z0-9-]{1,40}", path) or path == "change-member":
+                continue
+            await self.bridge.add_import(user, "sync", f"https://gtchaxonline.com/{path}",
+                                         json.dumps(entry, ensure_ascii=False))
+            saved += 1
+            pages += len(entry.get("pages") or [])
+        logger.info(f"Sync von {user['name']}: {saved} Bereiche, {pages} Seiten")
+        raise web.HTTPSeeOther(f"/#/import-done?areas={saved}&pages={pages}")
+
     async def api_unlink(self, request):
         token = request.headers.get("X-Device-Token")
         if token:
@@ -276,6 +301,7 @@ def make_app(app: App) -> web.Application:
         web.get("/api/me/medals", app.api_my_medals),
         web.post("/api/unlink", app.api_unlink),
         web.post("/api/import", app.api_import),
+        web.post("/api/import-form", app.api_import_form),
         web.post("/api/medal", app.api_medal),
         web.get(r"/api/medal/{id:\d+}", app.api_medal_status),
         web.get("/api/push/key", app.api_push_key),
