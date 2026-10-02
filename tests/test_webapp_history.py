@@ -2,7 +2,7 @@ import asyncio
 from datetime import datetime
 
 from utils.app_bridge import AppBridge
-from webapp.history import (build_history, ingest, merge_newest_first, parse_cards, parse_coins, parse_member,
+from webapp.history import (build_history, ingest, merge_newest_first, parse_cards, parse_coins, parse_member, profile,
                             plan_claims)
 
 HEAD = "949\n1\n×\nMitglieds-ID\nTransaktionen\nGacha\nMünzen\nVerkauf\nTicket\n"
@@ -133,6 +133,23 @@ def test_ingest_incremental_coins_and_member():
     assert [e["t"][:10] for e in changed["coins"]["items"]] == [
         "2026-10-07", "2026-10-06", "2026-10-05", "2026-10-04", "2026-10-03", "2026-10-02", "2026-10-01"]
     assert changed["coins"]["gap"] is False
-    assert changed["member"]["info"] == {"coins": 1200, "spent_month_yen": 8000}   # alter ¥-Wert bleibt
+    info = changed["member"]["info"]
+    assert info["coins"] == 1200 and info["spent_month_yen"] == 8000   # alter ¥-Wert bleibt
     # vollständiger Lauf ersetzt
     assert len(ingest(stored, [{"path": "buy-point-history", "pages": [page("9")]}])["coins"]["items"]) == 1
+
+
+def test_profile_rank_and_monthly_charge():
+    rank_page = {"text": "949\nMitgliedschaftsrang\nBis zum nächsten Rang 39.999Coin\nWeiß\n*Rangbasierte Boni"}
+    member = {"text": "949\nAusgaben in diesem Monat\n8.000円"}
+    oct_ = datetime(2026, 10, 2, 3, 0)
+    stored = ingest({}, [{"path": "pending-detail", "pages": [rank_page]},
+                         {"path": "change-member", "pages": [member]}], now=oct_)
+    assert stored["member"]["info"]["rank"] == "white"
+    assert profile(stored, now=oct_)["charge"] == 8000 and profile(stored, now=oct_)["rank"] == "white"
+    # neuer Monat (JST): Aufladung zählt nicht mehr
+    assert profile(stored, now=datetime(2026, 10, 31, 15, 30))["charge"] == 0
+    # Rang bleibt erhalten, wenn ein späterer Lauf keinen liefert
+    later = ingest(stored, [{"path": "change-member", "pages": [{"text": "1.000\nCoin"}]}], now=oct_)
+    assert later["member"]["info"]["rank"] == "white" and later["member"]["info"]["coins"] == 1000
+    assert profile({})["rank"] is None and profile({})["charge"] is None
