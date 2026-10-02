@@ -7,6 +7,7 @@ Start: python -m webapp.server
 """
 
 import asyncio
+import json
 import os
 import re
 import sys
@@ -17,7 +18,7 @@ from aiohttp import web
 from loguru import logger
 
 from database.db import Database
-from utils.app_bridge import AppBridge
+from utils.app_bridge import MAX_IMPORT_BYTES, AppBridge
 from webapp.images import ImageCache, content_type
 from webapp.push import DEFAULTS, EVENTS, WATCH_EVENTS, PushService, build_events
 from webapp.view import BannerView
@@ -144,6 +145,23 @@ class App:
             raise web.HTTPUnauthorized(text="Gerät nicht mit Discord verknüpft")
         return web.json_response({"medals": await self.view.my_medals(user["user_id"])})
 
+    async def api_import(self, request):
+        """Eigene GTCHA-Seite (per Lesezeichen) speichern - nur mit verknüpftem Gerät, nur für diese Person."""
+        user = await self._user(request)
+        if not user:
+            raise web.HTTPUnauthorized(text="Gerät nicht mit Discord verknüpft")
+        raw = await request.read()
+        if len(raw) > MAX_IMPORT_BYTES:
+            raise web.HTTPRequestEntityTooLarge(max_size=MAX_IMPORT_BYTES, actual_size=len(raw))
+        body = json.loads(raw)
+        page = body.get("page") or {}
+        if not str(page.get("url", "")).startswith("https://gtchaxonline.com/"):
+            raise web.HTTPBadRequest(text="Nur Seiten von gtchaxonline.com")
+        import_id = await self.bridge.add_import(user, "raw", page["url"], json.dumps(page, ensure_ascii=False))
+        logger.info(f"Import von {user['name']}: {page['url']} ({len(raw) // 1024} KB)")
+        return web.json_response({"id": import_id, "text": len(page.get("text") or ""),
+                                  "links": len(page.get("links") or []), "images": len(page.get("images") or [])})
+
     async def api_unlink(self, request):
         token = request.headers.get("X-Device-Token")
         if token:
@@ -244,7 +262,7 @@ async def security_headers(request, handler):
 
 
 def make_app(app: App) -> web.Application:
-    web_app = web.Application(middlewares=[security_headers], client_max_size=64 * 1024)
+    web_app = web.Application(middlewares=[security_headers], client_max_size=MAX_IMPORT_BYTES + 1024)
     web_app.add_routes([
         web.get("/", app.index),
         web.get("/sw.js", app.service_worker),
@@ -257,6 +275,7 @@ def make_app(app: App) -> web.Application:
         web.get("/api/me", app.api_me),
         web.get("/api/me/medals", app.api_my_medals),
         web.post("/api/unlink", app.api_unlink),
+        web.post("/api/import", app.api_import),
         web.post("/api/medal", app.api_medal),
         web.get(r"/api/medal/{id:\d+}", app.api_medal_status),
         web.get("/api/push/key", app.api_push_key),
