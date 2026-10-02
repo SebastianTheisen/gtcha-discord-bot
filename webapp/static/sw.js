@@ -1,5 +1,8 @@
 // Service Worker: App-Hülle offline verfügbar halten, Push-Benachrichtigungen anzeigen.
-const CACHE = "gtcha-tracker-v31";
+const CACHE = "gtcha-tracker-v32";
+// Bilder dauerhaft auf dem Gerät halten (iOS leert den normalen Browser-Cache installierter Apps oft)
+const IMG_CACHE = "gtcha-img-v1";
+const IMG_MAX = 4000;
 const SHELL = ["/", "/static/style.css", "/static/app.js", "/static/icon-180.png?v=4", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
@@ -8,14 +11,38 @@ self.addEventListener("install", (event) => {
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(caches.keys()
-    .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+    .then((keys) => Promise.all(keys.filter((k) => k !== CACHE && k !== IMG_CACHE).map((k) => caches.delete(k))))
     .then(() => self.clients.claim()));
 });
+
+// Bilder: zuerst aus dem Gerätespeicher, sonst vom VPS holen und ablegen
+async function cachedImage(request) {
+  const cache = await caches.open(IMG_CACHE);
+  const hit = await cache.match(request);
+  if (hit) return hit;
+  const res = await fetch(request);
+  if (res.ok) {
+    await cache.put(request, res.clone());
+    trimImages(cache);
+  }
+  return res;
+}
+let trimming = false;
+async function trimImages(cache) {
+  if (trimming) return;
+  trimming = true;
+  try {
+    const keys = await cache.keys();
+    for (const key of keys.slice(0, Math.max(0, keys.length - IMG_MAX))) await cache.delete(key);   // älteste zuerst
+  } finally { trimming = false; }
+}
 
 // Daten immer frisch vom Server, nur die App-Hülle aus dem Cache (wenn offline)
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
-  if (event.request.method !== "GET" || url.origin !== location.origin || url.pathname.startsWith("/api/") || url.pathname === "/img") return;
+  if (event.request.method !== "GET" || url.origin !== location.origin) return;
+  if (url.pathname === "/img") { event.respondWith(cachedImage(event.request)); return; }
+  if (url.pathname.startsWith("/api/")) return;
   event.respondWith(fetch(event.request)
     .then((res) => {
       const copy = res.clone();
