@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 67;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 68;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -1219,7 +1219,8 @@ function adminSection(a) {
       <div class="hint"><b>Admin (sieht alle Nutzer-Statistiken):</b> ${(a.admins || []).map((x) =>
         `${esc(x.name || "nicht verknüpft")} <span class="muted">(${esc(x.user_id)})</span>`).join(", ") || "–"}<br>
         Deine Discord-ID: <b>${esc(a.you || "")}</b> – auf dem VPS in der <code>.env</code> als
-        <code>APP_ADMIN_IDS=${esc(a.you || "")}</code> eintragen, dann bist nur du Admin (Bot neu starten).</div>
+        <code>APP_ADMIN_IDS=${esc(a.you || "")}</code> eintragen und
+        <code>docker compose up -d --force-recreate gtcha-app gtcha-bot</code> – dann bist nur du Admin.</div>
       <div class="hint" id="admin-msg"></div>
       <div class="hint"><b>Schlank:</b> Startbeitrag nur mit Ampel 🟢/🟡/🔴 und „Hits noch drin“, neutraler Titel,
         keine Pack-Updates, kein „Lohnt sich“, kein Endspurt, keine Hit-Chance, kein Top-10-Kanal.

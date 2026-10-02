@@ -179,12 +179,22 @@ class AppBridge:
             await db.commit()
 
     async def admins(self) -> List[Dict]:
-        """Admins mit dem Namen aus der Discord-Verknüpfung (falls verknüpft)."""
+        """Admins aus der Tabelle (nur noch zur Anzeige; entschieden wird über APP_ADMIN_IDS)."""
         async with aiosqlite.connect(self.db_path) as db:
-            cur = await db.execute(
-                "SELECT a.discord_user_id, (SELECT discord_name FROM devices d WHERE d.discord_user_id = a.discord_user_id "
-                "ORDER BY created_at DESC LIMIT 1) FROM app_admins a")
-            return [{"user_id": u, "name": n} for u, n in await cur.fetchall()]
+            cur = await db.execute("SELECT discord_user_id FROM app_admins")
+            ids = [r[0] for r in await cur.fetchall()]
+        return await self.names(ids)
+
+    async def names(self, user_ids) -> List[Dict]:
+        """Discord-IDs mit dem Namen aus der Verknüpfung (falls verknüpft)."""
+        out = []
+        async with aiosqlite.connect(self.db_path) as db:
+            for u in user_ids:
+                cur = await db.execute("SELECT discord_name FROM devices WHERE discord_user_id = ? "
+                                       "ORDER BY created_at DESC LIMIT 1", (str(u),))
+                row = await cur.fetchone()
+                out.append({"user_id": str(u), "name": row[0] if row else None})
+        return out
 
     async def known_users(self) -> List[Dict]:
         """Alle Personen mit verknüpftem Gerät oder übertragenen Daten: ID, Name, Geräte, zuletzt aktiv."""

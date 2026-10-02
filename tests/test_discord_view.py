@@ -145,7 +145,7 @@ def test_slim_embed_shows_light_and_hits_only(env):
     assert "Ø Rückgabe pro Zug" in [f.name for f in full.fields]
 
 
-def test_admin_settings_only_for_admins(tmp_path):
+def test_admin_settings_only_for_admins(tmp_path, monkeypatch):
     from aiohttp.test_utils import TestClient, TestServer
 
     from webapp.server import App, make_app
@@ -157,7 +157,8 @@ def test_admin_settings_only_for_admins(tmp_path):
         tokens = {}
         for uid in (42, 7):
             tokens[uid] = (await app.bridge.redeem_code(await app.bridge.create_code(uid, f"U{uid}")))["token"]
-        await app.bridge.add_admin(42)
+        monkeypatch.setenv("APP_ADMIN_IDS", "42")
+        await app.bridge.add_admin(7)          # alter Tabelleneintrag zählt nicht - nur die .env
         web_app = make_app(app)
         web_app.on_startup.clear()
         web_app.on_cleanup.clear()
@@ -188,7 +189,7 @@ def test_admin_settings_only_for_admins(tmp_path):
 
 
 def test_admins_replaced_on_start_only_configured_ids(tmp_path, env, monkeypatch):
-    """Admin ist nur, wer in APP_ADMIN_IDS steht (sonst der Server-Inhaber) - frühere Einträge fliegen raus."""
+    """Admin-Tabelle spiegelt nur APP_ADMIN_IDS - frühere Einträge und der Server-Inhaber fliegen raus."""
     import config
     from bot.discord_view import DiscordViewMixin
 
@@ -215,6 +216,16 @@ def test_admins_replaced_on_start_only_configured_ids(tmp_path, env, monkeypatch
         assert not await bridge.is_admin(999) and not await bridge.is_admin(111)
         monkeypatch.setattr(config, "APP_ADMIN_IDS", [])
         await Bot(bridge)._remember_owner_as_admin()
-        assert [a["user_id"] for a in await bridge.admins()] == ["111"]
+        assert await bridge.admins() == []                      # leer = niemand, auch nicht der Inhaber
 
     asyncio.run(run())
+
+
+def test_webapp_admin_check_reads_env_each_time(monkeypatch):
+    from webapp.server import is_admin
+    monkeypatch.delenv("APP_ADMIN_IDS", raising=False)
+    assert not is_admin("42")                                    # leer = niemand
+    monkeypatch.setenv("APP_ADMIN_IDS", "42")
+    assert is_admin("42") and not is_admin("7") and not is_admin("")
+    monkeypatch.setenv("APP_ADMIN_IDS", " 42 , 99 ,abc")
+    assert is_admin("99") and not is_admin("abc")
