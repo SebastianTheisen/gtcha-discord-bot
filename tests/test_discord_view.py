@@ -229,3 +229,34 @@ def test_webapp_admin_check_reads_env_each_time(monkeypatch):
     assert is_admin("42") and not is_admin("7") and not is_admin("")
     monkeypatch.setenv("APP_ADMIN_IDS", " 42 , 99 ,abc")
     assert is_admin("99") and not is_admin("abc")
+
+
+def test_security_basics(tmp_path):
+    """Test-Push nur ans eigene Gerät, Sicherheits-Header, alte Rohdaten werden übernommen und gelöscht."""
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from tests.test_webapp_history import COINS
+    from webapp.server import App, make_app
+
+    async def run():
+        await Database(str(tmp_path / "gtcha_bot.db")).init()
+        app = App(str(tmp_path / "gtcha_bot.db"), str(tmp_path), "x")
+        await app.bridge.init()
+        await app.bridge.add_import({"user_id": "42"}, "sync", "https://gtchaxonline.com/buy-point-history",
+                                    json.dumps({"pages": [{"text": COINS}]}))
+        await app.migrate_raw_imports()
+        assert await app.bridge.raw_import_users() == []                       # Rohdaten weg
+        assert len((await app.bridge.get_history("42"))["coins"]["items"]) == 6   # Verlauf bleibt
+        web_app = make_app(app)
+        web_app.on_startup.clear()
+        web_app.on_cleanup.clear()
+        client = TestClient(TestServer(web_app))
+        await client.start_server()
+        res = await client.post("/api/push/test", json={})
+        assert res.status == 400                                               # nicht an alle
+        res = await client.get("/")
+        csp = res.headers["Content-Security-Policy"]
+        assert "script-src 'self'" in csp and "frame-ancestors 'none'" in csp
+        await client.close()
+
+    asyncio.run(run())
