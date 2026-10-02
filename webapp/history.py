@@ -12,8 +12,8 @@ Minute + Wert der umgewandelten Karte im Kartenpool).
 import re
 from bisect import bisect_left
 from collections import defaultdict
-from datetime import datetime, timedelta
-from typing import Dict, List
+from datetime import datetime, timedelta, timezone
+from typing import Dict, List, Optional
 
 DATE_TIME = re.compile(r"^(\d{4})/(\d{2})/(\d{2}) (\d{2}):(\d{2})$")
 DATE = re.compile(r"(\d{2,4})/(\d{2})/(\d{2})")
@@ -120,6 +120,28 @@ def parse_cards(pages: List[Dict]) -> List[Dict]:
                 card["image"], card["card_id"] = src, (m.group(1) if m else None)
         cards += page_cards
     return cards
+
+
+RANK_WORDS = {"weiß": "white", "weiss": "white", "white": "white", "bronze": "bronze", "silber": "silver",
+              "silver": "silver", "gold": "gold", "rainbow": "rainbow", "regenbogen": "rainbow",
+              "black": "black", "schwarz": "black"}
+
+
+def parse_rank(pages: List[Dict]) -> Optional[str]:
+    """Mitgliedsrang aus dem Kopf der Kontoseiten: "Bis zum nächsten Rang …" und darunter der Rang."""
+    for page in pages:
+        lines = _lines(page)
+        for j, line in enumerate(lines):
+            if "nächsten rang" in line.lower() or "next rank" in line.lower():
+                for nxt in lines[j + 1:j + 3]:
+                    rank = RANK_WORDS.get(nxt.lower())
+                    if rank:
+                        return rank
+    return None
+
+
+def jst_month(now: Optional[datetime] = None) -> str:
+    return ((now or datetime.now(timezone.utc).replace(tzinfo=None)) + JST_OFFSET).strftime("%Y-%m")
 
 
 def parse_member(pages: List[Dict]) -> Dict:
@@ -256,16 +278,17 @@ def merge_newest_first(old: List[Dict], new: List[Dict], key: tuple) -> tuple:
     return list(new) + list(old), not new
 
 
-def ingest(stored: Dict[str, Dict], entries: List[Dict]) -> Dict[str, Dict]:
+def ingest(stored: Dict[str, Dict], entries: List[Dict], now: Optional[datetime] = None) -> Dict[str, Dict]:
     """Ein "Alles übertragen" in den gespeicherten Verlauf übernehmen.
 
     entries: [{path, pages, partial}] - partial = nur die neuesten Seiten (Lesezeichen hat am bekannten
     Eintrag aufgehört), sonst vollständig (ersetzt das Gespeicherte). Rückgabe: geänderte Bereiche
     {coins|shipped|pending|member: {items/info, gap}}.
     """
-    changed = {}
+    changed, rank = {}, None
     for entry in entries:
         path, pages, partial = entry.get("path"), entry.get("pages") or [], bool(entry.get("partial"))
+        rank = rank or parse_rank(pages)
         if path == "buy-point-history":
             area, key = "coins", COIN_KEY
             new = [{**e, "t": e["t"].strftime(TIME_FMT)} for e in parse_coins(pages)]
@@ -276,6 +299,8 @@ def ingest(stored: Dict[str, Dict], entries: List[Dict]) -> Dict[str, Dict]:
             continue
         elif path == "change-member":
             info = {k: v for k, v in parse_member(pages).items() if v is not None}
+            if "spent_month_yen" in info:
+                info["month"] = jst_month(now)   # Ausgaben gelten nur für diesen Monat
             changed["member"] = {"info": {**((stored.get("member") or {}).get("info") or {}), **info}}
             continue
         else:
@@ -287,7 +312,20 @@ def ingest(stored: Dict[str, Dict], entries: List[Dict]) -> Dict[str, Dict]:
         else:
             items, gap = new, False
         changed[area] = {"items": items, "gap": gap}
+    if rank:
+        member = changed.get("member") or {"info": dict((stored.get("member") or {}).get("info") or {})}
+        member["info"]["rank"] = rank
+        changed["member"] = member
     return changed
+
+
+def profile(stored: Dict[str, Dict], now: Optional[datetime] = None) -> Dict:
+    """Rang und Aufladung (¥ diesen Monat) zum automatischen Ausfüllen in der App.
+    Ausgaben aus einem früheren Monat zählen nicht - im neuen Monat ist die Aufladung 0."""
+    info = (stored.get("member") or {}).get("info") or {}
+    charge = info.get("spent_month_yen") if info.get("month") == jst_month(now) else (0 if info.get("month") else None)
+    return {"rank": info.get("rank"), "charge": charge,
+            "updated_at": ((stored.get("member") or {}).get("updated_at") or "")[:16] or None}
 
 
 def build_history(areas: Dict[str, Dict], banners: Dict[int, Dict], moves: Dict[int, List[datetime]]) -> Dict:

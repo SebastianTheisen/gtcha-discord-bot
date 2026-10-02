@@ -20,7 +20,7 @@ from loguru import logger
 
 from database.db import Database
 from utils.app_bridge import MAX_IMPORT_BYTES, AppBridge
-from webapp.history import JST_OFFSET, build_from_stored, ingest, plan_claims, stored_events
+from webapp.history import JST_OFFSET, build_from_stored, ingest, plan_claims, profile, stored_events
 from webapp.images import ImageCache, content_type
 from webapp.push import DEFAULTS, EVENTS, WATCH_EVENTS, PushService, build_events
 from webapp.view import BannerView
@@ -229,6 +229,13 @@ class App:
                 stored = await self.bridge.get_history(user["user_id"])
         return stored
 
+    async def api_my_profile(self, request):
+        """Rang und Aufladung aus dem letzten Übertragen (zum automatischen Ausfüllen)."""
+        user = await self._user(request)
+        if not user:
+            raise web.HTTPUnauthorized(text="Gerät nicht mit Discord verknüpft")
+        return web.json_response(profile(await self.history(user)))
+
     async def api_my_history(self, request):
         """Eigener Verlauf aus allen "Alles übertragen"-Läufen (nur für die verknüpfte Person)."""
         user = await self._user(request)
@@ -242,6 +249,7 @@ class App:
         # Rechnen außerhalb der Ereignisschleife - die App bleibt währenddessen bedienbar
         data = await asyncio.get_running_loop().run_in_executor(None, build_from_stored, stored, banners, moves)
         data["saved_at"] = max(a.get("updated_at") or "" for a in stored.values())[:16]
+        data["profile"] = profile(stored)
         data["auto_claims"] = await self.bridge.auto_claims(user["user_id"])
         for c in data["auto_claims"]:
             c["title"] = (banners.get(c["pack_id"]) or {}).get("title")
@@ -360,6 +368,7 @@ def make_app(app: App) -> web.Application:
         web.get("/api/me", app.api_me),
         web.get("/api/me/medals", app.api_my_medals),
         web.get("/api/me/history", app.api_my_history),
+        web.get("/api/me/profile", app.api_my_profile),
         web.post("/api/unlink", app.api_unlink),
         web.post("/api/import", app.api_import),
         web.post("/api/import-form", app.api_import_form),

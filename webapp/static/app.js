@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 49;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 50;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -99,6 +99,17 @@ const RANKS = [["white", "Weiß"], ["bronze", "Bronze"], ["silver", "Silber"], [
                ["rainbow", "Rainbow"], ["black", "Black"]];
 const myRank = () => load("myRank", "");
 const myCharge = () => Number(load("myCharge", "0")) || 0;
+// Rang und Aufladung aus dem letzten "Alles übertragen" übernehmen - nur wenn es neue Daten gibt,
+// eine Änderung von Hand gilt also bis zum nächsten Übertragen. Ohne Übertragen bleibt alles manuell.
+function applyProfile(p) {
+  if (!p || !p.updated_at || (!p.rank && p.charge == null)) return false;
+  const stamp = `${p.updated_at}|${p.rank}|${p.charge}`;
+  if (load("profileApplied", "") === stamp) return false;
+  if (p.rank) save("myRank", p.rank);
+  if (p.charge != null) save("myCharge", String(p.charge));
+  save("profileApplied", stamp);
+  return true;
+}
 // true = kann ich kaufen, false = nicht, null = unbekannt (Rang nicht eingestellt)
 function canBuy(b) {
   if (!myRank()) return null;
@@ -110,7 +121,7 @@ function canBuy(b) {
 function whyNot(b) {
   if (b.password) return "nur mit Passwort";
   if (b.ranks?.length && !b.ranks.includes(myRank())) return "nicht für deinen Mitgliedsrang";
-  if (b.min_charge && myCharge() < b.min_charge) return `erst ab ${num(b.min_charge)} Coins Aufladung`;
+  if (b.min_charge && myCharge() < b.min_charge) return `erst ab ${num(b.min_charge)} Aufladung im Monat`;
   return "";
 }
 const notMineNote = (b) => (canBuy(b) === false ? `<div class="notice warn">🚫 Für dich nicht kaufbar: ${whyNot(b)}</div>` : "");
@@ -597,6 +608,8 @@ async function showSettings() {
   const [medals, hist] = user ? await Promise.all([
     authApi("/api/me/medals").then((r) => r.medals).catch(() => []),
     authApi("/api/me/history").catch(() => null)]) : [[], null];
+  applyProfile(hist?.profile);
+  const prof = hist?.profile;
   view.innerHTML = `
     <div class="section-title">👤 ${user ? esc(user.name) : "Ich"}</div>
     ${linkPanel(user)}
@@ -617,8 +630,12 @@ async function showSettings() {
           ${RANKS.map(([k, l]) => `<option value="${k}" ${k === myRank() ? "selected" : ""}>${l}</option>`).join("")}</select>
         <input id="my-charge" class="code-input plain" inputmode="numeric" placeholder="Aufladung" value="${myCharge() || ""}">
       </div>
-      <div class="hint">Rang und diesen Monat aufgeladene Coins. Damit graut die App Banner aus, die du nicht kaufen kannst,
-        und der Filter „✅ Für mich“ funktioniert. Nur auf diesem Gerät gespeichert.</div>
+      <div class="hint">Rang und diesen Monat aufgeladen (¥, „Ausgaben in diesem Monat“ auf deiner Kontoseite). Damit graut
+        die App Banner aus, die du nicht kaufen kannst, und der Filter „✅ Für mich“ funktioniert.</div>
+      <div class="hint">${prof && prof.updated_at && (prof.rank || prof.charge != null)
+        ? `🔄 Wird beim „Alles übertragen“ automatisch ausgefüllt (zuletzt ${esc(prof.updated_at.slice(8, 10) + "." + prof.updated_at.slice(5, 7) + ". " + prof.updated_at.slice(11, 16))}).
+           Von Hand ändern geht trotzdem – gilt bis zum nächsten Übertragen.`
+        : "Von Hand auswählen – oder unten per Lesezeichen „Alles übertragen“ automatisch ausfüllen lassen."}</div>
     </div>
     <h2>🔔 Push-Benachrichtigungen</h2>
     ${!isStandalone() ? `<div class="notice" style="margin-bottom:12px">Auf dem iPhone gehen Pushes nur, wenn die App installiert ist:
@@ -1216,3 +1233,5 @@ document.addEventListener("visibilitychange", () => {
 });
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
 route();
+// Rang/Aufladung beim Start aus dem letzten Übertragen holen (Banner-Liste danach neu zeichnen)
+if (deviceToken()) authApi("/api/me/profile").then((p) => { if (applyProfile(p) && state.render) state.render().catch(() => {}); }).catch(() => {});
