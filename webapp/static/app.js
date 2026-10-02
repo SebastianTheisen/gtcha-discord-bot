@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 45;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 46;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -657,7 +657,8 @@ async function showSettings() {
         <div class="hint">Öffnet die Seite in Safari – dort Adressleiste antippen und „An GTCHA Tracker“ wählen.</div>
         <button class="btn primary" id="bm-sync">Lesezeichen „Alles übertragen“ kopieren</button>
         <div class="hint">Auf irgendeiner gtchaxonline-Seite antippen: lädt deine Verlaufsseiten (Gacha, Versand,
-          Münzen, Käufe, Tickets) samt allen Seitenzahlen und überträgt sie. Kontodaten (Name, Adresse) nicht.</div>
+          Münzen, Käufe, Tickets, Ausgaben in ¥) samt allen Seitenzahlen und überträgt sie. Von der Kontoseite nur
+          Zeilen mit Beträgen, Rang und Datum – Name und Adresse nicht.</div>
         <button class="btn" id="bm-copy">Lesezeichen „Nur diese Seite“ kopieren</button>
         <div class="hint">Einrichten (einmalig): 1. In Safari irgendeine Seite als Lesezeichen sichern (Teilen → Lesezeichen),
           Name „An GTCHA Tracker“. 2. Lesezeichen bearbeiten, Adresse löschen und den kopierten Code einfügen.<br>
@@ -979,9 +980,9 @@ function bookmarkletCode(token) {
 
 // "Alles übertragen": lädt die eigenen Verlaufsseiten nacheinander unsichtbar (iframe, gleiche Seite),
 // blättert jeweils durch alle Seitenzahlen und schickt alles per Formular an den VPS. change-member
-// (Name/Adresse) ist bewusst nicht dabei.
+// liefert die Ausgaben in Yen; von dort gehen nur Zeilen mit Beträgen/Rang/Datum mit (keine Name/Adresse).
 const SYNC_PAGES = ["undecided-detail", "pending-detail", "shipped-detail", "downloaded-detail",
-                    "buy-point-history", "purchase-history", "ticket-history"];
+                    "buy-point-history", "purchase-history", "ticket-history", "change-member"];
 function bookmarkletSync(token) {
   const src = `(async()=>{
 if(!/gtchaxonline\\.com$/.test(location.hostname)){alert('Bitte auf gtchaxonline.com öffnen');return}
@@ -990,7 +991,8 @@ const box=document.createElement('div');box.style.cssText='position:fixed;z-inde
 const say=t=>{box.textContent='GTCHA Tracker: '+t};
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const fr=document.createElement('iframe');fr.style.cssText='position:fixed;left:-3000px;top:0;width:420px;height:900px';document.body.appendChild(fr);
-const grab=d=>({text:d.body.innerText.slice(0,40000),images:[...d.querySelectorAll('img')].map(i=>i.getAttribute('src')).filter(s=>s&&s.includes('/card/')).slice(0,400)});
+const keep=/[¥￥]|coin|münz|rang|rank|\\d{4}[\\/.-]\\d{1,2}[\\/.-]\\d{1,2}|^[\\d.,\\s]+$/i;
+const grab=d=>({text:(d.location.pathname.includes('change-member')?d.body.innerText.split('\\n').filter(l=>keep.test(l)).join('\\n'):d.body.innerText).slice(0,40000),images:[...d.querySelectorAll('img')].map(i=>i.getAttribute('src')).filter(s=>s&&s.includes('/card/')).slice(0,400)});
 const settle=async()=>{let last='',same=0;for(let i=0;i<40;i++){await sleep(400);const d=fr.contentDocument;const t=d&&d.body?d.body.innerText:'';if(t&&t===last){if(++same>=3)return}else same=0;last=t}};
 const isNum=x=>x.children.length===0&&/^\\d+$/.test(x.textContent.trim());
 const out=[];
