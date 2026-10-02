@@ -1,9 +1,9 @@
 // Service Worker: App-Hülle offline verfügbar halten, Push-Benachrichtigungen anzeigen.
-const CACHE = "gtcha-tracker-v56";
+const CACHE = "gtcha-tracker-v57";
 // Bilder dauerhaft auf dem Gerät halten (iOS leert den normalen Browser-Cache installierter Apps oft)
 const IMG_CACHE = "gtcha-img-v2";
 const IMG_MAX = 4000;
-const SHELL = ["/", "/static/style.css?v=56", "/static/app.js?v=56", "/static/icon-180.png?v=4", "/manifest.webmanifest"];
+const SHELL = ["/", "/static/style.css?v=57", "/static/app.js?v=57", "/static/icon-180.png?v=4", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -49,13 +49,20 @@ self.addEventListener("fetch", (event) => {
   // hochfahren (~2 s bis zum ersten Bild). Direkt vom VPS kommen sie in ~40 ms (plus Safari-Cache).
   if (url.pathname === "/img") return;
   if (url.pathname.startsWith("/api/")) return;
-  event.respondWith(fetch(event.request, { cache: "no-cache" })
+  // Seitenaufruf: ohne RequestInit weiterreichen (bei mode "navigate" wirft fetch sonst einen Fehler)
+  const navigate = event.request.mode === "navigate";
+  event.respondWith((navigate ? fetch(event.request) : fetch(event.request, { cache: "no-cache" }))
     .then((res) => {
-      const copy = res.clone();
-      caches.open(CACHE).then((c) => c.put(event.request, copy));
+      if (res.ok) {
+        const copy = res.clone();
+        caches.open(CACHE).then((c) => c.put(event.request, copy));
+      }
       return res;
     })
-    .catch(() => caches.match(event.request).then((r) => r || caches.match("/"))));
+    // offline: gleiche Datei aus dem Speicher (notfalls aus einer anderen Version) - nie die Startseite
+    // als Ersatz für CSS/JS, sonst steht die App ohne Design und ohne Code da
+    .catch(() => caches.match(event.request, { ignoreSearch: true })
+      .then((r) => r || (navigate ? caches.match("/") : Response.error()))));
 });
 
 self.addEventListener("push", (event) => {
