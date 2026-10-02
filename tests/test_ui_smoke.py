@@ -64,6 +64,8 @@ async def _run(tmp_path, browser_path):
             browser = await pw.chromium.launch(**({"executable_path": browser_path} if browser_path else {}))
         except Exception as e:
             await server.close()
+            if os.getenv("CI"):   # im CI muss der Test laufen - nicht unbemerkt überspringen
+                raise
             pytest.skip(f"Kein Chromium: {e}")
         page = await browser.new_page(viewport={"width": 390, "height": 844})
         # nur der eigene Server - Bilder/GTCHA nicht aus dem Netz laden
