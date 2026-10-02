@@ -1,9 +1,9 @@
 // Service Worker: App-Hülle offline verfügbar halten, Push-Benachrichtigungen anzeigen.
-const CACHE = "gtcha-tracker-v39";
+const CACHE = "gtcha-tracker-v40";
 // Bilder dauerhaft auf dem Gerät halten (iOS leert den normalen Browser-Cache installierter Apps oft)
 const IMG_CACHE = "gtcha-img-v2";
 const IMG_MAX = 4000;
-const SHELL = ["/", "/static/style.css?v=39", "/static/app.js?v=39", "/static/icon-180.png?v=4", "/manifest.webmanifest"];
+const SHELL = ["/", "/static/style.css?v=40", "/static/app.js?v=40", "/static/icon-180.png?v=4", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -12,6 +12,7 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(caches.keys()
     .then((keys) => Promise.all(keys.filter((k) => k !== CACHE && k !== IMG_CACHE).map((k) => caches.delete(k))))
+    .then(() => trimImages(caches.open(IMG_CACHE)))
     .then(() => self.clients.claim()));
 });
 
@@ -21,40 +22,13 @@ async function cachedImage(request) {
   const hit = await cache.match(request);
   if (hit) return hit;
   const res = await fetch(request);
-  if (res.ok) {
-    await cache.put(request, res.clone());
-    trimImages(cache);
-  }
+  if (res.ok) cache.put(request, res.clone());   // nicht warten - das Bild geht sofort an die Seite
   return res;
-}
-// Vorladen auf Wunsch der Seite: fehlende Bilder im Hintergrund holen (höchstens 6 gleichzeitig)
-let preloadQueue = [];
-let preloadRunning = 0;
-async function preloadNext() {
-  if (preloadRunning >= 6 || !preloadQueue.length) return;
-  const url = preloadQueue.shift();
-  preloadRunning++;
-  try {
-    const cache = await caches.open(IMG_CACHE);
-    if (!(await cache.match(url))) {
-      const res = await fetch(url);
-      if (res.ok) await cache.put(url, res);
-    }
-  } catch (e) { /* nächstes Bild */ }
-  preloadRunning--;
-  preloadNext();
 }
 self.addEventListener("message", (event) => {
   if (event.data?.type === "stats") {
-    caches.open(IMG_CACHE).then((c) => c.keys()).then((k) => event.ports[0]?.postMessage({ images: k.length, queue: preloadQueue.length }));
-    return;
+    caches.open(IMG_CACHE).then((c) => c.keys()).then((k) => event.ports[0]?.postMessage({ images: k.length, queue: 0 }));
   }
-  if (event.data?.type !== "preload") return;
-  const urls = (event.data.urls || []).filter((u) => typeof u === "string" && u.startsWith("/img?"));
-  // neue Wünsche zuerst (die gerade geöffnete Seite)
-  preloadQueue = [...new Set([...urls, ...preloadQueue])].slice(0, 3000);
-  for (let i = 0; i < 6; i++) preloadNext();
-  trimImages(caches.open(IMG_CACHE));
 });
 
 let trimming = false;
