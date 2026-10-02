@@ -368,21 +368,36 @@ class ThreadsMixin:
             thread_id = int(thread_data['thread_id'])
             if thread_data.get('title') == title:
                 return
-            thread = self.get_channel(thread_id) or await self.fetch_channel(thread_id)
-            if not isinstance(thread, discord.Thread):
-                return
-            if thread.name != title:
-                if thread.archived:
-                    await discord_rate_limiter.acquire("thread_edit")
-                    await thread.edit(archived=False)
-                await discord_rate_limiter.acquire("thread_edit")
-                await thread.edit(name=title)
-                logger.info(f"Thread-Titel: {title}")
-            await self.db.set_thread_title(thread_id, title)
-        except discord.NotFound:
-            pass
+            # Umbenennen im Hintergrund: Discord erlaubt pro Thread nur ~2 Umbenennungen in 10 Minuten und
+            # lässt sonst minutenlang warten - darauf darf der Scrape (und damit die Pack-Zahlen) nie warten.
+            pending = self.__dict__.setdefault("_title_tasks", {})
+            pending[thread_id] = (pack_id, title)
+            if not getattr(self, "_title_worker", None) or self._title_worker.done():
+                self._title_worker = asyncio.create_task(self._rename_threads())
         except Exception as e:
             logger.warning(f"Thread-Titel von {pack_id} nicht aktualisiert: {type(e).__name__}: {e}")
+
+    async def _rename_threads(self):
+        """Arbeitet ausstehende Umbenennungen nacheinander ab (jeweils nur der neueste Titel je Thread)."""
+        pending = self.__dict__.setdefault("_title_tasks", {})
+        while pending:
+            thread_id, (pack_id, title) = pending.popitem()
+            try:
+                thread = self.get_channel(thread_id) or await self.fetch_channel(thread_id)
+                if not isinstance(thread, discord.Thread):
+                    continue
+                if thread.name != title:
+                    if thread.archived:
+                        await discord_rate_limiter.acquire("thread_edit")
+                        await thread.edit(archived=False)
+                    await discord_rate_limiter.acquire("thread_edit")
+                    await thread.edit(name=title)
+                    logger.info(f"Thread-Titel: {title}")
+                await self.db.set_thread_title(thread_id, title)
+            except discord.NotFound:
+                pass
+            except Exception as e:
+                logger.warning(f"Thread-Titel von {pack_id} nicht aktualisiert: {type(e).__name__}: {e}")
 
     async def _update_thread_embed(self, banner, initial_pool: bool = False):
         """Aktualisiert das Embed im Thread mit aktuellen Daten (z.B. Countdown, Ø Rückgabe)."""
