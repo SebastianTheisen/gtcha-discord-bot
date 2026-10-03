@@ -47,6 +47,10 @@ async def _seed(tmp_path):
             "INSERT INTO banners (pack_id, category, title, price_coins, current_packs, total_packs, is_active, "
             "created_at, updated_at, card_pool) VALUES (24126, 'Store', '宝石ガチャ BtoB', 5000, 200, 200, 2, "
             "'2026-10-03', '2026-10-03', ?)", (json.dumps(pool),))
+        await conn.execute(   # beendeter Banner (Archiv)
+            "INSERT INTO banners (pack_id, category, title, price_coins, current_packs, total_packs, is_active, "
+            "created_at, updated_at, card_pool) VALUES (24099, 'MIX', 'Altes Pack', 800, 0, 50, 0, "
+            "'2026-09-01', datetime('now'), ?)", (json.dumps(pool),))
         await conn.execute("INSERT INTO pack_history (banner_id, old_count, new_count, changed_at) "
                            "VALUES (24114, 41, 40, '2026-10-01T12:00:00')")
         await conn.commit()
@@ -121,6 +125,13 @@ async def _run(tmp_path, browser_path):
             problems.append("Store-Pack fehlt in der Kategorie 'Store'")
         if "Edelstein-Gacha BtoB" not in text:   # Titel sichtbar und übersetzt
             problems.append(f"Store-Pack ohne deutschen Titel: {text[:120]!r}")
+        if "24099" in await page.inner_text("#results") or "24099" in text:
+            problems.append("Beendeter Banner steht in der normalen Liste")
+        await page.click('[data-cat="Archiv"]')
+        await page.wait_for_timeout(1000)
+        text = await page.inner_text("#results")
+        if "24099" not in text or "Beendet am" not in text or "24126" in text:
+            problems.append(f"Archiv falsch: {text[:160]!r}")
         await browser.close()
     await server.close()
     return problems

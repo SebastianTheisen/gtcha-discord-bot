@@ -16,6 +16,8 @@ from utils.card_pool import card_value, fmt_coins
 
 
 PACK_HISTORY_DAYS = 90
+# Beendete Banner bleiben so lange komplett erhalten (App: Kategorie Archiv), danach nur noch banner_archive
+ARCHIVE_DAYS = 30
 API_LOG_DAYS = 30
 # Store-Packs (gtchaxonline.com/store) liegen in derselben Tabelle, aber mit is_active = 2: alle Funktionen des Bots
 # für Discord (Threads, Top 10, "nicht gefunden") arbeiten nur mit is_active = 1 und sehen sie nie; Funktionen
@@ -848,9 +850,27 @@ class Database:
                 SELECT dt.thread_id FROM discord_threads dt
                 JOIN banners b ON dt.banner_id = b.pack_id
                 WHERE b.is_active = 0 AND b.updated_at <= ?
-                  AND dt.thread_id IS NOT NULL
+                  AND dt.thread_id IS NOT NULL AND dt.is_expired = 0
             """, (cutoff,))
             return [row[0] for row in await cursor.fetchall()]
+
+    async def mark_threads_expired(self, thread_ids: List[int]) -> None:
+        """Discord-Threads als gelöscht markieren (die Daten des Banners bleiben fürs Archiv)."""
+        if not thread_ids:
+            return
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.executemany("UPDATE discord_threads SET is_expired = 1 WHERE thread_id = ?",
+                                 [(int(t),) for t in thread_ids])
+            await db.commit()
+
+    async def get_ended_banners(self, days: int = ARCHIVE_DAYS) -> Dict[int, Dict]:
+        """Beendete Banner (auch Store-Packs) der letzten `days` Tage, neueste zuerst."""
+        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM banners WHERE is_active = 0 AND updated_at >= ? "
+                                      "ORDER BY updated_at DESC", (cutoff,))
+            return {row["pack_id"]: dict(row) for row in await cursor.fetchall()}
 
     async def purge_archived_data(self, max_age_hours: int = 1) -> int:
         """Löscht archivierte Banner/Threads/Medals/History die älter als max_age_hours sind."""
@@ -878,12 +898,13 @@ class Database:
                     "created_at, ended_at, card_values, card_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (*row[:7], datetime.now().isoformat(), *archive_pool(row[8])))
 
-            # Medals löschen
+            # Medals löschen (Store-Packs: interne Nummer -pack_id)
             await db.execute(f"""
                 DELETE FROM medals WHERE thread_id IN (
                     SELECT thread_id FROM discord_threads WHERE banner_id IN ({placeholders})
                 )
             """, old_ids)
+            await db.execute(f"DELETE FROM medals WHERE thread_id IN ({placeholders})", [-pid for pid in old_ids])
 
             # Pack-Bewegungen bleiben PACK_HISTORY_DAYS Tage (Zuordnung im eigenen Verlauf), siehe unten
             await db.execute(f"DELETE FROM convert_history WHERE banner_id IN ({placeholders})", old_ids)

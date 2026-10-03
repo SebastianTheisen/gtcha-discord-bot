@@ -117,8 +117,10 @@ class BannerView:
         pid = row['pack_id']
         await self._refresh_translations()
         thread = await self.db.get_thread_by_banner_id(pid) or {}
-        thread_id = int(thread['thread_id']) if thread.get('thread_id') and not thread.get('is_expired') else 0
-        store = row.get('is_active') == STORE
+        ended = row.get('is_active') == 0   # Archiv: Discord-Thread ist gelöscht, Medaillen bleiben gespeichert
+        thread_id = (int(thread['thread_id']) if thread.get('thread_id') and (ended or not thread.get('is_expired'))
+                     else 0)
+        store = row.get('is_active') == STORE or (ended and row.get('category') == 'Store')
         medal_thread = store_thread_id(pid) if store else thread_id   # Store-Pack: Medaillen ohne Discord-Thread
         price, remaining, total = (to_int(row.get(k)) for k in ('price_coins', 'current_packs', 'total_packs'))
         pool = json.loads(row['card_pool']) if row.get('card_pool') else None
@@ -166,6 +168,9 @@ class BannerView:
         }
         if store:
             data["store"] = True   # wie ein normaler Banner, nur ohne Discord
+        if ended:
+            data["archived"], data["status"], data["ended_at"] = True, "ended", epoch(row.get('updated_at'))
+            data["thread_id"] = None   # Thread gibt es nicht mehr
         if with_pool:
             data["hits"] = self._hit_list(pool, pulled, sure, winners, unsure, price) if pool else []
             data["hit_keys_detected"] = sorted(sure)
@@ -281,6 +286,11 @@ class BannerView:
         """Alle Bilder der aktiven Banner: Banner zuerst, dann Hits, dann alle übrigen Karten."""
         rows = list((await self.db.get_active_banners()).values()) + list((await self.db.get_store_banners()).values())
         banners, hits, cards = [], [], []
+        # Archiv: Bannerbild und Hits behalten (übrige Karten lädt die Detailseite bei Bedarf)
+        for row in (await self.db.get_ended_banners()).values():
+            pool = json.loads(row['card_pool']) if row.get('card_pool') else {}
+            banners.append(row.get('image_url'))
+            hits += [h.get('image') for h in pool.get('hits') or []]
         for row in rows:
             banners.append(row.get('image_url'))
             pool = json.loads(row['card_pool']) if row.get('card_pool') else {}
@@ -361,6 +371,10 @@ class BannerView:
     async def all_banners(self, with_pool: bool = False) -> List[Dict]:
         rows = list((await self.db.get_active_banners()).values()) + list((await self.db.get_store_banners()).values())
         return [await self.summary(row, with_pool=with_pool) for row in rows]
+
+    async def archived_banners(self) -> List[Dict]:
+        """Beendete Banner der letzten 30 Tage (Kategorie Archiv), zuletzt beendete zuerst."""
+        return [await self.summary(row) for row in (await self.db.get_ended_banners()).values()]
 
     @staticmethod
     def hot(banners: List[Dict]) -> List[Dict]:
