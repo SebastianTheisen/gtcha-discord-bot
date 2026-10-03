@@ -140,6 +140,13 @@ class Database:
                     pack_count INTEGER, sendcount INTEGER, sendprice INTEGER, kangen INTEGER, sendpeople INTEGER,
                     price INTEGER);
                 CREATE INDEX IF NOT EXISTS api_log_banner ON api_log (banner_id, id);
+                -- Automatisch (aus Versand/Umwandlung) abgehakte Hits - zur Kontrolle für den Admin
+                CREATE TABLE IF NOT EXISTS auto_ticks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, pack_id INTEGER, card_key TEXT, tier TEXT, name TEXT,
+                    value INTEGER, rebuild INTEGER, created_at TEXT);
+                -- Vom Admin als falsch markierte Erkennungen: dieser Hit gilt nicht als automatisch erkannt
+                CREATE TABLE IF NOT EXISTS pull_rejects (pack_id INTEGER, card_key TEXT, created_at TEXT,
+                    PRIMARY KEY (pack_id, card_key));
                 -- Abgeschlossene Banner als Lernfall (Versand-Zeiten, Medaillen, Beobachtungen), siehe utils/ship_odds.py
                 CREATE TABLE IF NOT EXISTS banner_cases (pack_id INTEGER PRIMARY KEY, ended_at TEXT, data TEXT);
                 -- Übersetzungen japanischer Namensteile (DeepL), siehe utils/translate.py
@@ -948,6 +955,44 @@ class Database:
                 at = None
             out[tier] = {"user_id": user, "source": source or "discord", "at": at}
         return out
+
+    async def log_auto_ticks(self, pack_id: int, ticks: List[Dict], rebuild: bool) -> None:
+        if not ticks:
+            return
+        now = datetime.now().isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.executemany(
+                "INSERT INTO auto_ticks (pack_id, card_key, tier, name, value, rebuild, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [(pack_id, t["key"], t.get("tier"), t.get("name"), t.get("value"), int(rebuild), now) for t in ticks])
+            await db.execute("DELETE FROM auto_ticks WHERE created_at < ?",
+                             ((datetime.now() - timedelta(days=PACK_HISTORY_DAYS)).isoformat(),))
+            await db.commit()
+
+    async def get_rejects(self, pack_id: int) -> set:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT card_key FROM pull_rejects WHERE pack_id = ?", (pack_id,))
+            return {r[0] for r in await cur.fetchall()}
+
+    async def set_reject(self, pack_id: int, key: str, rejected: bool) -> None:
+        """Admin: automatische Erkennung eines Hits als falsch markieren (oder wieder zulassen). Beim Markieren
+        verschwindet der Hit sofort aus den erkannten; beim Zulassen zählt er ab der nächsten Auswertung wieder."""
+        async with aiosqlite.connect(self.db_path) as db:
+            if rejected:
+                await db.execute("INSERT OR IGNORE INTO pull_rejects (pack_id, card_key, created_at) VALUES (?, ?, ?)",
+                                 (pack_id, key, datetime.now().isoformat()))
+                cur = await db.execute("SELECT pulled_cards FROM banners WHERE pack_id = ?", (pack_id,))
+                row = await cur.fetchone()
+                if row and row[0]:
+                    pulled = [k for k in json.loads(row[0]) if k != key]
+                    await db.execute("UPDATE banners SET pulled_cards = ? WHERE pack_id = ?",
+                                     (json.dumps(pulled), pack_id))
+            else:
+                await db.execute("DELETE FROM pull_rejects WHERE pack_id = ? AND card_key = ?", (pack_id, key))
+                # beim nächsten Versand neu auswerten (alle Schübe)
+                await db.execute("UPDATE banners SET ship_batches = NULL, ship_count = NULL WHERE pack_id = ?",
+                                 (pack_id,))
+            await db.commit()
 
     async def save_case(self, pack_id: int, ended_at: Optional[str], data: Dict) -> None:
         async with aiosqlite.connect(self.db_path) as db:

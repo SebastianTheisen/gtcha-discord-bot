@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 82;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 83;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -529,9 +529,21 @@ function glance(b) {
       ${b.cost_to_hit && !b.archived ? `<span>⏱ Ø <b>${num(b.cost_to_hit)}</b> bis Hit</span>` : ""}
     </div>
     ${b.end || b.archived ? `<div class="glance-until">${b.archived ? "🗄️" : "⏳"} ${esc(untilText(b))}</div>` : ""}
+    ${b.archived ? archiveSummary(b) : ""}
     <div class="glance-note">${b.archived ? "Stand beim Ende · bleibt 30 Tage im Archiv"
       : b.ev_from_site ? "aus Seitenzahlen" : "geschätzt"}</div>
   </div>`;
+}
+
+// Archiv: kurze Bilanz des beendeten Banners (wie die Hits rausgingen, was noch bei Spielern liegt)
+function archiveSummary(b) {
+  const out = b.out || [];
+  const medals = out.filter((h) => h.via === "medaille").length, detected = out.length - medals;
+  const parts = [];
+  if (out.length) parts.push(`🏅 ${medals} per Medaille · 📦 ${detected} Versand erkannt`);
+  if (b.out_unsure) parts.push(`❓ ${b.out_unsure} unklar`);
+  if (b.undecided) parts.push(`🎒 ${num(b.undecided)} Coins noch bei Spielern`);
+  return parts.length ? `<div class="glance-until">${parts.join(" · ")}</div>` : "";
 }
 
 const DETAIL_TABS = { overview: "Übersicht", cards: "Karten", history: "Verlauf" };
@@ -1273,7 +1285,14 @@ async function showUsers() {
     view.innerHTML = `<div class="empty">Nur für den Admin.</div>`;
     return;
   }
-  const [{ users }, st] = await Promise.all([authApi("/api/admin/users"), authApi("/api/admin/status").catch(() => null)]);
+  const [{ users }, st, ticks] = await Promise.all([authApi("/api/admin/users"),
+    authApi("/api/admin/status").catch(() => null), authApi("/api/admin/auto_ticks").catch(() => ({ items: [] }))]);
+  const tickRows = (ticks.items || []).map((t, i) => `<div class="line"><span>
+      <a href="#/banner/${t.pack_id}"><b>${t.pack_id}</b></a> ${esc(t.tier || "")} · ${esc(t.name || t.key)}
+      ${t.value ? `<span class="muted">· ${num(t.value)}</span>` : ""}<br>
+      <span class="muted">${esc(t.at ? t.at.slice(8, 10) + "." + t.at.slice(5, 7) + ". " + t.at.slice(11, 16) : "")}
+      ${t.rebuild ? "· Neuberechnung" : ""}${t.rejected ? " · ❌ als falsch markiert" : ""}</span></span>
+      <button class="seg-btn" data-tick="${i}">${t.rejected ? "↩️ zulassen" : "❌ war falsch"}</button></div>`).join("");
   const ago = (sec) => (sec == null ? "–" : sec < 120 ? `${sec} s` : sec < 7200 ? `${Math.round(sec / 60)} Min` : `${Math.round(sec / 3600)} Std`);
   const ok = (good) => (good ? "🟢" : "🔴");
   const statusHtml = st ? `<div class="rows">
@@ -1290,6 +1309,10 @@ async function showUsers() {
   view.innerHTML = `<div class="section-title">👥 Nutzer <small class="muted">${users.length}</small></div>
     <details class="user-card"><summary><b>🩺 System-Status</b><span>${st ? ok(st.heartbeat_age != null && st.heartbeat_age < 900) : ""}</span></summary>
       <div class="user-body" style="padding-top:8px">${statusHtml}</div></details>
+    <details class="user-card"><summary><b>🤖 Automatisch abgehakt</b><span class="muted">${(ticks.items || []).length} · 14 Tage</span></summary>
+      <div class="user-body" style="padding-top:8px"><div class="hint pad">Vom Bot aus Versand/Umwandlung erkannt.
+        „war falsch“ nimmt den Haken sofort weg; der Hit wird bei diesem Banner nicht mehr automatisch abgehakt.</div>
+        <div class="rows">${tickRows || `<div class="line muted">Nichts in den letzten 14 Tagen</div>`}</div></div></details>
     <details class="user-card"><summary><b>📢 Push an alle</b><span></span></summary>
       <div class="user-body" style="padding:10px 12px">
         <input id="ap-title" class="code-input plain" maxlength="80" placeholder="Titel" style="width:100%;margin-bottom:8px">
@@ -1306,6 +1329,20 @@ async function showUsers() {
         <div class="user-body"><div class="loading">Lädt …</div></div>
       </details>`;
     }).join("") || `<div class="empty">Keine Nutzer.</div>`}`;
+  view.querySelectorAll("[data-tick]").forEach((btn) => btn.addEventListener("click", async () => {
+    const t = ticks.items[Number(btn.dataset.tick)];
+    const undo = t.rejected;
+    const choice = await ask(undo ? "Wieder zulassen?" : "Erkennung war falsch?",
+      `${t.pack_id} · ${esc(t.tier || "")} ${esc(t.name || "")}<br><br>${undo
+        ? "Der Bot darf diesen Hit wieder automatisch abhaken (bei der nächsten Auswertung)."
+        : "Der Haken verschwindet sofort, und der Bot hakt diesen Hit bei diesem Banner nicht mehr automatisch ab."}`,
+      ["Abbrechen", undo ? "Zulassen" : "War falsch"]);
+    if (choice === "Abbrechen" || !choice) return;
+    const { id } = await authApi("/api/admin/reject", { pack_id: t.pack_id, key: t.key, undo });
+    haptic();
+    await waitForBot(id);
+    showUsers();
+  }));
   view.querySelector("#ap-send").addEventListener("click", async () => {
     const msg = view.querySelector("#ap-msg");
     const title = view.querySelector("#ap-title").value.trim();
@@ -1373,11 +1410,12 @@ function accuracySection(a) {
   if (!a) return "";
   const head = `<h2>🎯 Treffsicherheit <small>${a.count ? `${a.count} Banner` : "sammelt Daten"}</small></h2>`;
   if (!a.count) {
-    return head + `<div class="panel"><div class="hint">Ergebnis ab 30 verkauften Packs je Banner.</div></div>`;
+    return head + `<div class="panel"><div class="hint">Ergebnis ab 30 verkauften Packs je Banner, gemessen 24 Stunden
+      später (gezogene Karten zählt die Seite erst, wenn sie verschickt oder umgewandelt sind).</div></div>`;
   }
   const dir = a.bias > 1 ? "eher zu optimistisch" : a.bias < -1 ? "eher zu vorsichtig" : "ohne klare Richtung";
   return head + `<div class="stats hist-stats">
-      ${stat("Ø Abweichung", `${a.mean_abs.toLocaleString("de-DE")} %-Punkte`, dir)}
+      ${stat("Ø Abweichung", `${a.mean_abs.toLocaleString("de-DE")} %-Punkte`, dir + " · Ergebnis 24 Std. später gemessen")}
     </div>
     <div class="rows">${a.items.map((i) => `
       <a class="line" href="#/banner/${i.id}"><span><b>${esc(i.title || "Banner " + i.id)}</b><br>

@@ -4,8 +4,9 @@ Die App speichert regelmäßig je Banner die vorhergesagte Ø Rückgabe (%), die
 der laut Seite schon raus ist (umgewandelt + verschickt als Kartenwert). Daraus:
   Vorhersage = Ø Rückgabe, gewichtet mit den in jedem Abschnitt verkauften Packs
   Ergebnis   = Zuwachs "raus" / (verkaufte Packs × Preis)
-Angeforderte, noch nicht verschickte oder umgewandelte Karten erscheinen erst später - das Ergebnis hinkt
-deshalb etwas hinterher (eher zu niedrig, vor allem kurz nach vielen Zügen).
+Gezogene Karten zählt die Seite erst, wenn sie verschickt oder umgewandelt werden. Deshalb wird das Ergebnis
+mit LAG_SECONDS Versatz gemessen: für die Packs, die bis vor 24 Stunden verkauft wurden, zählt, was jeweils
+24 Stunden später raus war. Beendete Banner (Archiv) werden dafür noch weiter mitgeschrieben.
 """
 
 import time
@@ -18,6 +19,7 @@ SNAPSHOT_EV_STEP = 3.0       # oder sobald sich die Ø Rückgabe um 3 Prozentpun
 KEEP_DAYS = 90
 MIN_SOLD = 30                # erst ab so vielen verkauften Packs vergleichen
 REPORT_LIMIT = 30
+LAG_SECONDS = 24 * 3600      # Ergebnis 24 Stunden später messen (Karten werden erst später verschickt/umgewandelt)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS ev_history (
@@ -45,10 +47,12 @@ class AccuracyStore:
         rows = []
         for b in banners:
             ev, remaining = b.get("ev_pct"), b.get("remaining")
-            if ev is None or not b.get("price") or remaining is None:
+            # beendete Banner: ohne Vorhersage, nur noch "raus" mitschreiben (für den Versatz)
+            if (ev is None and not b.get("archived")) or not b.get("price") or remaining is None:
                 continue
             last = self._last.get(b["id"])
-            if last and now - last[0] < SNAPSHOT_SECONDS and abs(ev - last[1]) < SNAPSHOT_EV_STEP:
+            changed = ev is not None and last and last[1] is not None and abs(ev - last[1]) >= SNAPSHOT_EV_STEP
+            if last and now - last[0] < SNAPSHOT_SECONDS and not changed:
                 continue
             out = None
             if b.get("converted") is not None:
@@ -77,20 +81,33 @@ class AccuracyStore:
         return evaluate(by_banner)
 
 
-def evaluate(by_banner: Dict[int, list]) -> Dict:
-    """Je Banner Vorhersage gegen Ergebnis; dazu Ø Abweichung und Richtung über alle Banner."""
+def evaluate(by_banner: Dict[int, list], lag: int = LAG_SECONDS) -> Dict:
+    """Je Banner Vorhersage gegen Ergebnis; dazu Ø Abweichung und Richtung über alle Banner.
+
+    Verglichen werden die Packs, die bis `lag` vor dem letzten Stand verkauft wurden; als Ergebnis zählt der
+    Zuwachs "raus" bis `lag` nach dem letzten dieser Verkäufe (Karten werden erst nach dem Ziehen verschickt
+    oder umgewandelt)."""
     items = []
     for bid, snaps in by_banner.items():
-        first, last = snaps[0], snaps[-1]
-        sold = first[3] - last[3]
-        price = last[5]
+        last_t = snaps[-1][1]
+        window = [s for s in snaps if s[1] <= last_t - lag]
+        if len(window) < 2:
+            continue
+        first, end = window[0], window[-1]
+        sold = first[3] - end[3]
+        price = end[5]
         if sold < MIN_SOLD or not price:
             continue
-        weighted = sum(a[2] * max(0, a[3] - b[3]) for a, b in zip(snaps, snaps[1:]))
+
+        def out_at(t):
+            return next((s[4] for s in snaps if s[1] >= t), snaps[-1][4])
+
+        weighted = sum((a[2] or 0) * max(0, a[3] - b[3]) for a, b in zip(window, window[1:]))
         predicted = weighted / sold
-        realized = (last[4] - first[4]) / (sold * price) * 100
-        items.append({"id": bid, "title": last[6], "sold": sold, "predicted": round(predicted, 1),
-                      "realized": round(realized, 1), "diff": round(predicted - realized, 1), "t": last[1]})
+        # Anfang: Stand beim ersten Eintrag; Ende: was `lag` nach dem letzten verglichenen Verkauf raus war
+        realized = (out_at(end[1] + lag) - first[4]) / (sold * price) * 100
+        items.append({"id": bid, "title": snaps[-1][6], "sold": sold, "predicted": round(predicted, 1),
+                      "realized": round(realized, 1), "diff": round(predicted - realized, 1), "t": end[1]})
     items.sort(key=lambda x: -x["t"])
     items = items[:REPORT_LIMIT]
     n = len(items)

@@ -198,8 +198,8 @@ class BannerView:
         """Welche Hits schon raus sind (Versand sicher erkannt oder per Medaille gemeldet), teuerste zuerst."""
         if not pool:
             return {"out": [], "out_unsure": 0}
-        out = [{"name": u["name"], "value": u["value"]} for u in medal_units(pool)
-               if u["key"] in sure or u["key"] in winners]
+        out = [{"name": u["name"], "value": u["value"], "via": "medaille" if u["key"] in winners else "versand"}
+               for u in medal_units(pool) if u["key"] in sure or u["key"] in winners]
         return {"out": out, "out_unsure": sum(g.get("pulled", 0) for g in open_groups)}
 
     @staticmethod

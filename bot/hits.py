@@ -188,6 +188,9 @@ class HitsMixin:
                     if joint.get("ignored_deadlines"):
                         logger.info(f"[HIT] {pid}: Medaillen-Frist passt nicht zu den Schüben, ignoriert: "
                                     f"{joint['ignored_deadlines']}")
+                    rejected = await self.db.get_rejects(pid)   # vom Admin als falsch markiert
+                    if rejected:
+                        joint["certain"] = [k for k in joint["certain"] if k not in rejected]
                     old_groups = {(frozenset(g["keys"]), g["pulled"]) for g in unsure}
                     match = {
                         "certain": [k for k in joint["certain"] if k not in set(pulled)],
@@ -205,6 +208,12 @@ class HitsMixin:
                                                     pulled + match["certain"], unsure)
                 if not (match["certain"] or match["groups"] or match["maybe"]):
                     continue
+                # Kontrolle für den Admin: was wurde automatisch abgehakt?
+                tiers = {k: t for t, k in tier_keys(pool).items()}
+                units = {u["key"]: u for u in tracked_units(pool)}
+                await self.db.log_auto_ticks(pid, [{"key": k, "tier": tiers.get(k), "name": units.get(k, {}).get("name"),
+                                                    "value": units.get(k, {}).get("value")}
+                                                   for k in match["certain"]], first_look)
 
                 logger.info(f"[HIT] {pid}: {reason} -> sicher {match['certain']}, "
                             f"wertgleich {match['groups']}, möglich {match['maybe']}")

@@ -18,7 +18,7 @@ sys.path.insert(0, "/app")
 from utils.banner_info import berlin_time  # noqa: E402
 from utils.card_pool import (  # noqa: E402
     TAX_FACTOR, VALUE_TOLERANCE, _batch_options, _normal_sums, _value_classes, card_value, claimable_units,
-    ORDER_MAX_VALUE, batch_deadlines, fmt_coins, match_shipment_history, medal_units, order_options, resolve_pulled,
+    batch_deadlines, explain_batch, fmt_coins, match_shipment_history, medal_units, resolve_pulled,
     tier_keys, tracked_units,
 )
 
@@ -143,22 +143,27 @@ if batches and has_ship_hits:
     ship_hits = [u for u in tracked_units(pool) if u["shipping_only"]]
     classes = _value_classes(ship_hits, VALUE_TOLERANCE)
     print("Versand-Hits im Pool: " + ", ".join(f"{u['name']} {fmt_coins(u['value'])}" for u in ship_hits))
+    # genau wie der Bot (Schub-Ansicht der App): ältester zuerst, ein sicher erkannter Hit zählt später nicht
+    # nochmal, Medaillen-Frist und Packpreis-Regel (billige Karten nur, wenn es ohne sie nicht aufgeht)
+    names = {u["key"]: tier_of.get(u["key"], u["name"][:20]) for u in ship_hits}
+    sent = set()
     for i, (count, net, *_) in enumerate(batches, 1):
         value = round(net * TAX_FACTOR)
-        options = _batch_options(pool, classes, count, value, VALUE_TOLERANCE) if count > 0 and value > 0 else None
         line = f"Schub {i}: {count} Karte(n) · {fmt_coins(value)} Coins Kartenwert"
         if count <= 0:
             print(line + " → ohne Karte (nur Wert geändert) - nicht auswertbar")
             continue
-        if options:
-            print(line + f" → erklärbar ({len(options)} Möglichkeit(en))")
-            continue
-        orders = order_options(pool, count, value) if value <= ORDER_MAX_VALUE else []
-        if orders:
-            names = {u["key"]: tier_of.get(u["key"], u["name"][:20]) for u in ship_hits}
-            combos = sorted({" + ".join(sorted(names[k] for k in o)) or "nur normale" for o in orders})
-            print(line + f" → als Versand-Aufträge erklärbar ({len(combos)}): " + " | ".join(combos[:12])
-                  + (" …" if len(combos) > 12 else ""))
+        required = {k for k, j in deadlines.items() if j == i - 1 and k not in sent}
+        res = explain_batch(pool, count, net, sent, required=required, price=price or None)
+        sent |= set(res["certain"])
+        parts = [("✅ " + ", ".join(names.get(k, k) + (" (Medaillen-Frist)" if k in required else "")
+                                   for k in res["certain"]))] if res["certain"] else []
+        parts += [f"❓ {g['pulled']} von {'/'.join(names.get(k, k) for k in g['keys'])}" for g in res["groups"]]
+        parts += [f"vielleicht {'/'.join(names.get(k, k) for k in g['keys'])}" for g in res["maybe"]]
+        label = {"hits": "", "normal": "nur normale Karten", "maybe": "", "too_big": "zu groß zum Zerlegen",
+                 "unclear": "NICHT erklärbar"}.get(res["kind"], res["kind"])
+        print(line + " → " + " · ".join([p for p in parts + [label] if p]))
+        if res["kind"] != "unclear":
             continue
         wide = _batch_options(pool, classes, count, value, 0.05)
         hint = " · mit 5 % Spielraum erklärbar (Kartenwerte haben sich wohl geändert)" if wide else ""

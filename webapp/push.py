@@ -39,7 +39,8 @@ def _watch_events(b: Dict, old: Dict) -> List[tuple]:
                     f"−{fmt_coins(diff)} · {fmt_coins(b['remaining'])} von {fmt_coins(b['total'])} übrig"))
     gone = [h for h in b.get("out") or [] if h["name"] + str(h["value"]) not in set(old.get("out", []))]
     for h in gone:
-        out.append(("hit", f"🎯 Hit raus · Banner {bid}", f"{h['name']} ({fmt_coins(h['value'])} Coins)"))
+        how = {"medaille": " · per Medaille", "versand": " · Versand erkannt"}.get(h.get("via"), "")
+        out.append(("hit", f"🎯 Hit raus · Banner {bid}", f"{h['name']} ({fmt_coins(h['value'])} Coins){how}"))
     if (b.get("ship_cards") or 0) > old.get("ship_cards", b.get("ship_cards") or 0):
         n = b["ship_cards"] - old["ship_cards"]
         value = (b.get("ship_value") or 0) - old.get("ship_value", 0)
