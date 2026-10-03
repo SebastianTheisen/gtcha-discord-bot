@@ -1,8 +1,9 @@
 """Japanische Karten- und Pack-Namen auf Deutsch.
 
 Zuerst ein eigenes Wörterbuch (Schmuck, Steine, Begriffe der Seite) - exakt und ohne Netz. Was es nicht kennt,
-übersetzt DeepL (DEEPL_API_KEY in der .env, kostenloser Key reicht) einmal; das Ergebnis liegt in der Tabelle
-translations und gilt danach für immer. Ohne Key oder bei Fehlern bleibt der Originaltext stehen.
+übersetzt MyMemory (kostenlos, ohne Anmeldung, ca. 5.000 Zeichen am Tag) einmal - oder DeepL, wenn in der .env
+ein DEEPL_API_KEY steht. Das Ergebnis liegt in der Tabelle translations und gilt danach für immer. Bei Fehlern
+oder erschöpftem Tageskontingent bleibt der Originaltext stehen und wird beim nächsten Lauf erneut versucht.
 
 Namen werden an "/" in Teile zerlegt (z. B. "ｴﾒﾗﾙﾄﾞ/ﾙｰｽ/ダイヤバンク") - jeder Teil wird für sich übersetzt,
 so landen wiederkehrende Teile nur einmal bei DeepL.
@@ -17,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 JAPANESE = re.compile(r"[぀-ヿㇰ-ㇿ㐀-䶿一-鿿ｦ-ﾟ]")
 DEEPL_BATCH = 50
+MYMEMORY_URL = "https://api.mymemory.translated.net/get"
+MYMEMORY_PER_RUN = 40      # je Lauf (alle 5 Minuten) - schont das Tageskontingent
 
 # Wörter nach NFKC (halbbreite Katakana wie ｴﾒﾗﾙﾄﾞ werden dabei zu エメラルド). Längere Wörter zuerst ersetzt.
 WORDS = {
@@ -144,4 +147,30 @@ async def deepl(texts: List[str], key: str) -> Dict[str, str]:
                 text = (tr.get("text") or "").strip()
                 if text:
                     result[src] = text
+    return result
+
+
+async def mymemory(texts: List[str], limit: int = MYMEMORY_PER_RUN) -> Dict[str, str]:
+    """Übersetzt mit MyMemory (Japanisch -> Deutsch), ohne Key. Gibt nur brauchbare Übersetzungen zurück und hört
+    beim ersten Fehler (z. B. Tageskontingent erschöpft) auf - der Rest kommt beim nächsten Lauf dran."""
+    import aiohttp
+    result: Dict[str, str] = {}
+    if not texts:
+        return result
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
+        for text in texts[:limit]:
+            try:
+                async with session.get(MYMEMORY_URL, params={"q": text, "langpair": "ja|de"}) as resp:
+                    data = await resp.json(content_type=None)
+            except Exception as e:
+                logger.warning(f"[ÜBERSETZUNG] MyMemory nicht erreichbar: {type(e).__name__}: {e}")
+                break
+            status = str(data.get("responseStatus") or resp.status)
+            german = ((data.get("responseData") or {}).get("translatedText") or "").strip()
+            if status != "200" or "MYMEMORY WARNING" in german.upper():
+                logger.info(f"[ÜBERSETZUNG] MyMemory: {status} {german[:120]} - später erneut")
+                break
+            # unbrauchbar: leer, unverändert oder noch japanisch -> nicht speichern (Original bleibt)
+            if german and german != text and not has_japanese(german):
+                result[text] = german
     return result
