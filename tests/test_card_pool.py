@@ -362,3 +362,24 @@ def test_medal_units_stay_fast_for_huge_pools():
     for _ in range(20):
         units = medal_units(pool)
     assert len(units) == 50 and time.perf_counter() - started < 0.5
+
+
+def test_order_model_shipment_counts_orders_not_cards():
+    """Banner 24152: die Seite zählt 1 Versand mit 105.380 Coins Kartenwert. Als 1 Karte passt nichts -
+    als 1 Auftrag passt genau T2 (98.780) + 20 normale Karten à 330."""
+    from utils.card_pool import order_options, summarize_cards
+    pool = summarize_cards([
+        {"id": 1, "name": "Luffy Dortmund", "buy_point": 118580, "duplication": 1, "action_type": 2},
+        {"id": 2, "name": "Luffy Gold Frame", "buy_point": 98780, "duplication": 1, "action_type": 2},
+        {"id": 3, "name": "Luffy Katsumi", "buy_point": 98560, "duplication": 1, "action_type": 2},
+        {"id": 4, "name": "Tashigi", "buy_point": 10940, "duplication": 1, "action_type": 2},
+        {"id": 5, "name": "Shirahoshi", "buy_point": 10560, "duplication": 1, "action_type": 2},
+        {"id": 6, "name": "Normal", "buy_point": 330, "duplication": 400, "action_type": 0},
+        {"id": 7, "name": "Normal 2", "buy_point": 660, "duplication": 60, "action_type": 0},
+        {"id": 8, "name": "Normal 3", "buy_point": 990, "duplication": 30, "action_type": 0},
+    ])
+    assert order_options(pool, 1, 105380) == [frozenset({"2"})]           # eindeutig T2
+    assert order_options(pool, 2, 550) == []                              # passt zu keinem Modell
+    assert frozenset() in order_options(pool, 1, 6600)                    # nur normale Karten möglich
+    assert order_options(pool, 0, 1320) == [frozenset()]                  # Karten zu bestehendem Auftrag
+    assert frozenset({"4", "5"}) in order_options(pool, 1, 10940 + 10560 + 330)
