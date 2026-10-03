@@ -139,7 +139,8 @@ async def _run(tmp_path, browser_path):
         await page2.goto(base + "/#/banner/24099")
         await page2.wait_for_timeout(1000)
         detail = await page2.inner_text("#view")
-        if "Beendet" not in detail or "Lohnt sich" in detail or "Rest kaufen" in detail:
+        if ("Beendet" not in detail or "Lohnt sich" in detail or "Rest kaufen" in detail
+                or "Ø Rückgabe pro Zug" in detail or "Noch im Banner" in detail):
             problems.append(f"Archiv-Detail falsch: {detail[:160]!r}")
         await page2.click("[data-back]")
         await page2.wait_for_timeout(800)

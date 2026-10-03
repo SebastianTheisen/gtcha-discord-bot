@@ -85,18 +85,23 @@ def test_ended_banner_with_last_zero_from_site_is_set_to_zero(tmp_path):
     async def run():
         db = Database(str(tmp_path / "b.db"))
         await db.init()
-        for pid in (24152, 24153):
-            await db.save_banner(ScrapedBanner(pack_id=pid, category="One piece", current_packs=2, total_packs=500))
+        for pid in (24152, 24153, 24154, 24155):
+            await db.save_banner(ScrapedBanner(pack_id=pid, category="One piece", current_packs=2, total_packs=500,
+                                               sale_end_date="2026-10-31 23:59:00" if pid != 24155 else "2020-01-01"))
         await db.log_api_values(24152, {"pack_count": 2})
         await db.log_api_values(24152, {"pack_count": 0})     # Seite: leer gezogen
         await db.log_api_values(24153, {"pack_count": 2})     # einfach verschwunden: bleibt bei 2
-        for pid in (24152, 24153):
+        await db.update_banner_packs(24154, 30)   # verschwunden mit 30 Packs: nicht sicher leer gezogen
+        for pid in (24152, 24153, 24154, 24155):
             await db.mark_banner_inactive(pid)
         ended = (await db.get_banner(24152))["updated_at"]
-        assert await db.fix_sold_out_counts() == [24152]
+        # 24153: verschwand mit 2 Packs lange vor dem Verkaufsende (wie 24152 auf der Seite) -> leer gezogen
+        # 24155: Verkaufsende vorbei -> abgelaufen, bleibt bei 2
+        assert sorted(await db.fix_sold_out_counts()) == [24152, 24153]
         assert await db.fix_sold_out_counts() == []
         row = await db.get_banner(24152)
         assert row["current_packs"] == 0 and row["updated_at"] == ended
-        assert (await db.get_banner(24153))["current_packs"] == 2
+        assert (await db.get_banner(24154))["current_packs"] == 30
+        assert (await db.get_banner(24155))["current_packs"] == 2
 
     asyncio.run(run())

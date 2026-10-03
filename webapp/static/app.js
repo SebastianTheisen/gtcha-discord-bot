@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 76;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 77;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -537,8 +537,8 @@ async function showBanner(id) {
 
     <section class="pane" data-pane="overview" ${tab === "overview" ? "" : "hidden"}>
       <div class="stats">
-        ${b.ev != null ? stat("Ø Rückgabe pro Zug", `<span class="ev ${evClass(b.ev_pct)}">${num(b.ev)} Coins</span>`, (b.ev_pct != null ? pct(b.ev_pct) + " vom Preis" : "") + (b.ev_from_site ? " · aus Zahlen der Seite" : " · geschätzt")) : ""}
-        ${b.hits_open != null ? stat("Hits noch drin", hitsText(b) + (b.unsure ? " ❓" : ""), b.cost_to_hit ? `Ø ${num(b.cost_to_hit)} Coins bis Hit` : "") : ""}
+        ${b.ev != null && !b.archived ? stat("Ø Rückgabe pro Zug", `<span class="ev ${evClass(b.ev_pct)}">${num(b.ev)} Coins</span>`, (b.ev_pct != null ? pct(b.ev_pct) + " vom Preis" : "") + (b.ev_from_site ? " · aus Zahlen der Seite" : " · geschätzt")) : ""}
+        ${b.hits_open != null ? stat(b.archived ? "Hits beim Ende" : "Hits noch drin", hitsText(b) + (b.unsure ? " ❓" : ""), b.cost_to_hit && !b.archived ? `Ø ${num(b.cost_to_hit)} Coins bis Hit` : "") : ""}
         ${b.min_value != null ? stat("Mindestens zurück", num(b.min_value) + " Coins", b.price ? pct(b.min_value / b.price * 100) + " vom Preis" : "") : ""}
         ${b.pool_value ? stat("Alle Karten", num(b.pool_value) + " Coins", b.all_packs_cost ? `Alle Packs: ${num(b.all_packs_cost)} (${pct(b.pool_value / b.all_packs_cost * 100)})` : "") : ""}
         ${b.out_total != null ? stat("Aus dem Banner raus", `${num(b.out_total)} Coins`,
@@ -546,12 +546,12 @@ async function showBanner(id) {
            + `${b.ship_players ? ` · ${num(b.ship_players)} Spieler` : ""}<br>
            🪙 umgewandelt: ${num(b.converted)} Coins${b.converted_max_cards != null ? ` · höchstens ${num(b.converted_max_cards)} Karten` : ""}<br>
            <i>Werte wie von der Seite geliefert</i>`) : ""}
-        ${b.left_value != null ? stat("Noch im Banner (rechnerisch)", `${num(b.left_value)} Coins`,
+        ${b.left_value != null && !b.archived ? stat("Noch im Banner (rechnerisch)", `${num(b.left_value)} Coins`,
           (b.left_per_pack != null ? `Ø ${num(b.left_per_pack)} pro Restpack${b.price ? ` (${pct(b.left_per_pack / b.price * 100)} vom Preis)` : ""}` : "")
           + restCost(b)) : ""}
         ${b.ship_cards != null && b.out_total == null ? stat("Verschickt", b.ship_cards ? `${num(b.ship_cards)} Karten` : "Noch nichts",
           b.ship_cards ? `${num(b.ship_value)} Coins Kartenwert · ${num(b.ship_players)} Spieler` : "") : ""}
-        ${b.per_day ? stat("Pro Tag", `${b.per_day}×`) : ""}
+        ${b.per_day && !b.archived ? stat("Pro Tag", `${b.per_day}×`) : ""}
       </div>
       ${b.conditions ? `<div class="notice">${esc(b.conditions).replace(/\*\*/g, "").replace(/\n/g, "<br>")}</div>` : ""}
     </section>

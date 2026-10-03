@@ -7,7 +7,7 @@ import json
 import aiosqlite
 from pathlib import Path
 from typing import Optional, Dict, Any, List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from loguru import logger
 from config import DATABASE_PATH
@@ -18,6 +18,8 @@ from utils.card_pool import card_value, fmt_coins
 PACK_HISTORY_DAYS = 90
 # Beendete Banner bleiben so lange komplett erhalten (App: Kategorie Archiv), danach nur noch banner_archive
 ARCHIVE_DAYS = 30
+# "0 Packs" bzw. Verschwinden gilt als leer gezogen, wenn vorher höchstens so viele Packs übrig waren
+SOLD_OUT_MAX_LEFT = 20
 API_LOG_DAYS = 30
 # Store-Packs (gtchaxonline.com/store) liegen in derselben Tabelle, aber mit is_active = 2: alle Funktionen des Bots
 # für Discord (Threads, Top 10, "nicht gefunden") arbeiten nur mit is_active = 1 und sehen sie nie; Funktionen
@@ -864,23 +866,32 @@ class Database:
             await db.commit()
 
     async def fix_sold_out_counts(self) -> List[int]:
-        """Beendete Banner, bei denen die Seite zuletzt 0 Packs gemeldet hat, auf 0 setzen (leer gezogen,
-        die 0 wurde damals als möglicher Fehlwert übersprungen). Gibt die korrigierten IDs zurück."""
+        """Beendete Banner, die leer gezogen wurden, auf 0 Packs setzen. Leer gezogen heißt: die Seite hat zuletzt
+        0 gemeldet, oder der Banner verschwand mit höchstens SOLD_OUT_MAX_LEFT Packs vor seinem Verkaufsende
+        (ausverkaufte Banner nimmt die Seite einfach aus der Liste). Gibt die korrigierten IDs zurück."""
+        from utils.banner_info import sale_end_timestamp
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute("""
-                SELECT b.pack_id, b.current_packs, b.updated_at FROM banners b
-                WHERE b.is_active = 0 AND b.current_packs > 0
-                  AND (SELECT a.pack_count FROM api_log a WHERE a.banner_id = b.pack_id
-                       ORDER BY a.id DESC LIMIT 1) = 0
+                SELECT b.pack_id, b.current_packs, b.updated_at, b.sale_end_date,
+                       (SELECT a.pack_count FROM api_log a WHERE a.banner_id = b.pack_id ORDER BY a.id DESC LIMIT 1)
+                FROM banners b WHERE b.is_active = 0 AND b.current_packs > 0
             """)
-            rows = await cursor.fetchall()
-            for pid, old, ended in rows:
-                # updated_at bleibt (= Ende des Banners, zählt für die 30 Tage im Archiv)
-                await db.execute("UPDATE banners SET current_packs = 0 WHERE pack_id = ?", (pid,))
-                await db.execute("INSERT INTO pack_history (banner_id, old_count, new_count, changed_at) "
-                                 "VALUES (?, ?, 0, ?)", (pid, old, ended))
+            fixed = []
+            for pid, old, ended, sale_end, last_api in await cursor.fetchall():
+                end_ts = sale_end_timestamp(sale_end)
+                try:
+                    ended_ts = datetime.fromisoformat(ended).replace(tzinfo=timezone.utc).timestamp()
+                except (TypeError, ValueError):
+                    ended_ts = None
+                early = old <= SOLD_OUT_MAX_LEFT and end_ts and ended_ts and ended_ts < end_ts - 3600
+                if last_api == 0 or early:
+                    # updated_at bleibt (= Ende des Banners, zählt für die 30 Tage im Archiv)
+                    await db.execute("UPDATE banners SET current_packs = 0 WHERE pack_id = ?", (pid,))
+                    await db.execute("INSERT INTO pack_history (banner_id, old_count, new_count, changed_at) "
+                                     "VALUES (?, ?, 0, ?)", (pid, old, ended))
+                    fixed.append(pid)
             await db.commit()
-        return [r[0] for r in rows]
+        return fixed
 
     async def get_ended_banners(self, days: int = ARCHIVE_DAYS) -> Dict[int, Dict]:
         """Beendete Banner (auch Store-Packs) der letzten `days` Tage, neueste zuerst."""
