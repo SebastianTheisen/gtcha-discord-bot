@@ -26,7 +26,7 @@ from config import (
 )
 from scraper.gtcha_scraper import GTCHAScraper
 from scraper.models import ScrapedBanner
-from database.db import ARCHIVE_DAYS, Database
+from database.db import ARCHIVE_DAYS, SOLD_OUT_MAX_LEFT, Database
 from utils.notifications import (
     set_bot_client, notify_scrape_error,
     notify_all_retries_failed, notify_critical_error,
@@ -64,11 +64,8 @@ POOL_FETCH_PER_SCRAPE = 8
 FULL_SCRAPE_EVERY_MINUTES = 15
 # Thread löschen, wenn ein Banner so oft hintereinander fehlt oder ausverkauft ist
 NOT_FOUND_DELETE_AFTER = 2
-# "0 Packs" gilt sofort als ausverkauft, wenn vorher höchstens so viele übrig waren (sonst Fehlwert der
-# Seite: dann nur überspringen; endgültig beendet wird nach NOT_FOUND_DELETE_AFTER Scrapes)
-SOLD_OUT_MAX_LEFT = 20
-
-
+# "0 Packs" gilt sofort als ausverkauft, wenn vorher höchstens SOLD_OUT_MAX_LEFT übrig waren (sonst Fehlwert
+# der Seite: dann nur überspringen; endgültig beendet wird nach NOT_FOUND_DELETE_AFTER Scrapes)
 def sold_out(old_packs, new_packs) -> bool:
     """Ist "0 Packs" glaubwürdig (leer gezogen) statt eines Fehlwerts?"""
     return new_packs == 0 and old_packs is not None and 0 < old_packs <= SOLD_OUT_MAX_LEFT

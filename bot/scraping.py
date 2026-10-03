@@ -244,6 +244,10 @@ class ScrapingMixin:
                             if deleted:
                                 expired_count += 1
                                 logger.info(f"   Banner {pack_id} (abgelaufen) Thread gelöscht!")
+                        if expired_ids:   # leer gezogen statt abgelaufen? Dann gleich auf 0 Packs
+                            fixed = await self.db.fix_sold_out_counts()
+                            if fixed:
+                                logger.info(f"Leer gezogen, Packs auf 0 gesetzt: {fixed}")
 
                 elapsed = (datetime.now() - start_time).total_seconds()
                 if skipped_inactive > 0:
