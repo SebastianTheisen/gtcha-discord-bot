@@ -8,7 +8,7 @@ import asyncio
 import base64
 import json
 import os
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import aiosqlite
 from loguru import logger
@@ -272,6 +272,11 @@ class PushService:
             row = await cur.fetchone()
         return json.loads(row[0]) if row else {}
 
+    async def _subscription_users(self) -> Dict[str, Optional[str]]:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT endpoint, user_id FROM subscriptions")
+            return {e: u for e, u in await cur.fetchall()}
+
     async def _subscriptions(self) -> List[tuple]:
         async with aiosqlite.connect(self.db_path) as db:
             cur = await db.execute("SELECT endpoint, data, prefs FROM subscriptions")
@@ -288,11 +293,15 @@ class PushService:
             await db.execute("INSERT OR REPLACE INTO state (key, value) VALUES (?, ?)", (key, json.dumps(state)))
             await db.commit()
 
-    async def deliver(self, messages: List[tuple]):
-        """Verteilt Nachrichten an die Geräte, je nach deren Einstellungen."""
+    async def deliver(self, messages: List[tuple], allowed: Optional[set] = None):
+        """Verteilt Nachrichten an die Geräte, je nach deren Einstellungen. allowed: nur Geräte dieser
+        Discord-IDs (wer übertragen hat, siehe 7-Tage-Pflicht); None = alle."""
         if not messages:
             return
+        users = await self._subscription_users() if allowed is not None else {}
         for endpoint, sub, prefs in await self._subscriptions():
+            if allowed is not None and users.get(endpoint) not in allowed:
+                continue
             for kind, title, body, banner_id, _ in recipients(messages, prefs):
                 await self._push(endpoint, sub, title, body, banner_id, kind)
 

@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS user_history (
 CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS app_admins (discord_user_id TEXT PRIMARY KEY, added_at TEXT);
 CREATE TABLE IF NOT EXISTS blocked_users (discord_user_id TEXT PRIMARY KEY, discord_name TEXT, blocked_at TEXT);
+CREATE TABLE IF NOT EXISTS sync_marks (discord_user_id TEXT PRIMARY KEY, synced_at TEXT);
 CREATE TABLE IF NOT EXISTS auto_claims (
     discord_user_id TEXT, card_key TEXT, pack_id INTEGER, tier TEXT, request_id INTEGER, created_at TEXT,
     PRIMARY KEY (discord_user_id, card_key));
@@ -350,11 +351,26 @@ class AppBridge:
                              (str(user_id), card_key))
             await db.commit()
 
+    async def mark_synced(self, user_id: str) -> None:
+        """Erfolgreiches Übertragen merken (auch wenn nichts Neues dabei war - zählt für die 7-Tage-Pflicht)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("INSERT OR REPLACE INTO sync_marks (discord_user_id, synced_at) VALUES (?, ?)",
+                             (str(user_id), _now()))
+            await db.commit()
+
     async def last_syncs(self) -> Dict[str, str]:
         """Discord-ID -> Zeitpunkt des letzten Übertragens (nur wer schon einmal übertragen hat)."""
         async with aiosqlite.connect(self.db_path) as db:
             cur = await db.execute("SELECT discord_user_id, max(updated_at) FROM user_history GROUP BY discord_user_id")
-            return {u: t for u, t in await cur.fetchall() if t}
+            out = {u: t for u, t in await cur.fetchall() if t}
+            cur = await db.execute("SELECT discord_user_id, synced_at FROM sync_marks")
+            for u, t in await cur.fetchall():
+                if t and t > out.get(u, ""):
+                    out[u] = t
+            return out
+
+    async def last_sync(self, user_id: str) -> Optional[str]:
+        return (await self.last_syncs()).get(str(user_id))
 
     # --- Medaillen-Meldungen (App legt an, Bot arbeitet ab) ---
     async def add_request(self, pack_id: int, tier: str, user: Dict, action: str) -> int:

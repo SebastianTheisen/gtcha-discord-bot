@@ -43,6 +43,14 @@ Falls `tailscale serve` nach HTTPS-Zertifikaten fragt: in der Tailscale-Admin-Ko
 
 Die genaue Anleitung je Gerät (auch Lesezeichen in Chrome) steht in der App unter **Ich → 📖 Anleitung**.
 
+### Pflicht: alle 7 Tage übertragen
+
+Banner, Top 10, Archiv, Kartensuche und Banner-Pushes gibt es nur für Geräte, die mit Discord verknüpft sind
+und deren Person in den letzten **7 Tagen** ihre GTCHA-Daten per Lesezeichen übertragen hat. Sonst zeigt die
+App einen Sperrbildschirm mit Weg zum Übertragen; danach ist sofort alles wieder offen. Nach 3 und 6 Tagen
+kommt eine Erinnerung per Push. Admins (`APP_ADMIN_IDS`) sind ausgenommen. Die Frist steht in
+`webapp/server.py` (`SYNC_REQUIRED_DAYS`).
+
 ### Weitere Personen freischalten
 
 In der Tailscale-Admin-Konsole beim VPS **Share…** wählen und die Person einladen. Sie braucht
