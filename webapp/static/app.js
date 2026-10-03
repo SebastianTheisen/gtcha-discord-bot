@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 75;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 76;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -89,6 +89,7 @@ function hitsText(b) {
 }
 
 function flags(b) {
+  if (b.archived) return "";   // Kaufbedingungen gelten nicht mehr
   const out = [];
   if (b.per_day) out.push(`Beschränkt auf ${b.per_day} Mal pro Tag`);
   if (b.min_charge) out.push(`${num(b.min_charge)} Coins benötigt diesen Monat`);
@@ -165,7 +166,7 @@ function row(b, rank) {
           <div class="remaining">Verbleibend: <b>${num(b.remaining)} / ${num(b.total)}</b></div>
           <div class="bar"><span style="width:${left}%"></span></div>
           <div class="extra">
-            ${b.ev_pct != null ? `<span class="pill ${evClass(b.ev_pct)}">Ø ${pct(b.ev_pct)}</span>` : ""}
+            ${b.ev_pct != null && !b.archived ? `<span class="pill ${evClass(b.ev_pct)}">Ø ${pct(b.ev_pct)}</span>` : ""}
             ${hitsText(b) ? `<span class="pill">${hitsText(b)}${b.unsure ? " ❓" : ""}</span>` : ""}
           </div>
           ${shipLine(b)}
@@ -190,7 +191,7 @@ function compactRow(b) {
       <div class="bar thin"><span style="width:${left}%"></span></div>
     </div>
     <div class="crow-right"><div class="crow-price">${coins(b.price)}</div>
-      ${b.ev_pct != null ? `<span class="pill ${evClass(b.ev_pct)}">Ø ${pct(b.ev_pct)}</span>` : ""}</div>
+      ${b.ev_pct != null && !b.archived ? `<span class="pill ${evClass(b.ev_pct)}">Ø ${pct(b.ev_pct)}</span>` : ""}</div>
   </div>`;
 }
 
@@ -482,6 +483,7 @@ function renderCards(b) {
 
 // Ampel: lohnt sich (ab 100 %), knapp (90-100 %), lohnt sich nicht
 function verdict(b) {
+  if (b.archived) return ["grey", "Beendet", ""];
   if (b.ev_pct == null) return ["grey", "Keine Daten", ""];
   if (b.status === "upcoming") return ["grey", "Noch nicht gestartet", ""];
   if (b.ev_pct >= 100) return ["green", "Lohnt sich", ""];
@@ -491,19 +493,20 @@ function verdict(b) {
 
 function glance(b) {
   const [color, title, sub] = verdict(b);
-  const diff = b.price && b.remaining && b.left_value != null ? b.left_value - b.price * b.remaining : null;
+  const diff = b.price && b.remaining && b.left_value != null && !b.archived ? b.left_value - b.price * b.remaining : null;
   return `<div class="glance ${color}">
     <div class="glance-head"><span class="light"></span><div><div class="glance-title">${title}</div>
       ${sub ? `<div class="glance-sub">${sub}</div>` : ""}</div>
-      ${b.ev_pct != null ? `<div class="glance-pct">${pct(b.ev_pct)}<small>Ø ${num(b.ev)} Coins/Zug</small></div>` : ""}</div>
+      ${b.ev_pct != null && !b.archived ? `<div class="glance-pct">${pct(b.ev_pct)}<small>Ø ${num(b.ev)} Coins/Zug</small></div>` : ""}</div>
     <div class="glance-facts">
       ${b.hits_open != null ? `<span>🎯 <b>${hitsText(b)}</b>${b.unsure ? " ❓" : ""}</span>` : ""}
-      <span>📦 <b>${num(b.remaining)}</b> von ${num(b.total)} übrig</span>
+      <span>📦 <b>${num(b.remaining)}</b> von ${num(b.total)} ${b.archived ? "übrig beim Ende" : "übrig"}</span>
       ${diff != null ? `<span>💰 Rest kaufen: <b class="${diff >= 0 ? "pos" : "neg"}">${diff >= 0 ? "+" : "−"}${num(Math.abs(diff))}</b></span>` : ""}
-      ${b.cost_to_hit ? `<span>⏱ Ø <b>${num(b.cost_to_hit)}</b> bis Hit</span>` : ""}
+      ${b.cost_to_hit && !b.archived ? `<span>⏱ Ø <b>${num(b.cost_to_hit)}</b> bis Hit</span>` : ""}
     </div>
-    ${b.end ? `<div class="glance-until">⏳ ${esc(untilText(b))}</div>` : ""}
-    <div class="glance-note">${b.ev_from_site ? "aus Seitenzahlen" : "geschätzt"}</div>
+    ${b.end || b.archived ? `<div class="glance-until">${b.archived ? "🗄️" : "⏳"} ${esc(untilText(b))}</div>` : ""}
+    <div class="glance-note">${b.archived ? "Stand beim Ende · bleibt 30 Tage im Archiv"
+      : b.ev_from_site ? "aus Seitenzahlen" : "geschätzt"}</div>
   </div>`;
 }
 
@@ -520,14 +523,13 @@ async function showBanner(id) {
   if (state.detailSig === sig && view.querySelector(".dtabs")) return;   // unverändert: Bilder nicht neu laden
   state.detailSig = sig;
   view.innerHTML = `
-    <a class="back" href="javascript:history.back()">‹ Zurück</a>
+    <a class="back" href="#/" data-back>‹ Zurück</a>
     ${flags(b)}
     <div class="hero">${img(b.image, b.title, true)}${b.status !== "running" ? `<span class="status ${b.status}">${icon} ${label}</span>` : ""}
       <span class="price-pill">${coins(b.price)}</span></div>
     ${b.headline ? `<h1 class="d-title">${esc(b.headline)}</h1>` : ""}
     ${notMineNote(b)}
     ${glance(b)}
-    ${b.archived ? `<div class="archived-note">🗄️ ${esc(untilText(b))} · bleibt 30 Tage im Archiv</div>` : ""}
     <div class="watch-row" ${b.archived ? "hidden" : ""}><button class="watch-btn" id="watch-btn">🔔 Beobachten</button>
       <a class="hint" href="#/settings">Einstellungen ›</a></div>
     <div class="dtabs" role="tablist">${Object.entries(DETAIL_TABS).map(([k, l]) =>
@@ -1545,7 +1547,30 @@ document.addEventListener("error", (e) => {
     el.style.visibility = "hidden";
   }
 }, true);
-window.addEventListener("hashchange", route);
+// Tiefe jedes Verlaufseintrags innerhalb der App (bleibt auch bei Zurück-/Vor-Gesten des Browsers richtig)
+let navDepth = history.state?.depth ?? 0;
+if (history.state?.depth == null) history.replaceState({ ...(history.state || {}), depth: 0 }, "");
+window.addEventListener("hashchange", () => {
+  if (history.state?.depth == null) {   // neuer Eintrag (Link angetippt)
+    navDepth += 1;
+    history.replaceState({ ...(history.state || {}), depth: navDepth }, "");
+  } else {
+    navDepth = history.state.depth;      // Zurück/Vor
+  }
+  route();
+});
+
+// Zurück: eine Ebene zurück in der App; ohne Vorgeschichte (direkt geöffnet, Push, Neustart) zur Übersicht
+function goBack() {
+  if (navDepth > 0) history.back();
+  else location.hash = "#/";
+}
+document.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-back]");
+  if (!el) return;
+  e.preventDefault();
+  goBack();
+});
 // ↻ in der Kopfzeile: aktuelle Seite neu laden, Scroll-Position bleibt
 const refreshBtn = document.getElementById("refresh");
 refreshBtn?.addEventListener("click", async () => {
@@ -1593,7 +1618,7 @@ document.addEventListener("touchend", async () => {
   view.style.transform = "";
   if (edge && dx > 90 && location.hash.startsWith("#/banner/")) {
     haptic();
-    history.back();
+    goBack();
   } else if (top && dy >= 80 && state.current) {
     haptic();
     ptr.classList.add("spinning");
