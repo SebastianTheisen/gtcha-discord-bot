@@ -240,3 +240,20 @@ def test_api_log_only_on_change(tmp_path):
         assert [r[0] for r in rows] == [1000, 1500]
 
     asyncio.run(run())
+
+
+def test_admin_can_reject_auto_detection(tmp_path):
+    async def run():
+        db = Database(str(tmp_path / "b.db"))
+        await db.init()
+        await db.upsert_store_pack(24126, "Pack", 5000, 200, 200, None, None, None, "x")
+        await db.set_pull_tracking(24126, 0, 1, 100000, ["900", "901"], [], [[1, 100000, 1]])
+        await db.log_auto_ticks(24126, [{"key": "900", "tier": "T1", "name": "Diamant", "value": 110000}], False)
+        await db.set_reject(24126, "900", True)
+        assert (await db.get_pull_tracking(24126))["pulled"] == ["901"]
+        assert await db.get_rejects(24126) == {"900"}
+        await db.set_reject(24126, "900", False)          # wieder zulassen: alles neu auswerten
+        state = await db.get_pull_tracking(24126)
+        assert await db.get_rejects(24126) == set() and state["batches"] is None and state["ship_count"] is None
+
+    asyncio.run(run())

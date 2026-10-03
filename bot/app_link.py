@@ -50,6 +50,14 @@ class AppLinkMixin:
     async def _apply_app_medal(self, req: dict) -> tuple:
         """(ok, Grund). Gleiche Regeln wie eine Medaille im Discord-Thread."""
         pack_id, tier, user_id = int(req["pack_id"]), str(req["tier"]).upper(), int(req["discord_user_id"])
+        if req["action"] in ("admin_reject", "admin_unreject"):
+            # Admin: automatische Erkennung als falsch markieren / wieder zulassen (Feld "tier" = Kartenschlüssel)
+            await self.db.set_reject(pack_id, str(req["tier"]), req["action"] == "admin_reject")
+            logger.info(f"Admin: Erkennung {req['tier']} bei {pack_id} "
+                        f"{'als falsch markiert' if req['action'] == 'admin_reject' else 'wieder zugelassen'}")
+            if (await self.db.get_banner(pack_id) or {}).get("is_active") == 1:
+                await self._refresh_pool_views(pack_id)
+            return True, None
         if not re.fullmatch(r"T([1-9]\d?)", tier):
             return False, "Ungültige Medaille"
         if (await self.db.get_banner(pack_id) or {}).get("is_active") == STORE:

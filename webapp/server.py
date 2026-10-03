@@ -13,7 +13,7 @@ import os
 import re
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict
 
@@ -174,6 +174,13 @@ class App:
         while True:
             try:
                 await self._compute()
+                # Treffsicherheit: beendete Banner noch mitschreiben (Ergebnis wird 24 Std. später gemessen)
+                if time.monotonic() - getattr(self, "_archive_recorded", -1e9) > 1800:
+                    self._archive_recorded = time.monotonic()
+                    try:
+                        await self.accuracy.record(await self.view.archived_banners())
+                    except Exception as e:
+                        logger.debug(f"Archiv für Treffsicherheit nicht gespeichert: {e}")
                 if not self._syncing:
                     self._syncing = True
                     asyncio.create_task(self.sync_images())
@@ -525,6 +532,46 @@ class App:
         logger.info(f"Admin {admin['name']}: Medaille {tier} bei {pack_id} {action}")
         return web.json_response({"id": request_id})
 
+    async def api_admin_auto_ticks(self, request):
+        """Automatisch abgehakte Hits der letzten 14 Tage (zur Kontrolle) und ob sie als falsch markiert sind."""
+        await self._admin(request)
+        since = (datetime.now() - timedelta(days=14)).isoformat()
+        async with aiosqlite.connect(f"file:{self.view.db.db_path}?mode=ro", uri=True) as db:
+            try:
+                cur = await db.execute(
+                    "SELECT t.pack_id, t.card_key, t.tier, t.name, t.value, t.rebuild, t.created_at, "
+                    "r.card_key IS NOT NULL FROM auto_ticks t LEFT JOIN pull_rejects r "
+                    "ON r.pack_id = t.pack_id AND r.card_key = t.card_key WHERE t.created_at >= ? "
+                    "ORDER BY t.id DESC LIMIT 100", (since,))
+                rows = await cur.fetchall()
+            except aiosqlite.OperationalError:   # Bot noch nicht aktualisiert
+                rows = []
+        seen, items = set(), []
+        for pid, key, tier, name, value, rebuild, created, rejected in rows:
+            if (pid, key) in seen:   # nach Neuberechnungen mehrfach geloggt: nur der neueste Eintrag
+                continue
+            seen.add((pid, key))
+            items.append({"pack_id": pid, "key": key, "tier": tier, "name": name, "value": value,
+                          "rebuild": bool(rebuild), "at": local_time(created), "rejected": bool(rejected)})
+        return web.json_response({"items": items})
+
+    async def api_admin_reject(self, request):
+        """Automatische Erkennung als falsch markieren (oder wieder zulassen) - der Bot übernimmt es."""
+        admin = await self._admin(request)
+        body = await request.json()
+        try:
+            pack_id = int(body.get("pack_id"))
+        except (TypeError, ValueError):
+            raise web.HTTPBadRequest(text="Banner fehlt")
+        key = str(body.get("key", ""))
+        if not re.fullmatch(r"[0-9A-Za-z_#-]{1,40}", key):
+            raise web.HTTPBadRequest(text="Ungültig")
+        action = "admin_unreject" if body.get("undo") else "admin_reject"
+        request_id = await self.bridge.add_request(pack_id, key, {"user_id": admin["user_id"], "name": admin["name"]},
+                                                   action)
+        logger.info(f"Admin {admin['name']}: Erkennung {key} bei {pack_id} {action}")
+        return web.json_response({"id": request_id})
+
     async def api_admin_block(self, request):
         admin = await self._admin(request)
         body = await request.json()
@@ -765,6 +812,8 @@ def make_app(app: App) -> web.Application:
         web.get(r"/api/admin/user/{id:\d+}", app.api_admin_user),
         web.get("/api/admin/status", app.api_admin_status),
         web.post("/api/admin/medal", app.api_admin_medal),
+        web.get("/api/admin/auto_ticks", app.api_admin_auto_ticks),
+        web.post("/api/admin/reject", app.api_admin_reject),
         web.post("/api/admin/block", app.api_admin_block),
         web.post("/api/admin/push", app.api_admin_push),
         web.post("/api/me/devices/remove", app.api_remove_device),
