@@ -130,7 +130,7 @@ if batches and has_ship_hits:
     ship_hits = [u for u in tracked_units(pool) if u["shipping_only"]]
     classes = _value_classes(ship_hits, VALUE_TOLERANCE)
     print("Versand-Hits im Pool: " + ", ".join(f"{u['name']} {fmt_coins(u['value'])}" for u in ship_hits))
-    for i, (count, net) in enumerate(batches, 1):
+    for i, (count, net, *_) in enumerate(batches, 1):
         value = round(net * TAX_FACTOR)
         options = _batch_options(pool, classes, count, value, VALUE_TOLERANCE) if count > 0 and value > 0 else None
         line = f"Schub {i}: {count} Karte(n) · {fmt_coins(value)} Coins Kartenwert"

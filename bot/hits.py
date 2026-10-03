@@ -168,7 +168,7 @@ class HitsMixin:
                         reason = (f"bisher {count} Karten / {fmt_coins(card_value(ship_value))} Coins Kartenwert "
                                   f"in {len(batches)} Schüben verschickt")
                     elif count > prev_count and ship_value > prev_value:
-                        batches = batches + [[count - prev_count, ship_value - prev_value]]
+                        batches = batches + [[count - prev_count, ship_value - prev_value, int(time.time())]]
                         changed = True
                         reason = (f"{count - prev_count} Karte(n) / {fmt_coins(card_value(ship_value - prev_value))} "
                                   f"Coins Kartenwert verschickt")
@@ -176,7 +176,16 @@ class HitsMixin:
                         await self.db.set_pull_tracking(pid, value, ships[0], ships[1], pulled, unsure)
                         continue
                     # im Hintergrund-Thread: die Auftrags-Rechnung kann bei großen Werten etwas dauern
-                    joint = await asyncio.to_thread(match_shipment_history, pool, batches)
+                    # Regel der Gruppe: Medaille gesetzt = Versand angefordert -> der Hit steckt spätestens im
+                    # ersten Schub nach der Medaille
+                    keys = tier_keys(pool)
+                    medal_t = {keys[t]: m["at"] for t, m in (await self.db.medal_rows(medal_thread)).items()
+                               if t in keys and m.get("at")}
+                    deadlines = batch_deadlines(batches, medal_t)
+                    joint = await asyncio.to_thread(match_shipment_history, pool, batches, VALUE_TOLERANCE, deadlines)
+                    if joint.get("ignored_deadlines"):
+                        logger.info(f"[HIT] {pid}: Medaillen-Frist passt nicht zu den Schüben, ignoriert: "
+                                    f"{joint['ignored_deadlines']}")
                     old_groups = {(frozenset(g["keys"]), g["pulled"]) for g in unsure}
                     match = {
                         "certain": [k for k in joint["certain"] if k not in set(pulled)],

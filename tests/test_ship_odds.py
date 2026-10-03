@@ -70,8 +70,9 @@ def test_learning_job_and_app_show_odds(tmp_path, monkeypatch):
             await conn.execute("INSERT INTO shipment_history (banner_id, old_cards, new_cards, old_coins, new_coins, "
                                "old_players, new_players, changed_at) VALUES (24152, 0, 1, 0, 95800, 0, 1, ?)",
                                (now.isoformat(),))
+            # Medaille erst nach dem Versand gesetzt: keine Frist, der Schub bleibt ❓ mit Wahrscheinlichkeit
             await conn.execute("INSERT INTO medals (thread_id, tier, user_id, created_at) VALUES (?, 'T2', 1, ?)",
-                               (store_thread_id(24152), (now - timedelta(minutes=16)).isoformat()))
+                               (store_thread_id(24152), (now + timedelta(minutes=16)).isoformat()))
             await conn.commit()
 
         class Bot(LearningMixin):

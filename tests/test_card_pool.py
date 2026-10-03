@@ -382,3 +382,31 @@ def test_shipment_history_falls_back_to_order_model():
     assert res["groups"] and set(res["groups"][0]["keys"]) == {"2", "3"} and res["groups"][0]["pulled"] == 1
     # Schub, der schon als Karten aufgeht, wird wie bisher gewertet
     assert match_shipment_history(pool, [[1, round(10940 / 1.1)]])["certain"] == ["4"]
+
+
+def test_medal_deadline_resolves_shipment():
+    # Regel der Gruppe: Medaille gesetzt = Versand angefordert -> spätestens im ersten Schub danach.
+    # Wie 24152: 105.380 Kartenwert passt zu T2 (98.780 + Rest) oder T3 (98.560 + Rest)
+    from utils.card_pool import batch_deadlines, explain_batch, match_shipment_history, summarize_cards
+    pool = summarize_cards([
+        {"id": 2, "name": "Luffy Gold Frame", "buy_point": 98780, "duplication": 1, "action_type": 2},
+        {"id": 3, "name": "Luffy Katsumi", "buy_point": 98560, "duplication": 1, "action_type": 2},
+        {"id": 6, "name": "Normal", "buy_point": 330, "duplication": 400, "action_type": 0},
+        {"id": 7, "name": "Normal 2", "buy_point": 220, "duplication": 100, "action_type": 0},
+    ])
+    batches = [[1, 95800, 1000]]
+    assert match_shipment_history(pool, batches)["groups"]                      # ohne Medaille: ❓
+    due = batch_deadlines(batches, {"3": 900})                                # T3-Medaille vor dem Schub
+    assert due == {"3": 0}
+    res = match_shipment_history(pool, batches, deadlines=due)
+    assert res["certain"] == ["3"] and res["groups"] == [] and not res["ignored_deadlines"]
+    # Medaille erst nach dem letzten Schub: noch keine Frist
+    assert batch_deadlines(batches, {"3": 2000}) == {}
+    # Schübe ohne Zeit (vor der Aufzeichnung) sind nie Frist-Schübe
+    assert batch_deadlines([[1, 95800, None], [1, 95800, 1000]], {"3": 0}) == {"3": 1}
+    # Frist passt nicht (Schub enthält sicher keinen Hit): ignorieren statt falsch abhaken
+    res = match_shipment_history(pool, [[1, 300, 1000]], deadlines={"3": 0})
+    assert res["certain"] == [] and res["ignored_deadlines"] == ["3"]
+    # Einzelansicht eines Schubs genauso
+    one = explain_batch(pool, 1, 95800, set(), required={"3"})
+    assert one["certain"] == ["3"] and one["groups"] == []

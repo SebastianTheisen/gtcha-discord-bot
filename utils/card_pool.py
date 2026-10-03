@@ -462,7 +462,7 @@ def match_shipped_hits(pool: Dict, count: int, value: int, pulled_keys: Set[str]
 
 
 def explain_batch(pool: Dict, count: int, value: int, pulled_keys: Set[str],
-                  tol: float = VALUE_TOLERANCE) -> Dict:
+                  tol: float = VALUE_TOLERANCE, required: Set[str] = frozenset()) -> Dict:
     """Was steckt in einem einzelnen Versandschub? Für die Anzeige pro Schub.
 
     kind: "hits"    - mindestens ein Versand-Hit ist sicher oder als ❓-Gruppe drin
@@ -489,9 +489,27 @@ def explain_batch(pool: Dict, count: int, value: int, pulled_keys: Set[str],
         possible = orders if any(any(t) for t in orders) else []
     if not possible:
         return base
+    # Hits, deren Medaillen-Frist dieser Schub ist (batch_deadlines), müssen drin sein - wenn das aufgeht
+    need = [sum(1 for k in required if k in cls["keys"]) for cls in classes]
+    forced = [k for k in required if any(k in cls["keys"] for cls in classes)]
+    if forced:
+        kept = [t for t in possible if all(x >= n for x, n in zip(t, need))]
+        if kept:
+            possible = kept
+        else:
+            forced = []
     if all(not any(t) for t in possible):
         return {**base, "kind": "normal"}
     match = _summarize_options(classes, possible, open_hits)
+    if forced:
+        match["certain"] = list(dict.fromkeys(match["certain"] + sorted(forced)))
+        groups = []
+        for g in match["groups"]:
+            pulled = g["pulled"] - sum(1 for k in g["keys"] if k in forced)
+            rest = [k for k in g["keys"] if k not in forced and k not in match["certain"]]
+            if pulled > 0 and rest:
+                groups.append({**g, "keys": rest, "pulled": min(pulled, len(rest))})
+        match["groups"] = groups
     if match["certain"] or match["groups"]:
         return {**base, "kind": "hits", **{k: match[k] for k in ("certain", "groups")}}
     maybe = [{"value": cls["min"], "value_max": cls["max"], "keys": cls["keys"], "pulled": 0}
@@ -499,33 +517,61 @@ def explain_batch(pool: Dict, count: int, value: int, pulled_keys: Set[str],
     return {**base, "kind": "maybe", "maybe": maybe}
 
 
-def match_shipment_history(pool: Dict, batches: List[List[int]], tol: float = VALUE_TOLERANCE) -> Dict:
+def batch_deadlines(batches: List[List], medal_t: Dict[str, float]) -> Dict[str, int]:
+    """Frist je Hit mit Medaille: Index des ersten Schubs, der nach dem Setzen der Medaille aufgezeichnet wurde.
+
+    Regel der Gruppe: wer eine Medaille setzt, hat die Karte schon zum Versand angefordert - die Anforderung
+    erhöht sofort den Versand-Zähler der Seite. Die Karte steckt also spätestens in diesem Schub (oder in einem
+    früheren, wenn die Medaille erst später gesetzt wurde). Schübe ohne Zeit (vor der ersten Aufzeichnung)
+    zählen als früher. Ohne Schub nach der Medaille gibt es (noch) keine Frist."""
+    out = {}
+    for key, t in medal_t.items():
+        if t is None:
+            continue
+        for i, b in enumerate(batches):
+            if len(b) > 2 and b[2] is not None and b[2] >= t:
+                out[key] = i
+                break
+    return out
+
+
+def match_shipment_history(pool: Dict, batches: List[List], tol: float = VALUE_TOLERANCE,
+                           deadlines: Optional[Dict[str, int]] = None) -> Dict:
     """Wertet alle Versand-Schübe eines Banners gemeinsam aus.
 
-    batches: [[Anzahl Karten, Betrag aus total_sendprice], ...] je Schub. Jeder Versand-Hit kann
-    insgesamt nur einmal verschickt werden; deshalb schließen spätere Schübe Möglichkeiten aus
+    batches: [[Anzahl Karten, Betrag aus total_sendprice, Zeit (optional)], ...] je Schub. Jeder Versand-Hit
+    kann insgesamt nur einmal verschickt werden; deshalb schließen spätere Schübe Möglichkeiten aus
     früheren aus. Schübe, die zu groß oder gar nicht erklärbar sind, werden übergangen (das macht
-    das Ergebnis nur vorsichtiger, nie falsch). Medaillen lösen ❓-Gruppen bewusst nicht auf: eine
-    Medaille sagt nicht, welcher Versand zu ihr gehört (24152: T3 gemeldet, verschickt war T2).
+    das Ergebnis nur vorsichtiger, nie falsch).
+    deadlines (batch_deadlines): Hit mit Medaille -> Schub, bis zu dem er verschickt sein muss. Nur
+    Aufteilungen, die alle Fristen einhalten, bleiben übrig; diese Hits gelten dann als sicher verschickt.
+    Passt eine Frist zu keiner Aufteilung (Medaille irrtümlich, Karte doch umgewandelt, Frist-Schub
+    übergangen), wird sie ignoriert und unter "ignored_deadlines" gemeldet.
     Ergebnis wie match_shipped_hits, plus "used_batches".
     """
-    result = {"certain": [], "groups": [], "maybe": [], "used_batches": 0}
+    result = {"certain": [], "groups": [], "maybe": [], "used_batches": 0, "ignored_deadlines": []}
     hits = [u for u in tracked_units(pool) if u["shipping_only"]]
     if not hits:
         return result
     classes = _value_classes(hits, tol)
     sizes = [len(c["keys"]) for c in classes]
+    class_of = {k: i for i, c in enumerate(classes) for k in c["keys"]}
+    due = {k: j for k, j in (deadlines or {}).items() if k in class_of}
+    enforced: Set[str] = set()   # Fristen, die gelten (Frist-Schub ausgewertet, mit den Schüben vereinbar)
     states = {tuple([0] * len(classes))}
-    for count, net in batches:
+    for i, b in enumerate(batches):
+        count, net = b[0], b[1]
+        now_due = [k for k, j in due.items() if j == i]
         value = round(net * TAX_FACTOR)
-        if count < 0 or value <= 0 or count > MAX_SHIPMENT_CARDS or value > MAX_SHIPMENT_VALUE:
-            continue
-        options = _batch_options(pool, classes, count, value, tol) if count > 0 else []
-        if options == [] and value <= ORDER_MAX_VALUE:
-            # Geht der Schub als Karten nicht auf: der Zähler zählt manchmal Versand-Aufträge (mehrere Karten
-            # je Auftrag, Karten nachträglich zu einem Auftrag) - dann muss der Wert fast exakt aufgehen
-            options = _order_class_options(pool, classes, count, value)
+        options = None
+        if not (count < 0 or value <= 0 or count > MAX_SHIPMENT_CARDS or value > MAX_SHIPMENT_VALUE):
+            options = _batch_options(pool, classes, count, value, tol) if count > 0 else []
+            if options == [] and value <= ORDER_MAX_VALUE:
+                # Geht der Schub als Karten nicht auf: der Zähler zählt manchmal Versand-Aufträge (mehrere Karten
+                # je Auftrag, Karten nachträglich zu einem Auftrag) - dann muss der Wert fast exakt aufgehen
+                options = _order_class_options(pool, classes, count, value)
         if not options:
+            result["ignored_deadlines"] += now_due   # Frist-Schub nicht auswertbar: Frist nicht prüfbar
             continue
         combined = set()
         for st in states:
@@ -536,12 +582,36 @@ def match_shipment_history(pool: Dict, batches: List[List[int]], tol: float = VA
             if len(combined) > 50000:
                 return result
         if not combined:
+            result["ignored_deadlines"] += now_due
             continue  # widerspricht den anderen Schüben: übergehen statt falsch zuordnen
+        if now_due:
+            def need(keys):
+                req = [0] * len(classes)
+                for k in keys:
+                    req[class_of[k]] += 1
+                return req
+            req = need(enforced | set(now_due))
+            kept = {st for st in combined if all(x >= r for x, r in zip(st, req))}
+            if kept:
+                combined = kept
+                enforced |= set(now_due)
+            else:
+                result["ignored_deadlines"] += now_due
         states = combined
         result["used_batches"] += 1
     if not result["used_batches"]:
         return result
     summary = _summarize_options(classes, list(states), hits)
+    if enforced:
+        # Hits mit eingehaltener Frist sind sicher verschickt - aus ihren ❓-Gruppen herausnehmen
+        summary["certain"] = list(dict.fromkeys(summary["certain"] + sorted(enforced)))
+        groups = []
+        for g in summary["groups"]:
+            pulled = g["pulled"] - sum(1 for k in g["keys"] if k in enforced)
+            rest = [k for k in g["keys"] if k not in enforced and k not in summary["certain"]]
+            if pulled > 0 and rest:
+                groups.append({**g, "keys": rest, "pulled": min(pulled, len(rest))})
+        summary["groups"] = groups
     result.update(summary)
     return result
 
