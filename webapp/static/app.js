@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 87;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 88;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -93,7 +93,7 @@ async function api(path, options) {
 // Je GTCHA-Konto: wann zuletzt übertragen (für Personen mit mehreren Konten)
 function accountLines(s) {
   const day = (t) => `${t.slice(8, 10)}.${t.slice(5, 7)}. ${t.slice(11, 16)}`;
-  const lines = (s.accounts || []).map((a) => `${a.ok ? "✅" : "⏳"} ${a.label}: ${day(a.last_sync)}${a.ok
+  const lines = (s.accounts || []).map((a) => `${a.ok ? "✅" : "⏳"} ${a.label}${a.gtcha_id ? ` (ID ${esc(a.gtcha_id)})` : ""}: ${day(a.last_sync)}${a.ok
     ? ` · noch ${Math.floor(a.days_left)} Tag${Math.floor(a.days_left) === 1 ? "" : "e"}` : " · abgelaufen"}`);
   for (let i = 0; i < (s.missing || 0); i++) lines.push(`❌ Konto ${(s.accounts || []).length + i + 1}: noch nie übertragen`);
   return lines;
@@ -893,8 +893,7 @@ async function showSettings() {
         <button class="btn" id="bm-full">Lesezeichen „Komplett übertragen“ kopieren</button>
         <div class="hint">Nur nötig, wenn im Verlauf eine Lücke gemeldet wird – überträgt wieder alle Seiten.</div>
         <div class="hint">Mehrere GTCHA-Konten (z. B. eins in Safari, eins in Chrome)? In jedem Browser das Lesezeichen
-          einrichten und aufrufen – die App erkennt die Konten an einem Fingerabdruck der Mitglieds-ID (die ID selbst
-          wird nicht übertragen).</div>
+          einrichten und aufrufen – die App ordnet die Konten über die GTCHA-Mitglieds-ID zu.</div>
         <div class="hint">Einrichten (einmalig): siehe 📖 Anleitung oben – für Safari, Chrome (iPhone/Android) und PC.
           Der Code enthält deinen persönlichen Schlüssel – nicht weitergeben.</div>
         <div class="hint" id="bm-msg"></div>
@@ -1261,7 +1260,7 @@ const SYNC_PAGES = ["undecided-detail", "pending-detail", "shipped-detail", "dow
 // Nur Neues: Das Lesezeichen merkt sich (im Speicher von gtchaxonline.com auf diesem Gerät) den neuesten
 // Eintrag je Verlaufsbereich und hört auf zu blättern, sobald eine Seite ihn enthält. Der VPS hängt dann
 // nur das Neue an. Alle 30 Tage (oder mit "komplett") wird wieder alles übertragen.
-const SYNC_VERSION = 5;    // mit BOOKMARKLET_VERSION in webapp/server.py erhöhen, wenn sich das Lesezeichen ändert
+const SYNC_VERSION = 6;    // mit BOOKMARKLET_VERSION in webapp/server.py erhöhen, wenn sich das Lesezeichen ändert
 const SYNC_PARALLEL = 4;   // Bereiche gleichzeitig (je ein unsichtbares Fenster)
 const SYNC_INCREMENTAL = ["buy-point-history", "shipped-detail", "ticket-history", "purchase-history", "downloaded-detail"];
 function bookmarkletSync(token, full = false) {
@@ -1302,7 +1301,7 @@ let ACC=null,AS=null,MID=null;try{const r=await fetch('/api/user/detail',{creden
 if(!MID){const m=(document.body.textContent||'').match(/(?:Mitglieds-ID|Member ID|会員ID|会員番号)\\s*[:：]?\\s*([0-9]{4,})/i);if(m){MID=m[1];AS='text'}}
 try{if(MID){const h=await crypto.subtle.digest('SHA-256',new TextEncoder().encode('gtcha-tracker:'+MID));ACC=[...new Uint8Array(h)].slice(0,8).map(b=>b.toString(16).padStart(2,'0')).join('')}}catch(e){AS='hash-fehler'}
 const f=document.createElement('form');f.method='POST';f.action=${JSON.stringify(location.origin)}+'/api/import-form';
-const i=document.createElement('input');i.type='hidden';i.name='d';i.value=JSON.stringify({t:${JSON.stringify(token)},v:${SYNC_VERSION},acc:ACC,accsrc:AS,at:new Date().toISOString(),ms:Date.now()-T0,pages:out.filter(Boolean)});
+const i=document.createElement('input');i.type='hidden';i.name='d';i.value=JSON.stringify({t:${JSON.stringify(token)},v:${SYNC_VERSION},mid:MID,acc:ACC,accsrc:AS,at:new Date().toISOString(),ms:Date.now()-T0,pages:out.filter(Boolean)});
 f.appendChild(i);document.body.appendChild(f);f.submit()})()`;
   return "javascript:" + src.replace(/\n/g, "");
 }
@@ -1507,7 +1506,7 @@ async function showUsers() {
             <select data-expected>${[1, 2, 3].map((n) => `<option value="${n}" ${n === (h.sync?.expected || 1) ? "selected" : ""}>${n}</option>`).join("")}</select></div>
           ${(h.sync?.accounts || []).map((a, i) => `<div class="line"><span>${a.ok ? "✅" : "⏳"} ${a.label} ·
             ${esc(a.last_sync.slice(8, 10) + "." + a.last_sync.slice(5, 7) + ". " + a.last_sync.slice(11, 16))}
-            ${a.account === "default" ? '<span class="muted">· altes Lesezeichen</span>' : ""}</span>
+            ${a.account === "default" ? '<span class="muted">· altes Lesezeichen</span>' : ""}${a.gtcha_id ? ` · <b>ID ${esc(a.gtcha_id)}</b>` : ""}</span>
             <button class="seg-btn" data-acc="${i}">zurücksetzen</button></div>`).join("")}
           ${h.sync?.missing ? `<div class="line muted">❌ ${h.sync.missing} Konto/Konten noch nie übertragen</div>` : ""}
         </div>

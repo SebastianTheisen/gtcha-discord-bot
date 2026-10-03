@@ -33,7 +33,7 @@ from webapp.view import BannerView, banner_label
 
 STATIC = Path(__file__).parent / "static"
 REFRESH_SECONDS = 20
-BOOKMARKLET_VERSION = 5   # = SYNC_VERSION in app.js; ältere Lesezeichen bekommen einen Hinweis
+BOOKMARKLET_VERSION = 6   # = SYNC_VERSION in app.js; ältere Lesezeichen bekommen einen Hinweis
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
        "img-src 'self' data: https://gtchaxonline.com https://*.gtchaxonline.com; connect-src 'self'; "
        "manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; "
@@ -94,7 +94,9 @@ def sync_rule(state: Dict, now: Optional[datetime] = None) -> Dict:
     for i, a in enumerate(state.get("accounts") or [], 1):
         age = (now - datetime.fromisoformat(a["synced_at"])).total_seconds() / 86400
         # Anzeige in deutscher Zeit (gespeichert ist die UTC-Zeit des Containers)
-        accounts.append({"label": f"Konto {i}", "account": a["account"], "last_sync": local_time(a["synced_at"]),
+        gtcha_id = a["account"][3:] if a["account"].startswith("id:") else None
+        accounts.append({"label": f"Konto {i}", "account": a["account"], "gtcha_id": gtcha_id,
+                         "last_sync": local_time(a["synced_at"]),
                          "raw": a["synced_at"],
                          "ok": age < SYNC_REQUIRED_DAYS, "days_left": max(0, round(SYNC_REQUIRED_DAYS - age, 1))})
     missing = max(0, expected - len(accounts))
@@ -409,13 +411,20 @@ class App:
             changed = ingest(stored, entries)
             await self.bridge.set_history(user["user_id"], changed)
             if saved:   # zählt für die 7-Tage-Pflicht, je GTCHA-Konto (Fingerabdruck aus dem Lesezeichen)
+                # Zuordnung über die GTCHA-Mitglieds-ID; ältere Lesezeichen schicken nur einen Fingerabdruck davon
+                mid = str(data.get("mid") or "")
                 acc = str(data.get("acc") or "")
-                acc = acc if re.fullmatch(r"[0-9a-f]{8,32}", acc) else None
+                if re.fullmatch(r"[A-Za-z0-9_-]{1,32}", mid):
+                    hashed = hashlib.sha256(f"gtcha-tracker:{mid}".encode()).hexdigest()[:16]
+                    await self.bridge.rename_account(user["user_id"], hashed, f"id:{mid}")
+                    acc = f"id:{mid}"
+                else:
+                    acc = acc if re.fullmatch(r"[0-9a-f]{8,32}", acc) else None
                 await self.bridge.mark_synced(user["user_id"], acc)
                 sync_now = sync_rule(await self.bridge.sync_state(user["user_id"]))
                 sync_now["this"] = acc
-                logger.info(f"Sync von {user['name']}: Konto-Kennung "
-                            f"{acc[:6] + '…' if acc else 'FEHLT'} (Quelle {data.get('accsrc') or '–'}, Lesezeichen v{data.get('v')})")
+                logger.info(f"Sync von {user['name']}: Konto-Kennung {acc or 'FEHLT'} "
+                            f"(Quelle {data.get('accsrc') or '–'}, Lesezeichen v{data.get('v')})")
             gap = any(a.get("gap") for a in changed.values())
             added = {a: len(changed[a]["items"]) - before[a] for a in before if a in changed}
         except Exception as e:

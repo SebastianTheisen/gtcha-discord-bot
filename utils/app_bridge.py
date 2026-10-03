@@ -396,6 +396,19 @@ class AppBridge:
                 out.setdefault(u, {"expected": 1, "accounts": []})["expected"] = max(1, int(n or 1))
             return out
 
+    async def rename_account(self, user_id: str, old: str, new: str) -> None:
+        """Konto, das bisher nur als Fingerabdruck bekannt war, unter der Mitglieds-ID weiterführen."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT 1 FROM sync_accounts WHERE discord_user_id = ? AND account = ?",
+                                   (str(user_id), new))
+            if not await cur.fetchone():
+                await db.execute("UPDATE sync_accounts SET account = ? WHERE discord_user_id = ? AND account = ?",
+                                 (new, str(user_id), old))
+            else:
+                await db.execute("DELETE FROM sync_accounts WHERE discord_user_id = ? AND account = ?",
+                                 (str(user_id), old))
+            await db.commit()
+
     async def set_expected_accounts(self, user_id: str, expected: int) -> None:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("INSERT OR REPLACE INTO account_counts (discord_user_id, expected) VALUES (?, ?)",

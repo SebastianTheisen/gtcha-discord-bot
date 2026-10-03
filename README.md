@@ -52,7 +52,7 @@ kommt eine Erinnerung per Push. Admins (`APP_ADMIN_IDS`) sind ausgenommen. Die F
 `webapp/server.py` (`SYNC_REQUIRED_DAYS`).
 
 **Mehrere GTCHA-Konten einer Person** (z. B. eins in Safari, eins in Chrome): Das Lesezeichen schickt einen
-Fingerabdruck der Mitglieds-ID mit (die ID selbst nicht). Im Reiter „👥 Nutzer“ bei der Person „Anzahl Konten“
+die GTCHA-Mitglieds-ID mit. Im Reiter „👥 Nutzer“ bei der Person „Anzahl Konten“
 einstellen – dann müssen alle Konten alle 7 Tage übertragen; ein noch nie übertragenes Konto sperrt sofort.
 
 ### Weitere Personen freischalten
