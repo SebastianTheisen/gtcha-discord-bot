@@ -140,6 +140,8 @@ class Database:
                     pack_count INTEGER, sendcount INTEGER, sendprice INTEGER, kangen INTEGER, sendpeople INTEGER,
                     price INTEGER);
                 CREATE INDEX IF NOT EXISTS api_log_banner ON api_log (banner_id, id);
+                -- Abgeschlossene Banner als Lernfall (Versand-Zeiten, Medaillen, Beobachtungen), siehe utils/ship_odds.py
+                CREATE TABLE IF NOT EXISTS banner_cases (pack_id INTEGER PRIMARY KEY, ended_at TEXT, data TEXT);
                 -- Übersetzungen japanischer Namensteile (DeepL), siehe utils/translate.py
                 CREATE TABLE IF NOT EXISTS translations (source TEXT PRIMARY KEY, german TEXT, created_at TEXT);
                 CREATE TABLE IF NOT EXISTS discord_public (
@@ -892,6 +894,51 @@ class Database:
                     fixed.append(pid)
             await db.commit()
         return fixed
+
+    async def odds_inputs(self, pack_id: int) -> Dict:
+        """Zeitlicher Ablauf eines Banners für utils/ship_odds: Versandschübe, Medaillen (Stufe -> Meldezeit),
+        Pack-Verkäufe. Zeiten als Unix-Sekunden (die DB speichert naive UTC-Zeit)."""
+        def ts(iso):
+            try:
+                return datetime.fromisoformat(iso).replace(tzinfo=timezone.utc).timestamp()
+            except (TypeError, ValueError):
+                return None
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT changed_at, old_cards, new_cards, old_coins, new_coins FROM shipment_history "
+                                   "WHERE banner_id = ? ORDER BY id", (pack_id,))
+            shipments = [{"t": ts(t), "cards": (nc or 0) - (oc or 0), "coins": (nv or 0) - (ov or 0)}
+                         for t, oc, nc, ov, nv in await cur.fetchall() if (nc or 0) > (oc or 0)]
+            cur = await db.execute("SELECT is_active, category FROM banners WHERE pack_id = ?", (pack_id,))
+            row = await cur.fetchone()
+            store = bool(row) and (row[0] == STORE or (row[0] == 0 and row[1] == 'Store'))
+            if store:
+                threads = [store_thread_id(pack_id)]
+            else:
+                cur = await db.execute("SELECT thread_id FROM discord_threads WHERE banner_id = ?", (pack_id,))
+                threads = [r[0] for r in await cur.fetchall()]
+            medals = {}
+            if threads:
+                cur = await db.execute(f"SELECT tier, created_at FROM medals WHERE thread_id IN "
+                                       f"({','.join('?' * len(threads))})", threads)
+                medals = {tier: ts(t) for tier, t in await cur.fetchall() if ts(t)}
+            cur = await db.execute("SELECT changed_at, old_count - new_count FROM pack_history "
+                                   "WHERE banner_id = ? AND new_count < old_count ORDER BY id", (pack_id,))
+            moves = [(ts(t), n) for t, n in await cur.fetchall() if ts(t)]
+        return {"shipments": shipments, "medals": medals, "moves": moves}
+
+    async def save_case(self, pack_id: int, ended_at: Optional[str], data: Dict) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("INSERT OR REPLACE INTO banner_cases (pack_id, ended_at, data) VALUES (?, ?, ?)",
+                             (pack_id, ended_at, json.dumps(data, ensure_ascii=False)))
+            await db.commit()
+
+    async def get_cases(self) -> Dict[int, Dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            try:
+                cur = await db.execute("SELECT pack_id, data FROM banner_cases")
+            except aiosqlite.OperationalError:
+                return {}
+            return {pid: json.loads(d) for pid, d in await cur.fetchall()}
 
     async def get_ended_banners(self, days: int = ARCHIVE_DAYS) -> Dict[int, Dict]:
         """Beendete Banner (auch Store-Packs) der letzten `days` Tage, neueste zuerst."""
