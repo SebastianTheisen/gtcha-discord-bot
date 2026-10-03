@@ -67,6 +67,7 @@ class StoreMixin:
             await self.db.update_site_stats(pid, shipping_stats(item))
             if item.get('total_kangen') is not None:
                 await self.db.update_converted(pid, _int(item.get('total_kangen')))
+            await self.db.log_api_values(pid, item)
             present.append(pid)
             if is_new:
                 logger.info(f"[STORE] Neuer Pack {pid}: {item.get('name')} ({_int(item.get('point'))} Coins)")

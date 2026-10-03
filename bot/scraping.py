@@ -360,6 +360,7 @@ class ScrapingMixin:
     async def _apply_site_data(self, api_items: dict):
         """Preis, Kaufbedingungen und Versand-Zahlen aus pack/list übernehmen; Startbeitrag bei Änderung."""
         for pid, item in api_items.items():
+            await self.db.log_api_values(pid, item)   # Rohdaten (nur bei Änderung) für spätere Auswertung
             changed = await self.db.update_conditions(pid, banner_conditions(item))
             if _int(item.get('point')) > 0:
                 changed = await self.db.update_price(pid, _int(item.get('point'))) or changed

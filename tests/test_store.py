@@ -209,3 +209,21 @@ def test_store_hits_detected_and_medals_like_normal_banners_without_discord(tmp_
         assert await db.get_thread_by_banner_id(24126) is None
 
     asyncio.run(run())
+
+
+def test_api_log_only_on_change(tmp_path):
+    async def run():
+        db = Database(str(tmp_path / "b.db"))
+        await db.init()
+        item = {"pack_count": 10, "total_sendcount": 1, "total_sendprice": 1000, "total_kangen": 500,
+                "total_sendpeople": 1, "point": 1200}
+        assert await db.log_api_values(5, item) is True
+        assert await db.log_api_values(5, dict(item)) is False            # unverändert: kein Eintrag
+        assert await db.log_api_values(5, {**item, "total_sendprice": 1500}) is True
+        db2 = Database(db.db_path)                                        # nach Neustart: letzter Stand bekannt
+        assert await db2.log_api_values(5, {**item, "total_sendprice": 1500}) is False
+        async with aiosqlite.connect(db.db_path) as conn:
+            rows = await (await conn.execute("SELECT sendprice FROM api_log WHERE banner_id = 5 ORDER BY id")).fetchall()
+        assert [r[0] for r in rows] == [1000, 1500]
+
+    asyncio.run(run())
