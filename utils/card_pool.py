@@ -169,8 +169,9 @@ def relevant_units(pool: Dict, price: Optional[int]) -> List[Dict]:
 def resolve_pulled(detected: List[str], unsure: List[Dict], claimed: Set[str]) -> tuple:
     """Gezogene Karten aus sicheren Erkennungen, Medaillen und offenen ❓-Gruppen.
 
-    Eine Gruppe "n von diesen Karten gezogen" ist erledigt, sobald n ihrer Karten per Medaille oder
-    sicherer Erkennung feststehen. Sonst zählen für die Rechnung Stellvertreter aus der Gruppe.
+    Eine Gruppe "n von diesen Karten gezogen" bleibt offen (❓), solange eine ihrer Karten weder per
+    Medaille noch sicher erkannt ist: eine Medaille sagt nicht, welcher Versand zu ihr gehört (24152:
+    T3 gemeldet, der Versand T2/T3 war aber T2). Für die Rechnung zählen Stellvertreter aus der Gruppe.
     Gibt (alle gezogenen inkl. Stellvertreter, sicher erkannte, offene Gruppen) zurück.
     """
     groups = [g for g in unsure if g.get("pulled", 0) > 0]
@@ -178,34 +179,15 @@ def resolve_pulled(detected: List[str], unsure: List[Dict], claimed: Set[str]) -
     legacy = {k for g in groups for k in g["keys"][:g["pulled"]]}
     sure = set(detected) - legacy
     base = sure | set(claimed)
-    # Jede sicher bekannte Karte erledigt höchstens einen Platz in einer Gruppe (kleinste Gruppe zuerst),
-    # denn jede Gruppe steht für einen eigenen Versand
-    unused = set(claimed) - sure
     stand_ins: Set[str] = set()
     open_groups = []
     for g in sorted(groups, key=lambda g: len(g["keys"])):
-        covering = [k for k in g["keys"] if k in unused][:g["pulled"]]
-        unused -= set(covering)
-        missing = g["pulled"] - len(covering)
-        if missing > 0:
-            free = [k for k in g["keys"] if k not in base and k not in stand_ins]
-            stand_ins |= set(free[:missing])
-            open_groups.append(g)
+        free = [k for k in g["keys"] if k not in base and k not in stand_ins]
+        if not free:
+            continue   # alle Kandidaten stehen schon als gezogen fest - nichts mehr offen
+        stand_ins |= set(free[:g["pulled"]])
+        open_groups.append(g)
     return base | stand_ins, sure, open_groups
-
-
-def prefer_claimed(match: Dict, expected: Set[str]) -> Dict:
-    """Löst ❓-Gruppen zugunsten von Karten auf, die per Medaille gemeldet, aber noch nicht als
-    verschickt erkannt sind: eine gemeldete Karte ist der naheliegendste Kandidat für einen Versand."""
-    groups = []
-    for g in match["groups"]:
-        claimed = [k for k in g["keys"] if k in expected and k not in match["certain"]]
-        if len(claimed) >= g["pulled"]:
-            match["certain"] = match["certain"] + claimed[:g["pulled"]]
-        else:
-            groups.append(g)
-    match["groups"] = groups
-    return match
 
 
 def out_of_banner_value(pool: Dict, converted: Optional[int], shipped_counted: Optional[int],
@@ -480,7 +462,7 @@ def match_shipped_hits(pool: Dict, count: int, value: int, pulled_keys: Set[str]
 
 
 def explain_batch(pool: Dict, count: int, value: int, pulled_keys: Set[str],
-                  claimed: Set[str] = frozenset(), tol: float = VALUE_TOLERANCE) -> Dict:
+                  tol: float = VALUE_TOLERANCE) -> Dict:
     """Was steckt in einem einzelnen Versandschub? Für die Anzeige pro Schub.
 
     kind: "hits"    - mindestens ein Versand-Hit ist sicher oder als ❓-Gruppe drin
@@ -504,7 +486,7 @@ def explain_batch(pool: Dict, count: int, value: int, pulled_keys: Set[str],
         return base
     if all(not any(t) for t in possible):
         return {**base, "kind": "normal"}
-    match = prefer_claimed(_summarize_options(classes, possible, open_hits), set(claimed))
+    match = _summarize_options(classes, possible, open_hits)
     if match["certain"] or match["groups"]:
         return {**base, "kind": "hits", **{k: match[k] for k in ("certain", "groups")}}
     maybe = [{"value": cls["min"], "value_max": cls["max"], "keys": cls["keys"], "pulled": 0}
@@ -512,14 +494,14 @@ def explain_batch(pool: Dict, count: int, value: int, pulled_keys: Set[str],
     return {**base, "kind": "maybe", "maybe": maybe}
 
 
-def match_shipment_history(pool: Dict, batches: List[List[int]], claimed: Set[str] = frozenset(),
-                           tol: float = VALUE_TOLERANCE) -> Dict:
+def match_shipment_history(pool: Dict, batches: List[List[int]], tol: float = VALUE_TOLERANCE) -> Dict:
     """Wertet alle Versand-Schübe eines Banners gemeinsam aus.
 
     batches: [[Anzahl Karten, Betrag aus total_sendprice], ...] je Schub. Jeder Versand-Hit kann
     insgesamt nur einmal verschickt werden; deshalb schließen spätere Schübe Möglichkeiten aus
     früheren aus. Schübe, die zu groß oder gar nicht erklärbar sind, werden übergangen (das macht
-    das Ergebnis nur vorsichtiger, nie falsch). Medaillen-Karten (claimed) lösen ❓-Gruppen auf.
+    das Ergebnis nur vorsichtiger, nie falsch). Medaillen lösen ❓-Gruppen bewusst nicht auf: eine
+    Medaille sagt nicht, welcher Versand zu ihr gehört (24152: T3 gemeldet, verschickt war T2).
     Ergebnis wie match_shipped_hits, plus "used_batches".
     """
     result = {"certain": [], "groups": [], "maybe": [], "used_batches": 0}
@@ -555,7 +537,7 @@ def match_shipment_history(pool: Dict, batches: List[List[int]], claimed: Set[st
     if not result["used_batches"]:
         return result
     summary = _summarize_options(classes, list(states), hits)
-    result.update(prefer_claimed(summary, set(claimed)))
+    result.update(summary)
     return result
 
 
