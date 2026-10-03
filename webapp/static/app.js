@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 86;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 87;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -1261,7 +1261,7 @@ const SYNC_PAGES = ["undecided-detail", "pending-detail", "shipped-detail", "dow
 // Nur Neues: Das Lesezeichen merkt sich (im Speicher von gtchaxonline.com auf diesem Gerät) den neuesten
 // Eintrag je Verlaufsbereich und hört auf zu blättern, sobald eine Seite ihn enthält. Der VPS hängt dann
 // nur das Neue an. Alle 30 Tage (oder mit "komplett") wird wieder alles übertragen.
-const SYNC_VERSION = 4;    // mit BOOKMARKLET_VERSION in webapp/server.py erhöhen, wenn sich das Lesezeichen ändert
+const SYNC_VERSION = 5;    // mit BOOKMARKLET_VERSION in webapp/server.py erhöhen, wenn sich das Lesezeichen ändert
 const SYNC_PARALLEL = 4;   // Bereiche gleichzeitig (je ein unsichtbares Fenster)
 const SYNC_INCREMENTAL = ["buy-point-history", "shipped-detail", "ticket-history", "purchase-history", "downloaded-detail"];
 function bookmarkletSync(token, full = false) {
@@ -1298,9 +1298,11 @@ out[i]={path:p,pages,partial}}finally{fr.remove();say((++done)+' von '+P.length+
 say('lade '+P.length+' Bereiche gleichzeitig …');
 let next=0;await Promise.all(Array.from({length:PAR},async()=>{while(next<P.length){const i=next++;await area(P[i],i)}}));
 say('sende …');try{localStorage.setItem(LS,JSON.stringify(NM))}catch(e){}
-let ACC=null;try{const r=await fetch('/api/user/detail',{credentials:'include'});const j=await r.json();const id=j&&j.detail&&j.detail.id;if(id){const h=await crypto.subtle.digest('SHA-256',new TextEncoder().encode('gtcha-tracker:'+id));ACC=[...new Uint8Array(h)].slice(0,8).map(b=>b.toString(16).padStart(2,'0')).join('')}}catch(e){}
+let ACC=null,AS=null,MID=null;try{const r=await fetch('/api/user/detail',{credentials:'include'});const j=await r.json();const v=j&&j.detail&&(j.detail.id||j.detail.member_id||j.detail.user_id);if(v){MID=String(v);AS='api'}}catch(e){}
+if(!MID){const m=(document.body.textContent||'').match(/(?:Mitglieds-ID|Member ID|会員ID|会員番号)\\s*[:：]?\\s*([0-9]{4,})/i);if(m){MID=m[1];AS='text'}}
+try{if(MID){const h=await crypto.subtle.digest('SHA-256',new TextEncoder().encode('gtcha-tracker:'+MID));ACC=[...new Uint8Array(h)].slice(0,8).map(b=>b.toString(16).padStart(2,'0')).join('')}}catch(e){AS='hash-fehler'}
 const f=document.createElement('form');f.method='POST';f.action=${JSON.stringify(location.origin)}+'/api/import-form';
-const i=document.createElement('input');i.type='hidden';i.name='d';i.value=JSON.stringify({t:${JSON.stringify(token)},v:${SYNC_VERSION},acc:ACC,at:new Date().toISOString(),ms:Date.now()-T0,pages:out.filter(Boolean)});
+const i=document.createElement('input');i.type='hidden';i.name='d';i.value=JSON.stringify({t:${JSON.stringify(token)},v:${SYNC_VERSION},acc:ACC,accsrc:AS,at:new Date().toISOString(),ms:Date.now()-T0,pages:out.filter(Boolean)});
 f.appendChild(i);document.body.appendChild(f);f.submit()})()`;
   return "javascript:" + src.replace(/\n/g, "");
 }

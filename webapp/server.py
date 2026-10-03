@@ -33,7 +33,7 @@ from webapp.view import BannerView, banner_label
 
 STATIC = Path(__file__).parent / "static"
 REFRESH_SECONDS = 20
-BOOKMARKLET_VERSION = 4   # = SYNC_VERSION in app.js; ältere Lesezeichen bekommen einen Hinweis
+BOOKMARKLET_VERSION = 5   # = SYNC_VERSION in app.js; ältere Lesezeichen bekommen einen Hinweis
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
        "img-src 'self' data: https://gtchaxonline.com https://*.gtchaxonline.com; connect-src 'self'; "
        "manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; "
@@ -93,11 +93,13 @@ def sync_rule(state: Dict, now: Optional[datetime] = None) -> Dict:
     accounts = []
     for i, a in enumerate(state.get("accounts") or [], 1):
         age = (now - datetime.fromisoformat(a["synced_at"])).total_seconds() / 86400
-        accounts.append({"label": f"Konto {i}", "account": a["account"], "last_sync": a["synced_at"],
+        # Anzeige in deutscher Zeit (gespeichert ist die UTC-Zeit des Containers)
+        accounts.append({"label": f"Konto {i}", "account": a["account"], "last_sync": local_time(a["synced_at"]),
+                         "raw": a["synced_at"],
                          "ok": age < SYNC_REQUIRED_DAYS, "days_left": max(0, round(SYNC_REQUIRED_DAYS - age, 1))})
     missing = max(0, expected - len(accounts))
     stale = [a for a in accounts if not a["ok"]]
-    oldest = min(accounts, key=lambda a: a["last_sync"]) if accounts else None
+    oldest = min(accounts, key=lambda a: a["raw"]) if accounts else None
     ok = not missing and not stale
     return {"ok": ok, "reason": None if ok else ("accounts" if missing and not stale and accounts else "sync"),
             "days": SYNC_REQUIRED_DAYS, "expected": expected, "missing": missing, "accounts": accounts,
@@ -408,8 +410,12 @@ class App:
             await self.bridge.set_history(user["user_id"], changed)
             if saved:   # zählt für die 7-Tage-Pflicht, je GTCHA-Konto (Fingerabdruck aus dem Lesezeichen)
                 acc = str(data.get("acc") or "")
-                await self.bridge.mark_synced(user["user_id"], acc if re.fullmatch(r"[0-9a-f]{8,32}", acc) else None)
+                acc = acc if re.fullmatch(r"[0-9a-f]{8,32}", acc) else None
+                await self.bridge.mark_synced(user["user_id"], acc)
                 sync_now = sync_rule(await self.bridge.sync_state(user["user_id"]))
+                sync_now["this"] = acc
+                logger.info(f"Sync von {user['name']}: Konto-Kennung "
+                            f"{acc[:6] + '…' if acc else 'FEHLT'} (Quelle {data.get('accsrc') or '–'}, Lesezeichen v{data.get('v')})")
             gap = any(a.get("gap") for a in changed.values())
             added = {a: len(changed[a]["items"]) - before[a] for a in before if a in changed}
         except Exception as e:
@@ -438,6 +444,9 @@ class App:
             lines.append("⚠️ Zwischen alt und neu fehlt evtl. etwas – einmal „Komplett übertragen“ benutzen.")
         if claims:
             lines.append(f"🏅 {claims} Medaille(n) automatisch gemeldet.")
+        if sync_now and not sync_now.get("this"):
+            lines.append("👤 Konto-Kennung nicht erkannt – wer mehrere GTCHA-Konten hat: Lesezeichen in der App neu "
+                         "kopieren und ersetzen; sonst zählen beide Konten als eins.")
         if sync_now and (sync_now["expected"] > 1 or len(sync_now["accounts"]) > 1):
             konten = ", ".join(f"{a['label']} {'✅' if a['ok'] else '⏳'}" for a in sync_now["accounts"])
             lines.append(f"👤 GTCHA-Konten: {konten}" + (f" · noch {sync_now['missing']} Konto/Konten nicht übertragen "

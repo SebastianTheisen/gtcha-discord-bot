@@ -1,9 +1,9 @@
 // Service Worker: App-Hülle offline verfügbar halten, Push-Benachrichtigungen anzeigen.
-const CACHE = "gtcha-tracker-v86";
+const CACHE = "gtcha-tracker-v87";
 // Bilder dauerhaft auf dem Gerät halten (iOS leert den normalen Browser-Cache installierter Apps oft)
 const IMG_CACHE = "gtcha-img-v2";
 const IMG_MAX = 4000;
-const SHELL = ["/", "/static/style.css?v=86", "/static/app.js?v=86", "/static/icon-180.png?v=4", "/manifest.webmanifest"];
+const SHELL = ["/", "/static/style.css?v=87", "/static/app.js?v=87", "/static/icon-180.png?v=4", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
