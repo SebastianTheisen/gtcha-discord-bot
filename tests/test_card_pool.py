@@ -410,3 +410,22 @@ def test_medal_deadline_resolves_shipment():
     # Einzelansicht eines Schubs genauso
     one = explain_batch(pool, 1, 95800, set(), required={"3"})
     assert one["certain"] == ["3"] and one["groups"] == []
+
+
+def test_orders_model_prefers_shipping_hits_only():
+    # Wie 24136, Schub 9: 2 Aufträge, 1.466.740 Kartenwert. Mit beliebig vielen normalen Karten passt fast alles,
+    # allein aus Versand-Hits nur T1 + T4 + T5 + T7 - normale Karten wandelt praktisch jeder um.
+    from utils.card_pool import match_shipment_history, order_options, summarize_cards
+    hits = [727520, 453130, 438810, 415000, 271210, 64960, 52580]
+    cards = [{"id": i + 1, "name": f"T{i + 1}", "buy_point": v, "duplication": 1, "action_type": 2}
+             for i, v in enumerate(hits)]
+    cards += [{"id": 100 + i, "name": f"N{i}", "buy_point": v, "duplication": 30, "action_type": 0}
+              for i, v in enumerate([3300, 4400, 6600, 9900, 13200, 22000, 33000, 49940])]
+    pool = summarize_cards(cards)
+    net = round(1466740 / 1.1)
+    assert len(order_options(pool, 2, 1466740, prefer_hits=False)) > 1          # mit normalen Karten mehrdeutig
+    assert order_options(pool, 2, 1466740) == [frozenset({"1", "4", "5", "7"})]
+    res = match_shipment_history(pool, [[2, net, 1000]])
+    assert sorted(res["certain"]) == ["1", "4", "5", "7"] and res["groups"] == []
+    # geht es nur mit normalen Karten (T2 + 195.540), bleiben die normalen Karten erlaubt
+    assert order_options(pool, 2, 648670)
