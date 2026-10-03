@@ -105,7 +105,7 @@ for s in ships:
           + ("  ← passt genau zu " + tier if cards == 1 and abs(coins - unit["value"]) <= unit["value"] * 0.02 else ""))
 print("keine" if not ships else "")
 if batches is not None and has_ship_hits:
-    joint = match_shipment_history(pool, batches, winners)
+    joint = match_shipment_history(pool, batches)
     print(f"Auswertung aller {len(batches)} Schübe: sicher {joint['certain'] or '–'} · "
           f"Gruppen {[(g['pulled'], g['keys']) for g in joint['groups']] or '–'} · "
           f"genutzt {joint['used_batches']} von {len(batches)}")

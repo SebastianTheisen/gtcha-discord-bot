@@ -396,7 +396,7 @@ class BannerView:
         label = lambda k: f"{units[k]['name']} ({fmt_coins(units[k]['value'])} Coins)" if k in units else k
         sent: set = set()
         for s in reversed(shipments):
-            res = explain_batch(pool, s["cards"], s["coins"], sent, claimed=set(winners) - sent)
+            res = explain_batch(pool, s["cards"], s["coins"], sent)
             sent |= set(res["certain"])
             s["value"], s["kind"] = res["value"], res["kind"]
             lines = [{"icon": "✅", "text": label(k)} for k in res["certain"]]

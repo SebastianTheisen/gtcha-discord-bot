@@ -111,14 +111,18 @@ def test_tier_keys_follow_hit_list_order():
     assert keys["T1"] == "1" and keys["T13"] == "13" and keys["T14"] == "99"
 
 
-def test_medal_resolves_exactly_one_group():
+def test_medal_does_not_resolve_group():
+    # Wie 24152: Versand passt zu T2 oder T3, T3 hat eine Medaille - verschickt war aber T2.
+    # Die Medaille klärt die Gruppe also nicht: ❓ bleibt, die übrige Karte zählt als Stellvertreter.
     from utils.card_pool import resolve_pulled
     groups = [{"keys": ["a", "b", "c"], "pulled": 1}, {"keys": ["b", "c"], "pulled": 1}]
     pulled, sure, open_groups = resolve_pulled([], groups, {"b"})
-    assert open_groups == [groups[0]]          # Medaille b erledigt nur die kleinere Gruppe
-    assert len(pulled) == 2                    # b + ein Stellvertreter für die offene Gruppe
-    pulled, _, open_groups = resolve_pulled([], groups, {"b", "a"})
-    assert open_groups == [] and pulled == {"a", "b"}
+    assert open_groups == [groups[1], groups[0]] and pulled == {"a", "b", "c"}
+    pulled, _, open_groups = resolve_pulled([], [{"keys": ["b", "c"], "pulled": 1}], {"b"})
+    assert len(open_groups) == 1 and pulled == {"b", "c"}
+    # erst wenn alle Kandidaten gemeldet sind, ist nichts mehr offen
+    pulled, _, open_groups = resolve_pulled([], [{"keys": ["b", "c"], "pulled": 1}], {"b", "c"})
+    assert open_groups == [] and pulled == {"b", "c"}
 
 
 def test_jump_detection_for_banners_without_shipping_hits():
@@ -186,20 +190,6 @@ def test_shipment_values_are_counted_without_tax():
     assert match_shipped_hits(pool, 1, 18260, set())["certain"] == []   # Bruttowert passt nicht mehr
 
 
-def test_medal_claimed_card_is_preferred_for_a_shipment():
-    # Wie 24149: T2 (Lugia) per Medaille gemeldet, dann 8 Karten / 37.900 verschickt.
-    # Rechnerisch passen Glurak oder Lugia - die gemeldete Lugia ist es.
-    from utils.card_pool import prefer_claimed
-    pool = summarize_cards([card(1, 36740, hit=True, name="Glurak"), card(2, 35420, hit=True, name="Lugia"),
-                            card(3, 17710, hit=True, name="Pikachu"), card(4, 1980, copies=20),
-                            card(5, 660, copies=200), card(6, 330, copies=300)])
-    keys = keys_by_name(pool)
-    raw = match_shipped_hits(pool, 8, 37900, set())
-    assert raw["certain"] == [] and len(raw["groups"]) == 1        # ohne Medaille: Glurak oder Lugia
-    result = prefer_claimed(raw, {keys["Lugia"]})
-    assert result["certain"] == [keys["Lugia"]] and result["groups"] == []
-
-
 def _glurak_pool():
     return summarize_cards([card(1, 36740, hit=True, name="Glurak"), card(2, 35420, hit=True, name="Lugia"),
                             card(3, 17710, hit=True, name="Pikachu"), card(4, 1980, copies=20),
@@ -225,13 +215,6 @@ def test_history_skips_unexplainable_and_huge_batches():
     assert result["certain"] == [keys_by_name(pool)["Pikachu"]] and result["used_batches"] == 1
 
 
-def test_history_uses_medal_to_resolve_group():
-    from utils.card_pool import match_shipment_history
-    pool = _glurak_pool()
-    result = match_shipment_history(pool, [[8, 37900]], claimed={keys_by_name(pool)["Lugia"]})
-    assert result["certain"] == [keys_by_name(pool)["Lugia"]] and result["groups"] == []
-
-
 def test_estimate_for_pool_without_shipping_hits():
     # Wie 24060 (Coin-Banner, gratis): keine Versand-Hits, Preis 0
     pool = summarize_cards([card(1, 30000), card(2, 10000), card(3, 5000), card(4, 100, copies=97)])
@@ -255,8 +238,6 @@ def test_explain_batch_kinds():
     assert pika["kind"] == "hits" and pika["certain"] == [keys["Pikachu"]] and pika["value"] == 17710
     group = explain_batch(pool, 8, 37900, set())
     assert group["kind"] == "hits" and len(group["groups"]) == 1
-    medal = explain_batch(pool, 8, 37900, set(), claimed={keys["Lugia"]})
-    assert medal["certain"] == [keys["Lugia"]] and medal["groups"] == []
     assert explain_batch(pool, 1, 600, set())["kind"] == "normal"
     assert explain_batch(pool, 80, 999999, set())["kind"] == "too_big"
     assert explain_batch(pool, 1, 12345, set())["kind"] == "unclear"
@@ -399,8 +380,5 @@ def test_shipment_history_falls_back_to_order_model():
     res = match_shipment_history(pool, batches)
     assert res["used_batches"] == 1
     assert res["groups"] and set(res["groups"][0]["keys"]) == {"2", "3"} and res["groups"][0]["pulled"] == 1
-    # T3 hat eine Medaille -> der Versand war T3, T2 bleibt offen
-    res = match_shipment_history(pool, batches, claimed={"3"})
-    assert "2" not in res["certain"] and not any("2" in g["keys"] for g in res["groups"])
     # Schub, der schon als Karten aufgeht, wird wie bisher gewertet
     assert match_shipment_history(pool, [[1, round(10940 / 1.1)]])["certain"] == ["4"]
