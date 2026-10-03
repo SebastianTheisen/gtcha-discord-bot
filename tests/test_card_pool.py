@@ -429,3 +429,20 @@ def test_orders_model_prefers_shipping_hits_only():
     assert sorted(res["certain"]) == ["1", "4", "5", "7"] and res["groups"] == []
     # geht es nur mit normalen Karten (T2 + 195.540), bleiben die normalen Karten erlaubt
     assert order_options(pool, 2, 648670)
+
+
+def test_cheap_normal_cards_only_when_needed():
+    # Billige Karten (unter 3× Packpreis) werden fast immer umgewandelt: erst ohne sie erklären
+    from utils.card_pool import match_shipment_history, summarize_cards
+    pool = summarize_cards([
+        {"id": 1, "name": "H1", "buy_point": 100000, "duplication": 1, "action_type": 2},
+        {"id": 2, "name": "H2", "buy_point": 105000, "duplication": 1, "action_type": 2},
+        {"id": 5, "name": "Wertvoll", "buy_point": 40000, "duplication": 2, "action_type": 0},
+        {"id": 6, "name": "Billig", "buy_point": 4000, "duplication": 50, "action_type": 0},
+    ])
+    batch = [[1, round(140000 / 1.1), 1000]]       # 1 Auftrag: H1 + 40.000 oder nur billige/normale Karten
+    assert match_shipment_history(pool, batch)["certain"] == []                 # ohne Packpreis: mehrdeutig
+    assert match_shipment_history(pool, batch, price=10000)["certain"] == ["1"]
+    # geht es nur mit billigen Karten, sind sie erlaubt
+    res = match_shipment_history(pool, [[1, round(113000 / 1.1), 1000]], price=10000)   # H2 + 2 × 4.000
+    assert res["certain"] == ["2"]

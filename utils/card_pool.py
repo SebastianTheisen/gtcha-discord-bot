@@ -347,6 +347,42 @@ def _batch_options(pool: Dict, classes: List[Dict], count: int, value: int, tol:
     return None if len(possible) > 50000 else possible
 
 
+# Normale Karten unter diesem Vielfachen des Packpreises werden fast immer umgewandelt, nicht verschickt
+SHIP_NORMAL_MIN_FACTOR = 3
+
+
+def _valuable_pool(pool: Dict, price: Optional[int]) -> Optional[Dict]:
+    """Pool, in dem nur normale Karten ab SHIP_NORMAL_MIN_FACTOR × Packpreis vorkommen (None ohne Preis)."""
+    if not price:
+        return None
+    limit = SHIP_NORMAL_MIN_FACTOR * price
+    return {**pool, "normal_values": {v: n for v, n in (pool.get("normal_values") or {}).items() if int(v) >= limit}}
+
+
+def _ship_options(pool: Dict, classes: List[Dict], count: int, value: int, tol: float,
+                  price: Optional[int] = None, hits_needed: bool = False) -> Optional[List[tuple]]:
+    """Mögliche Aufteilungen eines Versand-Schubs, in dieser Rangfolge (die erste, die aufgeht, gilt):
+      1. mit wertvollen normalen Karten (ab 3× Packpreis) - als Karten, sonst als Versand-Aufträge
+         (dort zuerst allein aus Versand-Hits, siehe order_options)
+      2. mit allen Karten - billige Karten werden fast immer umgewandelt, aber nicht immer
+    hits_needed: als Versand-Aufträge nur zählen, wenn dabei ein Hit ins Spiel kommt (Einzelansicht).
+    None = zu viele Möglichkeiten."""
+    def options(p):
+        found = _batch_options(p, classes, count, value, tol) if count > 0 else []
+        if found is None:
+            return None
+        if not found and classes and value <= ORDER_MAX_VALUE:
+            orders = _order_class_options(p, classes, count, value)
+            found = orders if not hits_needed or any(any(t) for t in orders) else []
+        return found
+    valuable = _valuable_pool(pool, price)
+    if valuable is not None:
+        found = options(valuable)
+        if found:
+            return found
+    return options(pool)
+
+
 def _summarize_options(classes: List[Dict], possible: List[tuple], units: List[Dict]) -> Dict:
     """Was in jeder möglichen Aufteilung gilt: sichere Hits und ❓-Gruppen."""
     result = {"certain": [], "groups": [], "maybe": []}
@@ -392,7 +428,7 @@ def _pool_sums(pool: Dict, value: int) -> List[int]:
         return cached[1]
     limit = int(value * 1.25) + 1000
     sums = _normal_sums(pool, ORDER_MAX_NORMALS, limit)
-    if len(_SUMS_CACHE) >= 2:
+    if len(_SUMS_CACHE) >= 4:   # je Banner: Pool mit wertvollen und mit allen Karten
         _SUMS_CACHE.pop(next(iter(_SUMS_CACHE)))
     _SUMS_CACHE[key] = (limit, sums)
     return sums
@@ -486,7 +522,8 @@ def match_shipped_hits(pool: Dict, count: int, value: int, pulled_keys: Set[str]
 
 
 def explain_batch(pool: Dict, count: int, value: int, pulled_keys: Set[str],
-                  tol: float = VALUE_TOLERANCE, required: Set[str] = frozenset()) -> Dict:
+                  tol: float = VALUE_TOLERANCE, required: Set[str] = frozenset(),
+                  price: Optional[int] = None) -> Dict:
     """Was steckt in einem einzelnen Versandschub? Für die Anzeige pro Schub.
 
     kind: "hits"    - mindestens ein Versand-Hit ist sicher oder als ❓-Gruppe drin
@@ -503,14 +540,11 @@ def explain_batch(pool: Dict, count: int, value: int, pulled_keys: Set[str],
         return {**base, "kind": "too_big"}
     open_hits = [u for u in tracked_units(pool) if u["shipping_only"] and u["key"] not in pulled_keys]
     classes = _value_classes(open_hits, tol) if open_hits else []
-    possible = _batch_options(pool, classes, count, gross, tol)
+    # wie match_shipment_history; als Versand-Aufträge nur, wenn dabei ein Hit ins Spiel kommt
+    # (aus vielen normalen Karten lässt sich fast jeder Betrag bilden, das erklärt nichts)
+    possible = _ship_options(pool, classes, count, gross, tol, price, hits_needed=True)
     if possible is None:
         return {**base, "kind": "too_big"}
-    if not possible and classes and gross <= ORDER_MAX_VALUE:
-        # wie match_shipment_history: als Versand-Aufträge - nur wenn dabei ein Hit ins Spiel kommt
-        # (aus vielen normalen Karten lässt sich fast jeder Betrag bilden, das erklärt nichts)
-        orders = _order_class_options(pool, classes, count, gross)
-        possible = orders if any(any(t) for t in orders) else []
     if not possible:
         return base
     # Hits, deren Medaillen-Frist dieser Schub ist (batch_deadlines), müssen drin sein - wenn das aufgeht
@@ -560,7 +594,7 @@ def batch_deadlines(batches: List[List], medal_t: Dict[str, float]) -> Dict[str,
 
 
 def match_shipment_history(pool: Dict, batches: List[List], tol: float = VALUE_TOLERANCE,
-                           deadlines: Optional[Dict[str, int]] = None) -> Dict:
+                           deadlines: Optional[Dict[str, int]] = None, price: Optional[int] = None) -> Dict:
     """Wertet alle Versand-Schübe eines Banners gemeinsam aus.
 
     batches: [[Anzahl Karten, Betrag aus total_sendprice, Zeit (optional)], ...] je Schub. Jeder Versand-Hit
@@ -571,6 +605,7 @@ def match_shipment_history(pool: Dict, batches: List[List], tol: float = VALUE_T
     Aufteilungen, die alle Fristen einhalten, bleiben übrig; diese Hits gelten dann als sicher verschickt.
     Passt eine Frist zu keiner Aufteilung (Medaille irrtümlich, Karte doch umgewandelt, Frist-Schub
     übergangen), wird sie ignoriert und unter "ignored_deadlines" gemeldet.
+    price (Packpreis): billige normale Karten nur, wenn es ohne sie nicht aufgeht (siehe _ship_options).
     Ergebnis wie match_shipped_hits, plus "used_batches".
     """
     result = {"certain": [], "groups": [], "maybe": [], "used_batches": 0, "ignored_deadlines": []}
@@ -589,11 +624,9 @@ def match_shipment_history(pool: Dict, batches: List[List], tol: float = VALUE_T
         value = round(net * TAX_FACTOR)
         options = None
         if not (count < 0 or value <= 0 or count > MAX_SHIPMENT_CARDS or value > MAX_SHIPMENT_VALUE):
-            options = _batch_options(pool, classes, count, value, tol) if count > 0 else []
-            if options == [] and value <= ORDER_MAX_VALUE:
-                # Geht der Schub als Karten nicht auf: der Zähler zählt manchmal Versand-Aufträge (mehrere Karten
-                # je Auftrag, Karten nachträglich zu einem Auftrag) - dann muss der Wert fast exakt aufgehen
-                options = _order_class_options(pool, classes, count, value)
+            # Geht der Schub als Karten nicht auf: der Zähler zählt manchmal Versand-Aufträge (mehrere Karten
+            # je Auftrag, Karten nachträglich zu einem Auftrag) - dann muss der Wert fast exakt aufgehen
+            options = _ship_options(pool, classes, count, value, tol, price)
         if not options:
             result["ignored_deadlines"] += now_due   # Frist-Schub nicht auswertbar: Frist nicht prüfbar
             continue

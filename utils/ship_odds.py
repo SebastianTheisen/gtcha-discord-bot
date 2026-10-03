@@ -84,22 +84,23 @@ def group_odds(keys: Sequence[str], pulled: int, ship_t: Optional[float], medal_
     return {k: min(1.0, pulled * v / s) for k, v in w.items()}
 
 
-def batch_results(pool: Dict, shipments: List[Dict]) -> List[Dict]:
+def batch_results(pool: Dict, shipments: List[Dict], price: Optional[int] = None) -> List[Dict]:
     """Jeder Versandschub (älteste zuerst, mit "t", "cards", "coins") mit explain_batch-Ergebnis; ein sicher
     erkannter Hit zählt in späteren Schüben nicht noch einmal."""
     sent: Set[str] = set()
     out = []
     for s in sorted(shipments, key=lambda s: s.get("t") or 0):
-        res = explain_batch(pool, s["cards"], s["coins"], sent)
+        res = explain_batch(pool, s["cards"], s["coins"], sent, price=price)
         sent |= set(res["certain"])
         out.append({**s, "res": res})
     return out
 
 
-def observations(pool: Dict, shipments: List[Dict], medal_t: Dict[str, float]) -> List[float]:
+def observations(pool: Dict, shipments: List[Dict], medal_t: Dict[str, float],
+                 price: Optional[int] = None) -> List[float]:
     """Gelernte Verzögerungen (Stunden): Hit mit Medaille, dessen Versand sicher erkannt wurde."""
     found = []
-    for s in batch_results(pool, shipments):
+    for s in batch_results(pool, shipments, price):
         for k in s["res"]["certain"]:
             if k in medal_t and s.get("t") and s["t"] >= medal_t[k]:
                 found.append((s["t"] - medal_t[k]) / 3600)
