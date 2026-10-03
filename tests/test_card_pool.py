@@ -383,3 +383,24 @@ def test_order_model_shipment_counts_orders_not_cards():
     assert frozenset() in order_options(pool, 1, 6600)                    # nur normale Karten möglich
     assert order_options(pool, 0, 1320) == [frozenset()]                  # Karten zu bestehendem Auftrag
     assert frozenset({"4", "5"}) in order_options(pool, 1, 10940 + 10560 + 330)
+
+
+def test_shipment_history_falls_back_to_order_model():
+    """Schub, der als Karten nicht aufgeht, wird als Versand-Auftrag ausgewertet (Zahlen von 24152)."""
+    from utils.card_pool import match_shipment_history, summarize_cards
+    pool = summarize_cards([
+        {"id": 2, "name": "Luffy Gold Frame", "buy_point": 98780, "duplication": 1, "action_type": 2},
+        {"id": 3, "name": "Luffy Katsumi", "buy_point": 98560, "duplication": 1, "action_type": 2},
+        {"id": 4, "name": "Tashigi", "buy_point": 10940, "duplication": 1, "action_type": 2},
+        {"id": 6, "name": "Normal", "buy_point": 330, "duplication": 400, "action_type": 0},
+        {"id": 7, "name": "Normal 2", "buy_point": 220, "duplication": 100, "action_type": 0},
+    ])
+    batches = [[1, 95800]]                       # 1 gezählt, 105.380 Kartenwert: als 1 Karte unmöglich
+    res = match_shipment_history(pool, batches)
+    assert res["used_batches"] == 1
+    assert res["groups"] and set(res["groups"][0]["keys"]) == {"2", "3"} and res["groups"][0]["pulled"] == 1
+    # T3 hat eine Medaille -> der Versand war T3, T2 bleibt offen
+    res = match_shipment_history(pool, batches, claimed={"3"})
+    assert "2" not in res["certain"] and not any("2" in g["keys"] for g in res["groups"])
+    # Schub, der schon als Karten aufgeht, wird wie bisher gewertet
+    assert match_shipment_history(pool, [[1, round(10940 / 1.1)]])["certain"] == ["4"]

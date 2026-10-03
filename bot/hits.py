@@ -177,7 +177,8 @@ class HitsMixin:
                     if not changed:
                         await self.db.set_pull_tracking(pid, value, ships[0], ships[1], pulled, unsure)
                         continue
-                    joint = match_shipment_history(pool, batches, claimed)
+                    # im Hintergrund-Thread: die Auftrags-Rechnung kann bei großen Werten etwas dauern
+                    joint = await asyncio.to_thread(match_shipment_history, pool, batches, claimed)
                     old_groups = {(frozenset(g["keys"]), g["pulled"]) for g in unsure}
                     match = {
                         "certain": [k for k in joint["certain"] if k not in set(pulled)],
