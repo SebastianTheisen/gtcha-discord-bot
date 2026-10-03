@@ -317,6 +317,15 @@ class AppBridge:
             await db.commit()
         return request_id
 
+    async def auto_claims_for(self, pack_id: int) -> Dict[str, Dict]:
+        """Per Lesezeichen gemeldete Medaillen eines Banners: Stufe -> {user_id, pulled_on (Anfragedatum)}."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT tier, discord_user_id, card_key FROM auto_claims WHERE pack_id = ?",
+                                   (pack_id,))
+            rows = await cur.fetchall()
+        return {tier: {"user_id": str(u), "pulled_on": (key.split("@", 1)[1].split("#")[0] if "@" in key else None)}
+                for tier, u, key in rows}
+
     async def auto_claims(self, user_id: str) -> List[Dict]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row

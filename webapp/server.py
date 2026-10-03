@@ -217,6 +217,17 @@ class App:
         data.pop("hit_keys_detected", None)
         data.pop("cards_brief", None)
         data["ev_history"] = await self.accuracy.history(pack_id)
+        # Herkunft der Medaillen: Name der Person und ob per Lesezeichen (automatisch) gemeldet
+        names = {u["user_id"]: u.get("name") for u in await self.bridge.known_users()}
+        auto = await self.bridge.auto_claims_for(pack_id)
+        for h in data.get("hits") or []:
+            o = h.get("origin")
+            if not o or "user" not in o:
+                continue
+            o["name"] = names.get(o["user"]) or None
+            a = auto.get(h["tier"])
+            if a and a["user_id"] == o["user"]:
+                o["via"], o["pulled_on"] = "lesezeichen", a["pulled_on"]
         return web.json_response(data)
 
     async def image(self, request):
