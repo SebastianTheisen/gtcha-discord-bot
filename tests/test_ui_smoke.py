@@ -107,13 +107,13 @@ async def _run(tmp_path, browser_path):
             if not text.strip() or "nicht erreichbar" in text or "Lädt …" == text.strip():
                 problems.append(f"{name}: kein Inhalt ({text[:80]!r})")
             problems += [f"{name}: JS-Fehler {e}" for e in errors]
-        # Kategorie "Store": das Store-Pack erscheint dort, aber nicht unter "Alle"
+        # Kategorie "Store": das Store-Pack erscheint dort und unter "Alle" (wie jeder andere Pack)
         await page.goto(base + "/#/")
         await page.wait_for_timeout(1000)
         await page.click('[data-cat="Alle"]')
         await page.wait_for_timeout(500)
-        if "24126" in await page.inner_text("#results"):
-            problems.append("Store-Pack steht unter 'Alle'")
+        if "24126" not in await page.inner_text("#results"):
+            problems.append("Store-Pack fehlt unter 'Alle'")
         await page.click('[data-cat="Store"]')
         await page.wait_for_timeout(500)
         if "24126" not in await page.inner_text("#results"):

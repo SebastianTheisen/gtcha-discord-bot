@@ -22,6 +22,12 @@ PACK_HISTORY_DAYS = 90
 STORE = 2
 
 
+def store_thread_id(pack_id: int) -> int:
+    """Interne "Thread-Nummer" eines Store-Packs (ohne Discord): Medaillen hängen daran wie an einem Thread.
+    Negativ, damit sie nie mit einer echten Discord-ID zusammenfällt."""
+    return -int(pack_id)
+
+
 def archive_pool(pool_json) -> tuple:
     """(Kartenwerte + Ø je Pack, Karten-ID -> Wert) eines Kartenpools als JSON für banner_archive."""
     try:

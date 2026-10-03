@@ -47,6 +47,9 @@ def make_bot(db, client):
         def _store_client_get(self):
             return client
 
+        async def _detect_pulled_hits(self, items):   # echte Erkennung: eigener Test unten
+            self.detected = sorted(items)
+
     return Bot()
 
 
@@ -117,11 +120,92 @@ def test_store_packs_in_app_data(tmp_path, env):
         banners = {b["id"]: b for b in await view.all_banners(with_pool=True)}
         store = banners[24126]
         assert store["store"] is True and store["category"] == "Store" and store["price"] == 5000
-        assert store["hits_open"] is None and store["tracked_hits"] is False and store["out"] == []
-        assert "store" not in banners[1] or banners[1].get("store") is None
-        assert [b["id"] for b in view.hot(list(banners.values()))] == [1]       # Store nicht in der Top 10
+        assert store["hits_total"] == 3 and store["hits_open"] == 3              # wie normale Banner (T1-T3)
+        assert banners[1].get("store") is None
+        assert 24126 in [b["id"] for b in view.hot(list(banners.values()))]    # wie alle anderen Packs
         detail = await view.detail(24126)
         assert detail["title"] == "宝石ガチャ BtoB" and detail["cards"]
         assert any("/pack/24126/1.webp" in u for u in await view.image_urls())
+
+    asyncio.run(run())
+
+
+HIT_CARDS = [{"id": 900, "name": "Diamant", "buy_point": 110000, "duplication": 1, "action_type": 2},
+             {"id": 901, "name": "Perle", "buy_point": 900, "duplication": 199, "action_type": 0}]
+
+
+def test_store_hits_detected_and_medals_like_normal_banners_without_discord(tmp_path, env):
+    """Versand eines Hits wird erkannt, Medaillen aus der App gespeichert - und nichts geht nach Discord."""
+    from bot.app_link import AppLinkMixin
+    from bot.hits import HitsMixin
+    from bot.medals import MedalsMixin
+    from bot.store import StoreMixin
+    from utils.app_bridge import AppBridge
+    from webapp.view import BannerView
+
+    discord = []
+
+    class Bot(StoreMixin, HitsMixin, AppLinkMixin, MedalsMixin):
+        def __init__(self, db, bridge, client):
+            self.db, self._app_bridge, self._client = db, bridge, client
+
+        def _store_client_get(self):
+            return self._client
+
+        # alles, was nach Discord ginge, wird nur mitgeschrieben
+        def get_channel(self, _id):
+            discord.append(("get_channel", _id))
+
+        async def fetch_channel(self, _id):
+            discord.append(("fetch_channel", _id))
+
+        async def _publish_pulls(self, *a, **kw):
+            discord.append("publish")
+
+        async def _refresh_pool_views(self, *a, **kw):
+            discord.append("refresh")
+
+        async def _update_probability_message(self, *a):
+            discord.append("probability")
+
+    class Client(FakeClient):
+        async def fetch_store_pools(self, ids):
+            return {pid: summarize_cards(HIT_CARDS) for pid in ids}
+
+    async def run():
+        db = Database(str(tmp_path / "b.db"))
+        await db.init()
+        bridge = AppBridge(str(tmp_path / "w.db"))
+        await bridge.init()
+        client = Client()
+        bot = Bot(db, bridge, client)
+        await bot._scrape_store()            # anlegen, Pool laden, erste Erkennung (nur merken)
+        await bot._scrape_store()
+        # der Diamant (Versand nur, 110.000) wird verschickt: Seite zählt ohne Steuer
+        client.items[24126].update(total_sendcount=1, total_sendprice=100000, pack_count=199)
+        await bot._scrape_store()
+        state = await db.get_pull_tracking(24126)
+        assert state["pulled"] == ["900"]
+        view = BannerView(db)
+        b = next(x for x in await view.all_banners(with_pool=True) if x["id"] == 24126)
+        assert b["hits_open"] == 0 and [h["name"] for h in b["out"]] == ["Diamant"]
+        # Medaille aus der App (Karte abhaken) - gespeichert an der internen Nummer, ohne Discord
+        user = {"user_id": "42", "name": "Basti"}
+        rid = await bridge.add_request(24126, "T1", user, "claim")
+        await bot._process_app_requests()
+        assert (await bridge.get_request(rid))["status"] == "ok"
+        assert await db.get_medals(-24126) == {"T1": 42}
+        hits = (await view.detail(24126))["hits"]
+        assert any(h.get("medal_user") == "42" for h in hits)
+        assert [m["banner_id"] for m in await view.my_medals("42")] == [24126]
+        assert 24126 in await view.claim_targets()
+        # zurücknehmen geht nur für die eigene Medaille
+        other = await bridge.add_request(24126, "T1", {"user_id": "7", "name": "X"}, "unclaim")
+        mine = await bridge.add_request(24126, "T1", user, "unclaim")
+        await bot._process_app_requests()
+        assert (await bridge.get_request(other))["status"] == "rejected"
+        assert (await bridge.get_request(mine))["status"] == "ok" and await db.get_medals(-24126) == {}
+        assert discord == []                 # nichts davon hat Discord berührt
+        assert await db.get_thread_by_banner_id(24126) is None
 
     asyncio.run(run())
