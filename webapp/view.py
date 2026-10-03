@@ -467,7 +467,8 @@ class BannerView:
         due = batch_deadlines([[s["cards"], s["coins"], s.get("t")] for s in ordered], medal_t)
         for i, s in enumerate(ordered):
             required = {k for k, j in due.items() if j == i and k not in sent}
-            res = explain_batch(pool, s["cards"], s["coins"], sent, required=required)
+            res = explain_batch(pool, s["cards"], s["coins"], sent, required=required,
+                                price=to_int(row.get('price_coins')) or None)
             sent |= set(res["certain"])
             s["value"], s["kind"] = res["value"], res["kind"]
             lines = [{"icon": "✅", "text": label(k)} for k in res["certain"]]

@@ -21,7 +21,8 @@ class LearningMixin:
         state = await self.db.get_pull_tracking(pid)
         return {
             # Rechnen im Hintergrund-Thread (das Auftrags-Modell kann bei großen Schüben etwas dauern)
-            "observations": await asyncio.to_thread(ship_odds.observations, pool, inputs["shipments"], medal_t),
+            "observations": await asyncio.to_thread(ship_odds.observations, pool, inputs["shipments"], medal_t,
+                                                  _int(row.get('price_coins')) or None),
             "shipments": inputs["shipments"], "medals": inputs["medals"], "moves_count": len(inputs["moves"]),
             "total_packs": row.get('total_packs'), "remaining_at_end": row.get('current_packs'),
             "hits": [{"key": u["key"], "value": u["value"], "name": u["name"]} for u in tracked_units(pool)

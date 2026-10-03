@@ -116,7 +116,7 @@ if batches is not None and has_ship_hits:
     medal_t = {keys[t]: ts(m["created_at"]) for t, m in medals.items()
                if t in keys and (m.get("source") or "discord") != "admin" and ts(m["created_at"])}
     deadlines = batch_deadlines(batches, medal_t)
-    joint = match_shipment_history(pool, batches, VALUE_TOLERANCE, deadlines)
+    joint = match_shipment_history(pool, batches, VALUE_TOLERANCE, deadlines, price or None)
     print(f"Medaillen-Fristen (Schub-Nr.): {({t: deadlines[k] + 1 for t, k in keys.items() if k in deadlines}) or '–'}"
           + (f" · ignoriert: {joint['ignored_deadlines']}" if joint.get("ignored_deadlines") else ""))
     print(f"Auswertung aller {len(batches)} Schübe: sicher {joint['certain'] or '–'} · "
