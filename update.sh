@@ -15,8 +15,18 @@ if [ -f .env ]; then
   fi
 fi
 
+# Hängengebliebene Sperre (z. B. nach Abbruch mit Strg+C) entfernen, wenn kein git mehr läuft
+if [ -f .git/index.lock ] && ! pgrep -x git > /dev/null; then
+  rm -f .git/index.lock
+  echo "Alte git-Sperre entfernt."
+fi
+
 old=$(git rev-parse HEAD)
-git pull --ff-only origin main
+echo "Hole neue Version von GitHub …"
+if ! timeout 60 git pull --ff-only origin main; then
+  echo "❌ GitHub nicht erreichbar oder Abruf fehlgeschlagen (Zeitlimit 60 s). In ein paar Minuten erneut versuchen."
+  exit 1
+fi
 new=$(git rev-parse HEAD)
 
 if [ "$old" = "$new" ] && [ "$1" != "--alles" ]; then
