@@ -42,6 +42,7 @@ def test_banners_locked_until_synced_admin_exempt(tmp_path, monkeypatch):
             # 8 Tage später: wieder gesperrt, keine Banner-Pushes mehr
             async with aiosqlite.connect(app.bridge.db_path) as db:
                 await db.execute("UPDATE sync_marks SET synced_at = '2000-01-01T00:00:00'")
+                await db.execute("UPDATE sync_accounts SET synced_at = '2000-01-01T00:00:00'")
                 await db.commit()
             assert (await status("/api/banners", user))[0] == 423
             assert await app.allowed_users() == {"1"}
@@ -50,3 +51,31 @@ def test_banners_locked_until_synced_admin_exempt(tmp_path, monkeypatch):
 
     asyncio.run(run())
     os.environ.pop("APP_ADMIN_IDS", None)
+
+
+def test_two_gtcha_accounts_both_must_sync(tmp_path):
+    from datetime import datetime, timedelta
+
+    from utils.app_bridge import AppBridge
+    from webapp.server import sync_rule
+
+    async def run():
+        bridge = AppBridge(str(tmp_path / "w.db"))
+        await bridge.init()
+        await bridge.mark_synced("7")                                   # altes Lesezeichen ohne Kennung
+        assert sync_rule(await bridge.sync_state("7"))["ok"]
+        await bridge.set_expected_accounts("7", 2)
+        await bridge.mark_synced("7", "aaaa1111bbbb2222")                # neues Lesezeichen: ersetzt "default"
+        st = sync_rule(await bridge.sync_state("7"))
+        assert not st["ok"] and st["reason"] == "accounts" and st["missing"] == 1
+        assert [a["account"] for a in st["accounts"]] == ["aaaa1111bbbb2222"]
+        await bridge.mark_synced("7", "cccc3333dddd4444")                # zweites Konto (anderer Browser)
+        st = sync_rule(await bridge.sync_state("7"))
+        assert st["ok"] and [a["label"] for a in st["accounts"]] == ["Konto 1", "Konto 2"]
+        # Konto 1 acht Tage nicht übertragen: wieder gesperrt
+        st = sync_rule(await bridge.sync_state("7"), now=datetime.now() + timedelta(days=8))
+        assert not st["ok"] and st["reason"] == "sync"
+        await bridge.remove_account("7", "cccc3333dddd4444")
+        assert sync_rule(await bridge.sync_state("7"))["missing"] == 1
+
+    asyncio.run(run())

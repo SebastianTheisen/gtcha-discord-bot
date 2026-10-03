@@ -35,6 +35,11 @@ CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS app_admins (discord_user_id TEXT PRIMARY KEY, added_at TEXT);
 CREATE TABLE IF NOT EXISTS blocked_users (discord_user_id TEXT PRIMARY KEY, discord_name TEXT, blocked_at TEXT);
 CREATE TABLE IF NOT EXISTS sync_marks (discord_user_id TEXT PRIMARY KEY, synced_at TEXT);
+-- je GTCHA-Konto (Fingerabdruck der Mitglieds-ID aus dem Lesezeichen; "default" = Lesezeichen ohne Kennung)
+CREATE TABLE IF NOT EXISTS sync_accounts (discord_user_id TEXT, account TEXT, first_at TEXT, synced_at TEXT,
+    PRIMARY KEY (discord_user_id, account));
+-- wie viele GTCHA-Konten eine Person hat (vom Admin eingestellt, Standard 1)
+CREATE TABLE IF NOT EXISTS account_counts (discord_user_id TEXT PRIMARY KEY, expected INTEGER);
 CREATE TABLE IF NOT EXISTS auto_claims (
     discord_user_id TEXT, card_key TEXT, pack_id INTEGER, tier TEXT, request_id INTEGER, created_at TEXT,
     PRIMARY KEY (discord_user_id, card_key));
@@ -351,11 +356,56 @@ class AppBridge:
                              (str(user_id), card_key))
             await db.commit()
 
-    async def mark_synced(self, user_id: str) -> None:
-        """Erfolgreiches Übertragen merken (auch wenn nichts Neues dabei war - zählt für die 7-Tage-Pflicht)."""
+    async def mark_synced(self, user_id: str, account: Optional[str] = None) -> None:
+        """Erfolgreiches Übertragen merken (auch wenn nichts Neues dabei war - zählt für die 7-Tage-Pflicht).
+        account: Fingerabdruck des GTCHA-Kontos; ohne (altes Lesezeichen) zählt es als "default"."""
+        now, acc = _now(), account or "default"
         async with aiosqlite.connect(self.db_path) as db:
+            if account:   # mit Kennung: der Eintrag ohne Kennung (altes Lesezeichen) ist damit überholt
+                await db.execute("DELETE FROM sync_accounts WHERE discord_user_id = ? AND account = 'default'",
+                                 (str(user_id),))
+            await db.execute("INSERT INTO sync_accounts (discord_user_id, account, first_at, synced_at) "
+                             "VALUES (?, ?, ?, ?) ON CONFLICT(discord_user_id, account) DO UPDATE SET "
+                             "synced_at = excluded.synced_at", (str(user_id), acc, now, now))
             await db.execute("INSERT OR REPLACE INTO sync_marks (discord_user_id, synced_at) VALUES (?, ?)",
-                             (str(user_id), _now()))
+                             (str(user_id), now))
+            await db.commit()
+
+    async def sync_overview(self) -> Dict[str, Dict]:
+        """Discord-ID -> {"expected": Anzahl Konten, "accounts": [{account, first_at, synced_at}, ...]} (älteste
+        Konten zuerst). Wer vor den Konto-Kennungen übertragen hat, zählt mit einem Konto "default"."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT discord_user_id, account, first_at, synced_at FROM sync_accounts "
+                                   "ORDER BY first_at")
+            out: Dict[str, Dict] = {}
+            for u, acc, first, synced in await cur.fetchall():
+                out.setdefault(u, {"expected": 1, "accounts": []})["accounts"].append(
+                    {"account": acc, "first_at": first, "synced_at": synced})
+            legacy = {}
+            cur = await db.execute("SELECT discord_user_id, max(updated_at) FROM user_history GROUP BY discord_user_id")
+            legacy.update({u: t for u, t in await cur.fetchall() if t})
+            cur = await db.execute("SELECT discord_user_id, synced_at FROM sync_marks")
+            for u, t in await cur.fetchall():
+                if t and t > legacy.get(u, ""):
+                    legacy[u] = t
+            for u, t in legacy.items():
+                if u not in out:
+                    out[u] = {"expected": 1, "accounts": [{"account": "default", "first_at": t, "synced_at": t}]}
+            cur = await db.execute("SELECT discord_user_id, expected FROM account_counts")
+            for u, n in await cur.fetchall():
+                out.setdefault(u, {"expected": 1, "accounts": []})["expected"] = max(1, int(n or 1))
+            return out
+
+    async def set_expected_accounts(self, user_id: str, expected: int) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("INSERT OR REPLACE INTO account_counts (discord_user_id, expected) VALUES (?, ?)",
+                             (str(user_id), max(1, min(5, int(expected)))))
+            await db.commit()
+
+    async def remove_account(self, user_id: str, account: str) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("DELETE FROM sync_accounts WHERE discord_user_id = ? AND account = ?",
+                             (str(user_id), account))
             await db.commit()
 
     async def last_syncs(self) -> Dict[str, str]:
@@ -371,6 +421,9 @@ class AppBridge:
 
     async def last_sync(self, user_id: str) -> Optional[str]:
         return (await self.last_syncs()).get(str(user_id))
+
+    async def sync_state(self, user_id: str) -> Dict:
+        return (await self.sync_overview()).get(str(user_id)) or {"expected": 1, "accounts": []}
 
     # --- Medaillen-Meldungen (App legt an, Bot arbeitet ab) ---
     async def add_request(self, pack_id: int, tier: str, user: Dict, action: str) -> int:
