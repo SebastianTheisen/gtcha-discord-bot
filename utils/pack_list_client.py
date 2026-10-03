@@ -58,14 +58,17 @@ class PackListClient:
             pass
         self._browser = self._playwright = None
 
-    async def fetch(self) -> Dict[int, dict]:
-        """Alle Banner aus pack/list (leer bei Fehler)."""
-        await self._ensure_browser()
-        context = await self._browser.new_context(
+    async def _new_context(self):
+        return await self._browser.new_context(
             user_agent=random.choice(USER_AGENTS),
             extra_http_headers=GEO_HEADERS,
             proxy={"server": self.proxy} if self.proxy else None,
         )
+
+    async def fetch(self) -> Dict[int, dict]:
+        """Alle Banner aus pack/list (leer bei Fehler)."""
+        await self._ensure_browser()
+        context = await self._new_context()
         try:
             page = await context.new_page()
             await page.goto(f"{self.base_url}/api/user/point", wait_until="domcontentloaded", timeout=30000)

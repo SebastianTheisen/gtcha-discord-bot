@@ -43,6 +43,10 @@ async def _seed(tmp_path):
                 "INSERT INTO banners (pack_id, category, title, price_coins, current_packs, total_packs, is_active, "
                 "created_at, updated_at, card_pool) VALUES (?, 'Pokemon', ?, ?, 40, 63, 1, '2026-09-01', '2026-10-01', ?)",
                 (pid, f"Test {pid}", price, json.dumps(pool)))
+        await conn.execute(   # Store-Pack (nur App): is_active = 2
+            "INSERT INTO banners (pack_id, category, title, price_coins, current_packs, total_packs, is_active, "
+            "created_at, updated_at, card_pool) VALUES (24126, 'Store', 'Store Schmuck Pack', 5000, 200, 200, 2, "
+            "'2026-10-03', '2026-10-03', ?)", (json.dumps(pool),))
         await conn.execute("INSERT INTO pack_history (banner_id, old_count, new_count, changed_at) "
                            "VALUES (24114, 41, 40, '2026-10-01T12:00:00')")
         await conn.commit()
@@ -103,6 +107,17 @@ async def _run(tmp_path, browser_path):
             if not text.strip() or "nicht erreichbar" in text or "Lädt …" == text.strip():
                 problems.append(f"{name}: kein Inhalt ({text[:80]!r})")
             problems += [f"{name}: JS-Fehler {e}" for e in errors]
+        # Kategorie "Store": das Store-Pack erscheint dort, aber nicht unter "Alle"
+        await page.goto(base + "/#/")
+        await page.wait_for_timeout(1000)
+        await page.click('[data-cat="Alle"]')
+        await page.wait_for_timeout(500)
+        if "24126" in await page.inner_text("#results"):
+            problems.append("Store-Pack steht unter 'Alle'")
+        await page.click('[data-cat="Store"]')
+        await page.wait_for_timeout(500)
+        if "24126" not in await page.inner_text("#results"):
+            problems.append("Store-Pack fehlt in der Kategorie 'Store'")
         await browser.close()
     await server.close()
     return problems
