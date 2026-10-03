@@ -44,7 +44,11 @@ async def probe(context, path):
 
     page.on("response", on_response)
     await page.goto(f"{BASE_URL}/api/user/point", wait_until="domcontentloaded", timeout=60000)   # Sitzung wie der Bot
-    await page.goto(f"{BASE_URL}{path}", wait_until="networkidle", timeout=90000)
+    # "networkidle" erreicht manche Seite nie (laufende Verbindungen) - dann reicht das Grundgerüst plus Wartezeit
+    try:
+        await page.goto(f"{BASE_URL}{path}", wait_until="networkidle", timeout=45000)
+    except Exception:
+        await page.wait_for_timeout(10000)
     await page.wait_for_timeout(3000)
     print(f"\n{'=' * 60}\n== {path}\n== Adresse nach dem Laden: {page.url}\n== Titel: {await page.title()}")
     print("\n== JSON-Antworten der Seite:")
