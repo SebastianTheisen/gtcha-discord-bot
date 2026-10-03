@@ -9,6 +9,8 @@ from math import comb
 import re as regex_module
 from typing import Optional
 
+import time
+
 import aiosqlite
 import discord
 from discord import app_commands
@@ -42,8 +44,8 @@ from utils.banner_info import (
     is_upcoming, jst_timestamp, parse_thread_title, shipping_stats, thread_title, to_int as _int,
 )
 from utils.card_pool import (
-    card_value, card_value_changes, estimate, fmt_coins, fmt_pct, out_of_banner_value, TIERS, MAX_LISTED, EMBEDS_PER_MESSAGE, decided_value, detect_jump_pulls,
-    is_relevant_hit, match_shipped_hits, pool_minimum, match_shipment_history, relevant_units, resolve_pulled, shipment_values, tier_keys,
+    VALUE_TOLERANCE, card_value, card_value_changes, estimate, fmt_coins, fmt_pct, out_of_banner_value, TIERS, MAX_LISTED, EMBEDS_PER_MESSAGE, decided_value, detect_jump_pulls,
+    batch_deadlines, is_relevant_hit, match_shipped_hits, pool_minimum, match_shipment_history, relevant_units, resolve_pulled, shipment_values, tier_keys,
     tracked_units, claimable_units, medal_units, medal_units_hits_first,
 )
 

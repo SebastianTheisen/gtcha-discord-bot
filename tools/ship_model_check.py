@@ -42,11 +42,11 @@ for row in rows:
     tier = {u["key"]: u["tier"] for u in medal_units(pool)}
     name = {u["key"]: f"{tier.get(u['key'], '?')} {u['name'][:40]}" for u in hits}
     classes = _value_classes(hits, VALUE_TOLERANCE)
-    biggest = max(round(net * TAX_FACTOR) for _, net in batches) + 1000
+    biggest = max(round(b[1] * TAX_FACTOR) for b in batches) + 1000
     sums = _normal_sums(pool, ORDER_MAX_NORMALS, biggest)
     old_ok = orders_ok = 0
     lines = []
-    for i, (count, net) in enumerate(batches, 1):
+    for i, (count, net, *_) in enumerate(batches, 1):
         value = round(net * TAX_FACTOR)
         old = bool(count > 0 and value > 0 and _batch_options(pool, classes, count, value, VALUE_TOLERANCE))
         opts = order_options(pool, count, value, sums=sums) if value > 0 else []

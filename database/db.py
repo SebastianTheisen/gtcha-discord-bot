@@ -240,15 +240,15 @@ class Database:
             # Versand-Abgleich mit Toleranz: bisherige Versand-Summen einmal neu auswerten lassen
             cursor = await db.execute("SELECT value FROM bot_meta WHERE key = 'ship_match_version'")
             row = await cursor.fetchone()
-            if not row or row[0] != '7':
+            if not row or row[0] != '8':
                 # Banner mit Versand-Hits komplett neu auswerten (auch die erkannten Karten), damit
                 # Fehlzuordnungen der alten Logik verschwinden; Medaillen bleiben unberührt
                 await db.execute("""UPDATE banners SET pulled_cards = NULL, unsure_cards = NULL
                                     WHERE card_pool LIKE '%"hits": [{%'""")
                 await db.execute("UPDATE banners SET ship_count = NULL, ship_value = NULL, ship_batches = NULL")
-                await db.execute("INSERT OR REPLACE INTO bot_meta (key, value) VALUES ('ship_match_version', '7')")
+                await db.execute("INSERT OR REPLACE INTO bot_meta (key, value) VALUES ('ship_match_version', '8')")
                 await db.commit()
-                logger.info("Migration: Versand-Summen werden neu ausgewertet (7: Medaillen klären ❓-Gruppen nicht mehr)")
+                logger.info("Migration: Versand-Summen werden neu ausgewertet (8: Schübe mit Zeit, Medaille = spätestens im nächsten Versand)")
 
             # Performance-Indexes hinzufügen (IF NOT EXISTS für idempotente Migration)
             await db.executescript("""
@@ -441,24 +441,29 @@ class Database:
                  json.dumps(batches) if batches is not None else None, pack_id))
             await db.commit()
 
-    async def rebuild_ship_batches(self, pack_id: int, count: int, value: int) -> List[List[int]]:
-        """Schübe aus dem Versand-Verlauf: Stand vor der ersten Aufzeichnung als ein Schub, dann je Änderung."""
+    async def rebuild_ship_batches(self, pack_id: int, count: int, value: int) -> List[List]:
+        """Schübe aus dem Versand-Verlauf: Stand vor der ersten Aufzeichnung als ein Schub, dann je Änderung.
+        Je Schub [Karten, Betrag, Zeit (Unix-Sekunden, None = vor der Aufzeichnung)]."""
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
-                "SELECT old_cards, new_cards, old_coins, new_coins FROM shipment_history "
+                "SELECT old_cards, new_cards, old_coins, new_coins, changed_at FROM shipment_history "
                 "WHERE banner_id = ? ORDER BY id", (pack_id,))
             rows = await cursor.fetchall()
-        batches: List[List[int]] = []
+        batches: List[List] = []
         total_c = total_v = 0
-        for old_c, new_c, old_v, new_v in rows:
+        for old_c, new_c, old_v, new_v, changed in rows:
             if old_c is None or new_c is None or new_c <= old_c:
                 continue
             if old_c > total_c:  # Stand vor diesem Eintrag, der nicht aufgezeichnet ist
-                batches.append([old_c - total_c, (old_v or 0) - total_v])
-            batches.append([new_c - old_c, (new_v or 0) - (old_v or 0)])
+                batches.append([old_c - total_c, (old_v or 0) - total_v, None])
+            try:
+                t = int(datetime.fromisoformat(changed).replace(tzinfo=timezone.utc).timestamp())
+            except (TypeError, ValueError):
+                t = None
+            batches.append([new_c - old_c, (new_v or 0) - (old_v or 0), t])
             total_c, total_v = new_c, new_v or 0
         if count > total_c:
-            batches.append([count - total_c, value - total_v])
+            batches.append([count - total_c, value - total_v, int(datetime.now(timezone.utc).timestamp())])
         return batches
 
     async def get_sales_since(self, pack_id: int, since: datetime) -> tuple:
