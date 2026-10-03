@@ -10,7 +10,7 @@ from typing import Dict, List, Optional
 
 import aiosqlite
 
-from database.db import Database
+from database.db import STORE, Database
 from utils.banner_info import RANK_ORDER, format_conditions, format_shipping, sale_end_timestamp, to_int
 from utils.card_pool import (
     card_value, estimate, explain_batch, out_of_banner_value, fmt_coins, pool_minimum, relevant_units, resolve_pulled, tier_keys,
@@ -150,6 +150,11 @@ class BannerView:
             "thread_id": thread_id or None,
             **self._out(pool, sure, winners, open_groups),
         }
+        if row.get('is_active') == STORE:
+            # Store-Pack: nur in der App, kein Thread. Hits werden dort nicht beobachtet (keine Versand-Erkennung) -
+            # darum keine "Hits noch drin"-Angaben; Ø Rückgabe kommt weiter aus den Zahlen der Seite.
+            data.update(store=True, hits_open=None, hits_total=None, tracked_hits=False, cost_to_hit=None,
+                        unsure=False, out=[], out_unsure=0)
         if with_pool:
             data["hits"] = self._hit_list(pool, pulled, sure, winners, unsure, price) if pool else []
             data["hit_keys_detected"] = sorted(sure)
@@ -263,7 +268,7 @@ class BannerView:
 
     async def image_urls(self) -> List[str]:
         """Alle Bilder der aktiven Banner: Banner zuerst, dann Hits, dann alle übrigen Karten."""
-        rows = (await self.db.get_active_banners()).values()
+        rows = list((await self.db.get_active_banners()).values()) + list((await self.db.get_store_banners()).values())
         banners, hits, cards = [], [], []
         for row in rows:
             banners.append(row.get('image_url'))
@@ -335,15 +340,15 @@ class BannerView:
         return result
 
     async def all_banners(self, with_pool: bool = False) -> List[Dict]:
-        rows = await self.db.get_active_banners()
-        return [await self.summary(row, with_pool=with_pool) for row in rows.values()]
+        rows = list((await self.db.get_active_banners()).values()) + list((await self.db.get_store_banners()).values())
+        return [await self.summary(row, with_pool=with_pool) for row in rows]
 
     @staticmethod
     def hot(banners: List[Dict]) -> List[Dict]:
         """Top 10 wie im Hot-Banner-Kanal: ziehbar, nach Ø Rückgabe."""
         candidates = [
             {**b, "pack_id": b["id"], "pct": b["ev_pct"]} for b in banners
-            if b["category"] != "Bonus" and b["price"] > 0 and b["remaining"] > 0 and not b["password"]
+            if b["category"] not in ("Bonus", "Store") and b["price"] > 0 and b["remaining"] > 0 and not b["password"]
             and b["status"] not in ("upcoming", "hits_out") and b["ev_pct"] is not None
         ]
         return rank_entries(candidates)

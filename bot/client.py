@@ -15,10 +15,11 @@ from bot.hot_banner import HotBannerMixin
 from bot.fast_poll import FastPollMixin
 from bot.app_link import AppLinkMixin
 from bot.discord_view import DiscordViewMixin
+from bot.store import StoreMixin
 
 
 class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, HitsMixin, MedalsMixin, HotBannerMixin,
-              AppLinkMixin, DiscordViewMixin, commands.Bot):
+              AppLinkMixin, DiscordViewMixin, StoreMixin, commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
@@ -85,6 +86,11 @@ class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, Hits
         self.scheduler.add_job(
             self._process_app_requests, 'interval', seconds=5,
             id='app_requests_job', replace_existing=True, coalesce=True, max_instances=1,
+        )
+        # Store-Packs (nur App, nichts nach Discord): Pack-Zahlen alle 5 Minuten
+        self.scheduler.add_job(
+            self._scrape_store, 'cron', minute='*/5', second=50,
+            id='store_job', replace_existing=True, coalesce=True, max_instances=1,
         )
         # Discord-Ansicht: zeitversetzte Posts nachholen, Umschalten schlank/voll übernehmen
         self.scheduler.add_job(

@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 71;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 72;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -8,7 +8,8 @@ const STATUS = {
   running: ["🎯", "Läuft"], endspurt: ["⚡", "Endspurt"], hits_out: ["🔴", "Hits raus"], upcoming: ["🕒", "Bald"],
 };
 const CATEGORIES = [["Alle", "Alle"], ["Bonus", "BONUS"], ["MIX", "MIX"], ["Pokémon", "Pokémon"],
-                    ["One piece", "One Piece"], ["Dragon Ball", "Dragon Ball"], ["Wunsch", "⭐ Wunschkarten"]];
+                    ["One piece", "One Piece"], ["Dragon Ball", "Dragon Ball"], ["Store", "🏪 Store"],
+                    ["Wunsch", "⭐ Wunschkarten"]];
 const SORTS = {
   site: ["Wie auf der Seite", (a, b) => b.id - a.id],
   ev: ["Ø Rückgabe", (a, b) => (b.ev_pct ?? -1) - (a.ev_pct ?? -1)],
@@ -299,7 +300,7 @@ function drawList() {
   const sort = SORTS[state.sort] || SORTS.ev;
   const active = [...state.filters].filter((k) => QUICK_FILTERS[k] && (k !== "mine" || myRank()));
   const shown = banners
-    .filter((b) => (q ? matches(b, q) : state.category === "Alle" || b.category === state.category
+    .filter((b) => (q ? matches(b, q) : state.category === "Alle" ? b.category !== "Store" : b.category === state.category
       || (state.category === "Wunsch" && state.wishBanners?.has(b.id) && canBuy(b) !== false)))
     .filter((b) => active.every((k) => QUICK_FILTERS[k][1](b)))
     .sort(sort[1]);
@@ -867,10 +868,13 @@ async function claimFlow(b, card) {
   const wishPicked = async (choice) => {
     if (choice !== star) return false;
     await toggleWish({ id: card.id, name: card.name, image: card.image });
-    await ask(card.name, isWish(card.id) ? "⭐ Auf deiner Wunschliste – Push, sobald ein neuer Banner sie enthält oder sie gezogen wurde."
-      : "Von der Wunschliste entfernt.", ["OK"]);
+    await ask(card.name, isWish(card.id) ? "⭐ Gemerkt" : "Entfernt", ["OK"]);
     return true;
   };
+  if (b.store) {   // Store-Packs: nur ansehen und merken, melden gibt es dort nicht
+    await wishPicked(await ask(card.name, `${num(card.value)} Coins`, [star, "OK"]));
+    return;
+  }
   if (!units.length) {
     await wishPicked(await ask(card.name, `${num(card.value)} Coins – unter dem Packpreis, kann nicht gemeldet werden.`, [star, "OK"]));
     return;

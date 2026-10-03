@@ -16,6 +16,10 @@ from utils.card_pool import card_value, fmt_coins
 
 
 PACK_HISTORY_DAYS = 90
+# Store-Packs (gtchaxonline.com/store) liegen in derselben Tabelle, aber mit is_active = 2: alle Funktionen des Bots
+# für Discord (Threads, Top 10, "nicht gefunden") arbeiten nur mit is_active = 1 und sehen sie nie; Funktionen
+# nach Banner-ID (Kartenpool, Pack-Verlauf, Preis ...) und die App funktionieren für beide.
+STORE = 2
 
 
 def archive_pool(pool_json) -> tuple:
@@ -721,6 +725,40 @@ class Database:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute("SELECT * FROM banners WHERE is_active = 1")
             return {row["pack_id"]: dict(row) for row in await cursor.fetchall()}
+
+    async def get_store_banners(self) -> Dict[int, Dict]:
+        """Aktive Store-Packs (nur für die App) als pack_id -> Zeile."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM banners WHERE is_active = ?", (STORE,))
+            return {row["pack_id"]: dict(row) for row in await cursor.fetchall()}
+
+    async def upsert_store_pack(self, pack_id: int, title: Optional[str], price: Optional[int], packs: int,
+                                total: Optional[int], per_day: Optional[int], sale_end: Optional[str],
+                                image_url: Optional[str], detail_url: str) -> bool:
+        """Store-Pack anlegen oder aktualisieren (Pack-Zahl über update_banner_packs, damit der Verlauf stimmt).
+        True = neu. Ein normaler Banner mit derselben ID wird nie angefasst."""
+        existing = await self.get_banner(pack_id)
+        if existing and existing.get("is_active") == 1:
+            return False
+        now = datetime.now().isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            if not existing:
+                await db.execute("""
+                    INSERT INTO banners (pack_id, category, title, price_coins, current_packs, total_packs, entries_per_day,
+                                         sale_end_date, image_url, detail_page_url, is_active, created_at, updated_at)
+                    VALUES (?, 'Store', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (pack_id, title, price, packs, total, per_day, sale_end, image_url, detail_url, STORE, now, now))
+            else:   # auch ein früher beendeter Store-Pack (is_active 0) wird wieder aktiv
+                await db.execute("""
+                    UPDATE banners SET category = 'Store', title = ?, price_coins = ?, total_packs = ?, entries_per_day = ?,
+                                       sale_end_date = ?, image_url = ?, detail_page_url = ?, is_active = ?, not_found_count = 0
+                    WHERE pack_id = ?
+                """, (title, price, total, per_day, sale_end, image_url, detail_url, STORE, pack_id))
+            await db.commit()
+        if existing and existing.get("current_packs") != packs:
+            await self.update_banner_packs(pack_id, packs)
+        return not existing
 
     async def get_all_active_banner_ids(self) -> List[int]:
         """Gibt alle aktiven Banner-IDs zurück."""
