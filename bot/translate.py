@@ -25,16 +25,14 @@ class TranslateMixin:
             texts += [t for pool in pools.values() for t in translate.pool_texts(pool)]
             todo = translate.missing(texts)
             key = os.getenv("DEEPL_API_KEY", "").strip()
-            if todo and key:
-                found = await translate.deepl(todo, key)
+            if todo:
+                # DeepL nur mit Key in der .env; sonst MyMemory (kostenlos, ohne Anmeldung)
+                found = await (translate.deepl(todo, key) if key else translate.mymemory(todo))
                 if found:
                     await self.db.save_translations(found)
                     await self._load_translations()
-                    logger.info(f"[ÜBERSETZUNG] {len(found)} neue Namensteile übersetzt")
-            elif todo and not getattr(self, "_deepl_hint", False):
-                self._deepl_hint = True
-                logger.info(f"[ÜBERSETZUNG] {len(todo)} Namensteile kennt das Wörterbuch nicht - "
-                            f"für DeepL DEEPL_API_KEY in der .env setzen")
+                    logger.info(f"[ÜBERSETZUNG] {len(found)} neue Namensteile übersetzt "
+                                f"({'DeepL' if key else 'MyMemory'}), offen {len(todo) - len(found)}")
             for pid, pool in pools.items():
                 pool, changed = translate.translate_pool(pool)
                 if changed:

@@ -89,3 +89,41 @@ def test_bot_job_translates_pools_with_deepl_once(tmp_path, monkeypatch):
         assert data["cards_brief"]["1"][0] == "Ruffy / loser Stein"
 
     asyncio.run(run())
+
+
+def test_mymemory_without_key(monkeypatch):
+    """Ohne DeepL-Key: MyMemory; unbrauchbare Antworten und erschöpftes Kontingent werden nicht gespeichert."""
+    answers = {"ルフィ": {"responseStatus": 200, "responseData": {"translatedText": "Ruffy"}},
+               "ゾロ": {"responseStatus": 200, "responseData": {"translatedText": "ゾロ"}},          # unverändert
+               "ナミ": {"responseStatus": 429, "responseData": {"translatedText": "MYMEMORY WARNING: ..."}}}
+
+    class Resp:
+        def __init__(self, q):
+            self.q, self.status = q, 200
+
+        async def json(self, content_type=None):
+            return answers[self.q]
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    class Session:
+        def __init__(self, *a, **kw):
+            pass
+
+        def get(self, url, params):
+            return Resp(params["q"])
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    import aiohttp
+    monkeypatch.setattr(aiohttp, "ClientSession", Session)
+    found = asyncio.run(translate.mymemory(["ルフィ", "ゾロ", "ナミ", "ウソップ"]))
+    assert found == {"ルフィ": "Ruffy"}            # ゾロ unbrauchbar, bei ナミ Kontingent weg -> Abbruch

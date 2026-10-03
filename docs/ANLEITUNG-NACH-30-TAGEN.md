@@ -25,10 +25,10 @@ Seit dem 03.10.2026 läuft die Hit-Erkennung mit diesen Regeln:
   ```
   Die Liste „Jeder Versand-Schub einzeln“ rechnet genau wie der Bot (✅ sicher, ❓ unklar, „(Medaillen-Frist)“).
 
-## Einmalig, wenn noch nicht erledigt
+## Übersetzung
 
-- **DeepL-Key** für die Übersetzung japanischer Namen in `~/gtcha-discord-bot/.env` eintragen:
-  `DEEPL_API_KEY=dein-key:fx` (kostenlos unter https://www.deepl.com/pro-api), danach `./update.sh --alles`.
+Japanische Namen übersetzt der Bot selbst (Wörterbuch + MyMemory, kostenlos und ohne Anmeldung). Nichts zu
+tun. Nur wenn euch die Übersetzungen zu schlecht sind: DeepL-Key in die `.env` eintragen (siehe `.env.example`).
 
 ## In 30 Tagen (ca. 02.11.2026)
 
