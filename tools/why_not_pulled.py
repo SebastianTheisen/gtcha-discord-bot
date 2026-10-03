@@ -18,7 +18,8 @@ sys.path.insert(0, "/app")
 from utils.banner_info import berlin_time  # noqa: E402
 from utils.card_pool import (  # noqa: E402
     TAX_FACTOR, VALUE_TOLERANCE, _batch_options, _normal_sums, _value_classes, card_value, claimable_units,
-    fmt_coins, match_shipment_history, medal_units, resolve_pulled, tier_keys, tracked_units,
+    ORDER_MAX_VALUE, batch_deadlines, fmt_coins, match_shipment_history, medal_units, order_options, resolve_pulled,
+    tier_keys, tracked_units,
 )
 
 DB = os.getenv("BOT_DB", "/app/data/gtcha_bot.db")
@@ -57,6 +58,7 @@ pool = json.loads(row["card_pool"]) if row["card_pool"] else None
 if not pool or not pool.get("total_count"):
     sys.exit("Kein Kartenpool gespeichert - ohne Kartenliste gibt es keine Erkennung.")
 keys = tier_keys(pool)
+tier_of = {k: t for t, k in keys.items()}
 unit = next((u for u in medal_units(pool) if u["tier"] == tier), None)
 if not unit:
     sys.exit(f"{tier} gibt es bei diesem Banner nicht (Plätze: T1–T{len(keys)}).")
@@ -105,7 +107,18 @@ for s in ships:
           + ("  ← passt genau zu " + tier if cards == 1 and abs(coins - unit["value"]) <= unit["value"] * 0.02 else ""))
 print("keine" if not ships else "")
 if batches is not None and has_ship_hits:
-    joint = match_shipment_history(pool, batches)
+    # wie der Bot: Medaille = Versand angefordert -> spätestens im ersten Schub danach (ohne Admin-Haken)
+    def ts(iso):
+        try:
+            return datetime.fromisoformat(iso).replace(tzinfo=timezone.utc).timestamp()
+        except (TypeError, ValueError):
+            return None
+    medal_t = {keys[t]: ts(m["created_at"]) for t, m in medals.items()
+               if t in keys and (m.get("source") or "discord") != "admin" and ts(m["created_at"])}
+    deadlines = batch_deadlines(batches, medal_t)
+    joint = match_shipment_history(pool, batches, VALUE_TOLERANCE, deadlines)
+    print(f"Medaillen-Fristen (Schub-Nr.): {({t: deadlines[k] + 1 for t, k in keys.items() if k in deadlines}) or '–'}"
+          + (f" · ignoriert: {joint['ignored_deadlines']}" if joint.get("ignored_deadlines") else ""))
     print(f"Auswertung aller {len(batches)} Schübe: sicher {joint['certain'] or '–'} · "
           f"Gruppen {[(g['pulled'], g['keys']) for g in joint['groups']] or '–'} · "
           f"genutzt {joint['used_batches']} von {len(batches)}")
@@ -139,6 +152,13 @@ if batches and has_ship_hits:
             continue
         if options:
             print(line + f" → erklärbar ({len(options)} Möglichkeit(en))")
+            continue
+        orders = order_options(pool, count, value) if value <= ORDER_MAX_VALUE else []
+        if orders:
+            names = {u["key"]: tier_of.get(u["key"], u["name"][:20]) for u in ship_hits}
+            combos = sorted({" + ".join(sorted(names[k] for k in o)) or "nur normale" for o in orders})
+            print(line + f" → als Versand-Aufträge erklärbar ({len(combos)}): " + " | ".join(combos[:12])
+                  + (" …" if len(combos) > 12 else ""))
             continue
         wide = _batch_options(pool, classes, count, value, 0.05)
         hint = " · mit 5 % Spielraum erklärbar (Kartenwerte haben sich wohl geändert)" if wide else ""
