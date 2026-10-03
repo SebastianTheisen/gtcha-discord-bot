@@ -136,6 +136,8 @@ class Database:
                     pack_count INTEGER, sendcount INTEGER, sendprice INTEGER, kangen INTEGER, sendpeople INTEGER,
                     price INTEGER);
                 CREATE INDEX IF NOT EXISTS api_log_banner ON api_log (banner_id, id);
+                -- Übersetzungen japanischer Namensteile (DeepL), siehe utils/translate.py
+                CREATE TABLE IF NOT EXISTS translations (source TEXT PRIMARY KEY, german TEXT, created_at TEXT);
                 CREATE TABLE IF NOT EXISTS discord_public (
                     pack_id INTEGER PRIMARY KEY, pulled_cards TEXT, unsure_cards TEXT);
                 CREATE TABLE IF NOT EXISTS discord_outbox (
@@ -329,6 +331,32 @@ class Database:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("UPDATE banners SET card_pool = ?, pool_updated_at = ? WHERE pack_id = ?",
                              (json.dumps(pool, ensure_ascii=False), datetime.now().isoformat(), pack_id))
+            await db.commit()
+
+    async def replace_pool_names(self, pack_id: int, old_json: str, pool: Dict) -> bool:
+        """Pool mit übersetzten Namen speichern, ohne den Zeitpunkt des Pool-Abrufs zu ändern - nur wenn
+        der Pool seit dem Lesen unverändert ist (sonst nicht einen frisch geladenen Pool überschreiben)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("UPDATE banners SET card_pool = ? WHERE pack_id = ? AND card_pool = ?",
+                                      (json.dumps(pool, ensure_ascii=False), pack_id, old_json))
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def get_translations(self) -> Dict[str, str]:
+        async with aiosqlite.connect(self.db_path) as db:
+            try:
+                cursor = await db.execute("SELECT source, german FROM translations")
+            except aiosqlite.OperationalError:
+                return {}   # ältere Datenbank ohne Tabelle (die App liest nur)
+            return {src: de for src, de in await cursor.fetchall()}
+
+    async def save_translations(self, translations: Dict[str, str]) -> None:
+        if not translations:
+            return
+        now = datetime.now().isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.executemany("INSERT OR REPLACE INTO translations (source, german, created_at) VALUES (?, ?, ?)",
+                                 [(src, de, now) for src, de in translations.items()])
             await db.commit()
 
     async def get_card_pool(self, pack_id: int) -> Optional[Dict]:

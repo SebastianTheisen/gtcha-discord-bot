@@ -16,10 +16,11 @@ from bot.fast_poll import FastPollMixin
 from bot.app_link import AppLinkMixin
 from bot.discord_view import DiscordViewMixin
 from bot.store import StoreMixin
+from bot.translate import TranslateMixin
 
 
 class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, HitsMixin, MedalsMixin, HotBannerMixin,
-              AppLinkMixin, DiscordViewMixin, StoreMixin, commands.Bot):
+              AppLinkMixin, DiscordViewMixin, StoreMixin, TranslateMixin, commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
@@ -91,6 +92,11 @@ class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, Hits
         self.scheduler.add_job(
             self._scrape_store, 'cron', minute='*/5', second=50,
             id='store_job', replace_existing=True, coalesce=True, max_instances=1,
+        )
+        # Japanische Namen auf Deutsch (Wörterbuch + DeepL), siehe bot/translate.py
+        self.scheduler.add_job(
+            self._translate_names, 'cron', minute='*/5', second=25,
+            id='translate_job', replace_existing=True, coalesce=True, max_instances=1,
         )
         # Discord-Ansicht: zeitversetzte Posts nachholen, Umschalten schlank/voll übernehmen
         self.scheduler.add_job(

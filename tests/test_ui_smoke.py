@@ -45,7 +45,7 @@ async def _seed(tmp_path):
                 (pid, f"Test {pid}", price, json.dumps(pool)))
         await conn.execute(   # Store-Pack (nur App): is_active = 2
             "INSERT INTO banners (pack_id, category, title, price_coins, current_packs, total_packs, is_active, "
-            "created_at, updated_at, card_pool) VALUES (24126, 'Store', 'Store Schmuck Pack', 5000, 200, 200, 2, "
+            "created_at, updated_at, card_pool) VALUES (24126, 'Store', '宝石ガチャ BtoB', 5000, 200, 200, 2, "
             "'2026-10-03', '2026-10-03', ?)", (json.dumps(pool),))
         await conn.execute("INSERT INTO pack_history (banner_id, old_count, new_count, changed_at) "
                            "VALUES (24114, 41, 40, '2026-10-01T12:00:00')")
@@ -116,8 +116,11 @@ async def _run(tmp_path, browser_path):
             problems.append("Store-Pack fehlt unter 'Alle'")
         await page.click('[data-cat="Store"]')
         await page.wait_for_timeout(500)
-        if "24126" not in await page.inner_text("#results"):
+        text = await page.inner_text("#results")
+        if "24126" not in text:
             problems.append("Store-Pack fehlt in der Kategorie 'Store'")
+        if "Edelstein-Gacha BtoB" not in text:   # Titel sichtbar und übersetzt
+            problems.append(f"Store-Pack ohne deutschen Titel: {text[:120]!r}")
         await browser.close()
     await server.close()
     return problems
