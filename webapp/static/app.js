@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 83;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 84;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -636,6 +636,68 @@ async function showBanner(id) {
 // --- Push ---
 const isStandalone = () => window.navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
 
+// --- Anleitung je Gerät: App installieren, Pushes, Lesezeichen zum Übertragen ---
+const GUIDE_DEVICES = { ios_safari: "iPhone/iPad · Safari", ios_chrome: "iPhone/iPad · Chrome",
+                        android: "Android · Chrome", pc: "PC/Mac · Chrome oder Edge" };
+function guessDevice() {
+  const ua = navigator.userAgent;
+  if (/iPhone|iPad|iPod/.test(ua)) return /CriOS/.test(ua) ? "ios_chrome" : "ios_safari";
+  if (/Android/.test(ua)) return "android";
+  return "pc";
+}
+const GUIDES = {
+  ios_safari: {
+    install: ["Tailscale-App installieren, mit eurem Konto anmelden, VPN einschalten.",
+              "Diese Seite in Safari öffnen → Teilen-Symbol (□↑) → „Zum Home-Bildschirm“.",
+              "Ab jetzt die App über das Symbol auf dem Home-Bildschirm öffnen."],
+    push: "Nur in der installierten App (ab iOS 16.4): hier unten „Pushes einschalten“ und erlauben.",
+    bookmark: ["Discord verknüpfen (oben), dann unter „📥 Eigene GTCHA-Daten“ „Lesezeichen … kopieren“ antippen.",
+               "In Safari irgendeine Seite als Lesezeichen sichern: Teilen → „Lesezeichen hinzufügen“, Name „An GTCHA Tracker“.",
+               "Lesezeichen öffnen (Buch-Symbol) → „Bearbeiten“ → das neue Lesezeichen → Adresse löschen, kopierten Code einfügen.",
+               "Übertragen: In Safari eingeloggt gtchaxonline.com öffnen, Adressleiste antippen, „An GTCHA Tracker“ eintippen und den Lesezeichen-Vorschlag wählen."],
+  },
+  ios_chrome: {
+    install: ["Tailscale-App installieren, mit eurem Konto anmelden, VPN einschalten.",
+              "Diese Seite in Chrome öffnen → Teilen-Symbol (□↑, rechts in der Adressleiste) → „Zum Home-Bildschirm“ (ab iOS 16.4).",
+              "Ab jetzt die App über das Symbol auf dem Home-Bildschirm öffnen."],
+    push: "Nur in der installierten App (ab iOS 16.4): hier unten „Pushes einschalten“ und erlauben.",
+    bookmark: ["Discord verknüpfen (oben), dann unter „📥 Eigene GTCHA-Daten“ „Lesezeichen … kopieren“ antippen.",
+               "In Chrome irgendeine Seite öffnen → „⋯“ → „Zu Lesezeichen hinzufügen“.",
+               "„⋯“ → „Lesezeichen“ → das neue Lesezeichen lange drücken → „Lesezeichen bearbeiten“: Name „An GTCHA Tracker“, bei URL den kopierten Code einfügen.",
+               "Übertragen: In Chrome eingeloggt gtchaxonline.com öffnen, Adressleiste antippen, „An GTCHA Tracker“ eintippen und den Vorschlag mit dem Stern wählen.",
+               "Unter „🔗 GTCHA-Seite öffnen in“ unten „Chrome“ wählen, damit „Öffnen ↗“ in Chrome landet, wo du eingeloggt bist."],
+  },
+  android: {
+    install: ["Tailscale-App aus dem Play Store installieren, mit eurem Konto anmelden, verbinden.",
+              "Diese Seite in Chrome öffnen → „⋮“ → „App installieren“ (oder „Zum Startbildschirm hinzufügen“).",
+              "Ab jetzt die App über das Symbol auf dem Startbildschirm öffnen."],
+    push: "In Chrome und in der installierten App: hier unten „Pushes einschalten“ und erlauben.",
+    bookmark: ["Discord verknüpfen (oben), dann unter „📥 Eigene GTCHA-Daten“ „Lesezeichen … kopieren“ antippen.",
+               "In Chrome irgendeine Seite öffnen → „⋮“ → Stern (☆) antippen → „Bearbeiten“.",
+               "Name „An GTCHA Tracker“, bei URL alles löschen und den kopierten Code einfügen, speichern.",
+               "Übertragen: In Chrome eingeloggt gtchaxonline.com öffnen, Adressleiste antippen, „An GTCHA Tracker“ eintippen und den Vorschlag mit dem Stern wählen (nicht die Google-Suche)."],
+  },
+  pc: {
+    install: ["Tailscale für Windows/Mac installieren (tailscale.com/download), mit eurem Konto anmelden.",
+              "Diese Seite in Chrome oder Edge öffnen. Installieren (optional): Symbol „App installieren“ rechts in der Adressleiste, oder Chrome „⋮“ → „Streamen, speichern und teilen“ → „Seite als App installieren“ / Edge „…“ → „Apps“ → „Diese Website als App installieren“.",
+              "Geht auch ohne Installation einfach im Browser-Tab (auch in Firefox, dort ohne Installation)."],
+    push: "In Chrome/Edge: hier unten „Pushes einschalten“ und erlauben. Pushes kommen, solange der Browser läuft.",
+    bookmark: ["Discord verknüpfen (oben), dann unter „📥 Eigene GTCHA-Daten“ „Lesezeichen … kopieren“ anklicken.",
+               "Lesezeichenleiste einblenden (Strg+Umschalt+B, Mac: ⌘+Umschalt+B) → Rechtsklick auf die Leiste → „Seite hinzufügen“ / „Favorit hinzufügen“.",
+               "Name „An GTCHA Tracker“, bei URL den kopierten Code einfügen, speichern.",
+               "Übertragen: Eingeloggt gtchaxonline.com öffnen und auf „An GTCHA Tracker“ in der Leiste klicken."],
+  },
+};
+function guideHtml(device) {
+  const g = GUIDES[device] || GUIDES.pc;
+  const list = (items) => `<ol class="guide">${items.map((i) => `<li>${esc(i)}</li>`).join("")}</ol>`;
+  return `<div class="hint"><b>App installieren</b></div>${list(g.install)}
+    <div class="hint"><b>Push-Benachrichtigungen</b></div><div class="hint">${esc(g.push)}</div>
+    <div class="hint" style="margin-top:8px"><b>Lesezeichen „An GTCHA Tracker“ (eigene Daten übertragen)</b></div>${list(g.bookmark)}
+    <div class="hint">Discord-Verknüpfung gilt je Gerät: auf jedem Gerät einmal „Discord verknüpfen“. Der Lesezeichen-Code
+      enthält deinen persönlichen Schlüssel – nicht weitergeben.</div>`;
+}
+
 async function currentSubscription() {
   if (!("serviceWorker" in navigator) || !("PushManager" in window)) return null;
   const reg = await navigator.serviceWorker.ready;
@@ -729,8 +791,14 @@ async function showSettings() {
       <div class="hint">Rang · diesen Monat gekaufte Coins${prof && prof.updated_at && (prof.rank || prof.charge != null)
         ? ` · 🔄 automatisch (${esc(prof.updated_at.slice(8, 10) + "." + prof.updated_at.slice(5, 7) + ".")})` : ""}</div>
     </div>
+    <h2>📖 Anleitung</h2>
+    <div class="panel">
+      <select id="guide-device" aria-label="Gerät">${Object.entries(GUIDE_DEVICES).map(([k, label]) =>
+        `<option value="${k}" ${k === load("guideDevice", guessDevice()) ? "selected" : ""}>${label}</option>`).join("")}</select>
+      <div id="guide">${guideHtml(load("guideDevice", guessDevice()))}</div>
+    </div>
     <h2>🔔 Push-Benachrichtigungen</h2>
-    ${!isStandalone() ? `<div class="notice" style="margin-bottom:12px">Pushes nur in der installierten App (Teilen → Zum Home-Bildschirm).</div>` : ""}
+    ${!isStandalone() && isIOS() ? `<div class="notice" style="margin-bottom:12px">Auf dem iPhone gehen Pushes nur in der installierten App (siehe Anleitung oben).</div>` : ""}
     <div class="panel">
       <div class="hint"><b>Für alle Banner</b></div>
       ${Object.entries(EVENT_LABELS).map(([k, [label, hint]]) => `
@@ -760,7 +828,7 @@ async function showSettings() {
         <div class="gt-links">
           <a class="btn primary" href="${esc(buyHref("https://gtchaxonline.com/pending-detail"))}" target="_blank" rel="noopener">📥 GTCHA öffnen</a>
         </div>
-        <div class="hint">Öffnet GTCHA in Safari – dort Adressleiste antippen und „An GTCHA Tracker“ wählen.</div>
+        <div class="hint">Öffnet GTCHA – dort das Lesezeichen „An GTCHA Tracker“ aufrufen (Einrichtung siehe 📖 Anleitung oben).</div>
         <button class="btn primary" id="bm-sync">Lesezeichen „Alles übertragen“ kopieren</button>
         <div class="hint">Auf irgendeiner gtchaxonline-Seite antippen: lädt deine Verlaufsseiten (Gacha, Versand,
           Münzen, Käufe, Tickets, Ausgaben in ¥) samt allen Seitenzahlen und überträgt sie. Von der Kontoseite nur
@@ -768,8 +836,7 @@ async function showSettings() {
           zu blättern, sobald es bekannte Einträge sieht (alle 30 Tage einmal komplett).</div>
         <button class="btn" id="bm-full">Lesezeichen „Komplett übertragen“ kopieren</button>
         <div class="hint">Nur nötig, wenn im Verlauf eine Lücke gemeldet wird – überträgt wieder alle Seiten.</div>
-        <div class="hint">Einrichten (einmalig): 1. In Safari irgendeine Seite als Lesezeichen sichern (Teilen → Lesezeichen),
-          Name „An GTCHA Tracker“. 2. Lesezeichen bearbeiten, Adresse löschen und den kopierten Code einfügen.
+        <div class="hint">Einrichten (einmalig): siehe 📖 Anleitung oben – für Safari, Chrome (iPhone/Android) und PC.
           Der Code enthält deinen persönlichen Schlüssel – nicht weitergeben.</div>
         <div class="hint" id="bm-msg"></div>
       </div>` : ""}
@@ -785,6 +852,10 @@ async function showSettings() {
     ${admin ? `<h2>⏱ Geschwindigkeit <small>Admin</small></h2>
     <div class="panel"><button class="btn" id="speed">Geschwindigkeit testen</button>
       <div class="hint" id="speed-out"></div></div>` : ""}`;
+  view.querySelector("#guide-device")?.addEventListener("change", (e) => {
+    save("guideDevice", e.target.value);
+    view.querySelector("#guide").innerHTML = guideHtml(e.target.value);
+  });
   view.querySelectorAll("#bm-sync, #bm-full").forEach((btn) => btn.addEventListener("click", async () => {
     const code = bookmarkletSync(deviceToken(), btn.id === "bm-full");
     const msg = view.querySelector("#bm-msg");

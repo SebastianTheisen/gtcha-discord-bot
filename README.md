@@ -34,6 +34,15 @@ Falls `tailscale serve` nach HTTPS-Zertifikaten fragt: in der Tailscale-Admin-Ko
 3. **Teilen → Zum Home-Bildschirm**, dann die App vom Home-Bildschirm öffnen.
 4. Tab **Push** → „Pushes einschalten“ (geht nur in der installierten App, ab iOS 16.4).
 
+### Auf Android oder am PC
+
+- **Android:** Tailscale aus dem Play Store, anmelden, verbinden. Adresse in **Chrome** öffnen →
+  „⋮“ → „App installieren“. Pushes gehen in Chrome und in der installierten App.
+- **PC/Mac:** Tailscale von tailscale.com/download, anmelden. Adresse in **Chrome oder Edge** öffnen
+  (installieren über das Symbol in der Adressleiste ist optional). Pushes kommen, solange der Browser läuft.
+
+Die genaue Anleitung je Gerät (auch Lesezeichen in Chrome) steht in der App unter **Ich → 📖 Anleitung**.
+
 ### Weitere Personen freischalten
 
 In der Tailscale-Admin-Konsole beim VPS **Share…** wählen und die Person einladen. Sie braucht
