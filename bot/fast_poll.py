@@ -78,7 +78,9 @@ class FastPollMixin:
         updates = []
         for banner in await self._banners_from_api(items):
             row = rows.get(banner.pack_id)
-            if row and (banner.current_packs or 0) > 0 and banner.current_packs != row.get('current_packs'):
+            plausible = (banner.current_packs or 0) > 0 or sold_out(row.get('current_packs') if row else None,
+                                                                     banner.current_packs)
+            if row and plausible and banner.current_packs != row.get('current_packs'):
                 updates.append(self._process_banner_update(banner, row, semaphore))
         if updates:
             self._fast_stats["changes"] += len(updates)

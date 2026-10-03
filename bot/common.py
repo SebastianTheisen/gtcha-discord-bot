@@ -64,6 +64,16 @@ POOL_FETCH_PER_SCRAPE = 8
 FULL_SCRAPE_EVERY_MINUTES = 15
 # Thread löschen, wenn ein Banner so oft hintereinander fehlt oder ausverkauft ist
 NOT_FOUND_DELETE_AFTER = 2
+# "0 Packs" gilt sofort als ausverkauft, wenn vorher höchstens so viele übrig waren (sonst Fehlwert der
+# Seite: dann nur überspringen; endgültig beendet wird nach NOT_FOUND_DELETE_AFTER Scrapes)
+SOLD_OUT_MAX_LEFT = 20
+
+
+def sold_out(old_packs, new_packs) -> bool:
+    """Ist "0 Packs" glaubwürdig (leer gezogen) statt eines Fehlwerts?"""
+    return new_packs == 0 and old_packs is not None and 0 < old_packs <= SOLD_OUT_MAX_LEFT
+
+
 # Pool-Wechsel-Alarm ab so vielen abgefangenen Pack-Anstiegen in einem Scrape (mind. 20 % der Banner)
 POOL_SWITCH_MIN_RISES = 5
 # Meldung im Admin-Kanal nach so vielen fehlerhaften Scrapes in Folge

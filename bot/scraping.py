@@ -77,7 +77,9 @@ class ScrapingMixin:
                         # Banner mit 0 Packs: nur überspringen, NICHT löschen
                         # DE-Proxy kann 0 zurückgeben für JP-Only-Pool-Banner die noch aktiv sind.
                         # Echte Löschung erfolgt wenn Banner vom Website verschwindet (not_found >= 20).
-                        if banner.current_packs is not None and banner.current_packs == 0:
+                        # Ausnahme: waren nur noch wenige übrig, ist der Banner leer gezogen - 0 übernehmen
+                        if (banner.current_packs is not None and banner.current_packs == 0
+                                and not (existing and sold_out(existing.get('current_packs'), 0))):
                             skipped_empty += 1
                             continue
 
@@ -149,9 +151,9 @@ class ScrapingMixin:
                             if val is not None:
                                 new_packs = int(val)
                                 break
-                        if new_packs is None or new_packs == 0:
-                            continue
                         old_packs = db_b.get('current_packs')
+                        if new_packs is None or (new_packs == 0 and not sold_out(old_packs, 0)):
+                            continue
                         total_packs = db_b.get('total_packs')
                         if old_packs is None:
                             await self.db.update_banner_packs(pid, new_packs)
