@@ -379,8 +379,23 @@ def _summarize_options(classes: List[Dict], possible: List[tuple], units: List[D
 
 
 ORDER_MAX_NORMALS = 60      # so viele normale Karten kann ein Versand-Schub höchstens enthalten
-ORDER_MAX_VALUE = 300_000   # größere Schübe nur nach dem Karten-Modell (die exakte Rechnung wird sonst zu langsam)
+ORDER_MAX_VALUE = 3_000_000   # darüber nur nach dem Karten-Modell (Rechnung ~1,5 s je 1,5 Mio., einmal je Banner)
 _ORDER_CACHE: Dict[tuple, List[tuple]] = {}
+_SUMS_CACHE: Dict[tuple, tuple] = {}   # Summen-Tabelle der normalen Karten je Pool (groß - nur die letzten wenigen)
+
+
+def _pool_sums(pool: Dict, value: int) -> List[int]:
+    """_normal_sums für Werte bis `value`, je Pool einmal berechnet (für größere Werte neu, mit Reserve)."""
+    key = tuple(sorted(pool.get("normal_values", {}).items()))
+    cached = _SUMS_CACHE.get(key)
+    if cached and cached[0] >= value:
+        return cached[1]
+    limit = int(value * 1.25) + 1000
+    sums = _normal_sums(pool, ORDER_MAX_NORMALS, limit)
+    if len(_SUMS_CACHE) >= 2:
+        _SUMS_CACHE.pop(next(iter(_SUMS_CACHE)))
+    _SUMS_CACHE[key] = (limit, sums)
+    return sums
 ORDER_MAX_HITS = 4          # so viele Versand-Hits höchstens in einem Schub (mehr ist praktisch nie)
 
 
@@ -396,7 +411,8 @@ def order_options(pool: Dict, orders: int, value: int, tol: Optional[int] = None
     hits = [u for u in tracked_units(pool) if u.get("shipping_only")]
     tol = tol if tol is not None else max(2, round(value * 0.001))
     if sums is None:
-        sums = _normal_sums(pool, max_normals, value + tol)
+        sums = (_pool_sums(pool, value + tol) if max_normals == ORDER_MAX_NORMALS
+                else _normal_sums(pool, max_normals, value + tol))
     found = []
     for r in range(0, min(len(hits), ORDER_MAX_HITS) + 1):
         for combo in combinations(hits, r):
