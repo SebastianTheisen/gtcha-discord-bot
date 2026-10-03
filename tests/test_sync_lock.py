@@ -79,3 +79,24 @@ def test_two_gtcha_accounts_both_must_sync(tmp_path):
         assert sync_rule(await bridge.sync_state("7"))["missing"] == 1
 
     asyncio.run(run())
+
+
+def test_accounts_by_gtcha_member_id(tmp_path):
+    import hashlib
+
+    from utils.app_bridge import AppBridge
+    from webapp.server import sync_rule
+
+    async def run():
+        bridge = AppBridge(str(tmp_path / "w.db"))
+        await bridge.init()
+        await bridge.set_expected_accounts("7", 2)
+        old = hashlib.sha256(b"gtcha-tracker:111").hexdigest()[:16]
+        await bridge.mark_synced("7", old)                         # Lesezeichen v5: nur Fingerabdruck
+        await bridge.rename_account("7", old, "id:111")             # v6 schickt die ID: Eintrag wird übernommen
+        await bridge.mark_synced("7", "id:111")
+        await bridge.mark_synced("7", "id:222")                     # zweites Konto im anderen Browser
+        st = sync_rule(await bridge.sync_state("7"))
+        assert st["ok"] and [a["gtcha_id"] for a in st["accounts"]] == ["111", "222"]
+
+    asyncio.run(run())
