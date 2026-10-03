@@ -171,6 +171,12 @@ class BannerView:
             "medal_thread": medal_thread or None,
             **self._out(pool, sure, winners, open_groups),
         }
+        if pool and remaining == 0 and total and data["hits_open"] is None:
+            # leer gezogen: keine Schätzung mehr nötig - alle Hits sind raus
+            data["tracked_hits"] = bool(pool.get('hits'))
+            data["hits_total"] = (len(relevant_units(pool, price or None)) if pool.get('hits')
+                                  else pool.get('hits_total') or 0)
+            data["hits_open"] = 0
         if store:
             data["store"] = True   # wie ein normaler Banner, nur ohne Discord
         if ended:
@@ -232,7 +238,7 @@ class BannerView:
         schon mit vollem Kartenwert (bestätigt an 24060). Gemeldete, noch nicht verschickte Hits zählen als raus.
         """
         empty = {"converted": None, "converted_max_cards": None, "out_total": None,
-                 "left_value": None, "left_per_pack": None}
+                 "left_value": None, "left_per_pack": None, "undecided": None}
         st = json.loads(row['site_stats']) if row.get('site_stats') else {}
         shipped = to_int(st.get("coins"))
         converted = cls._converted(row)
@@ -246,8 +252,16 @@ class BannerView:
             left = max(0, to_int(pool['total_value'])
                        - out_of_banner_value(pool, converted, shipped, held, shipped_keys))
             per_pack = round(left / remaining) if remaining > 0 else None
-        return {"converted": converted, "converted_max_cards": max_cards, "out_total": converted + shipped,
-                "left_value": left, "left_per_pack": per_pack}
+        # Kartenwert: umgewandelt zählt die Seite voll, verschickt ohne 10 % Steuer (×1,1 = Kartenwert)
+        decided = converted + card_value(shipped)
+        undecided = None
+        if remaining == 0 and total and pool and pool.get('total_value'):
+            # leer gezogen: alle Karten sind raus - was weder verschickt noch umgewandelt ist, liegt noch
+            # gezogen bei den Spielern (die Seite zählt es erst, wenn sie sich entscheiden)
+            undecided = max(0, to_int(pool['total_value']) - decided)
+            left = per_pack = None
+        return {"converted": converted, "converted_max_cards": max_cards, "out_total": decided,
+                "left_value": left, "left_per_pack": per_pack, "undecided": undecided}
 
     @staticmethod
     def _rank_info(conditions: Optional[str]) -> Dict:
