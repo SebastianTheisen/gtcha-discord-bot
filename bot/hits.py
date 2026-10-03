@@ -180,7 +180,7 @@ class HitsMixin:
                     # ersten Schub nach der Medaille
                     keys = tier_keys(pool)
                     medal_t = {keys[t]: m["at"] for t, m in (await self.db.medal_rows(medal_thread)).items()
-                               if t in keys and m.get("at")}
+                               if t in keys and m.get("at") and m["source"] != "admin"}   # Admin: nur "raus", kein Versand
                     deadlines = batch_deadlines(batches, medal_t)
                     joint = await asyncio.to_thread(match_shipment_history, pool, batches, VALUE_TOLERANCE, deadlines)
                     if joint.get("ignored_deadlines"):

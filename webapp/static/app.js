@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 81;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 82;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -421,6 +421,7 @@ function originLines(units, meId) {
   return units.map((u) => {
     const o = u.origin, tier = many ? `${u.tier} ` : "";
     if (!o) return u.state === "unsure" && u.odds != null ? `❓ ${tier}~${u.odds} % raus` : "";
+    if (o.via === "admin") return `🛠️ ${tier}durch Admin abgehakt${o.at ? ` · ${shortTime(o.at)}` : ""}`;
     if (o.via === "versand") {
       return u.state === "unsure"
         ? `❓ ${tier}${u.odds != null ? `~${u.odds} % · ` : ""}📦 ${shortTime(o.shipped_at)}`
@@ -922,6 +923,22 @@ async function claimFlow(b, card) {
   }
   const free = units.find((u) => !u.medal_user && u.state !== "pulled");
   const own = units.find((u) => u.medal_user === String(user.user_id));
+  // Admin: ohne Person abhaken ("Hit ist raus") oder das wieder aufheben - löst keine Versand-Frist aus
+  const marked = units.find((u) => u.origin?.via === "admin");
+  if (user.admin && (free || marked)) {
+    const opts = [star, "Abbrechen", ...(free ? ["Selbst melden", `🛠️ ${free.tier} abhaken (ohne Person)`] : []),
+                  ...(marked ? [`🛠️ ${marked.tier} Abhaken aufheben`] : [])];
+    const choice = await ask("Admin", `${esc(card.name)} · ${num(card.value)} Coins<br><br>
+        Abhaken ohne Person, wenn ihr denkt, der Hit ist raus – darunter steht dann „durch Admin abgehakt“.`, opts);
+    if (await wishPicked(choice) || !choice || choice === "Abbrechen") return;
+    if (choice.startsWith("🛠️")) {
+      const payload = choice.includes("aufheben") ? { pack_id: b.id, tier: marked.tier, action: "remove" }
+        : { pack_id: b.id, tier: free.tier, action: "mark" };
+      haptic();
+      const { id } = await authApi("/api/admin/medal", payload);
+      return waitForBot(id);
+    }
+  }
   let unit, action;
   if (free && own) {
     // eigenes Exemplar gemeldet und noch eins frei: zurücknehmen oder ein weiteres melden
@@ -948,6 +965,10 @@ async function claimFlow(b, card) {
   }
   haptic();
   const { id } = await authApi("/api/medal", { pack_id: b.id, tier: unit.tier, action });
+  return waitForBot(id);
+}
+
+async function waitForBot(id) {
   for (let i = 0; i < 20; i++) {        // der Bot arbeitet Meldungen alle 5 s ab
     await new Promise((r) => setTimeout(r, 1500));
     const r = await authApi(`/api/medal/${id}`);

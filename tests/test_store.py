@@ -205,6 +205,19 @@ def test_store_hits_detected_and_medals_like_normal_banners_without_discord(tmp_
         await bot._process_app_requests()
         assert (await bridge.get_request(other))["status"] == "rejected"
         assert (await bridge.get_request(mine))["status"] == "ok" and await db.get_medals(-24126) == {}
+        # Admin hakt ohne Person ab: gespeichert als "admin", keine Versand-Frist, Anzeige "durch Admin abgehakt"
+        marked = await bridge.add_request(24126, "T1", {"user_id": "0", "name": "Admin Basti"}, "admin_mark")
+        await bot._process_app_requests()
+        assert (await bridge.get_request(marked))["status"] == "ok"
+        assert (await db.medal_rows(-24126))["T1"]["source"] == "admin"
+        assert (await db.odds_inputs(24126))["medals"] == {}
+        t1 = next(h for h in (await view.detail(24126))["hits"] if h["tier"] == "T1")
+        assert t1["origin"]["via"] == "admin" and t1["note"] == "durch Admin abgehakt"
+        again = await bridge.add_request(24126, "T1", {"user_id": "0", "name": "Admin Basti"}, "admin_mark")
+        undo = await bridge.add_request(24126, "T1", {"user_id": "0", "name": "Admin Basti"}, "admin_remove")
+        await bot._process_app_requests()
+        assert (await bridge.get_request(again))["status"] == "rejected"
+        assert (await bridge.get_request(undo))["status"] == "ok" and await db.get_medals(-24126) == {}
         assert discord == []                 # nichts davon hat Discord berührt
         assert await db.get_thread_by_banner_id(24126) is None
 

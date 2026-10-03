@@ -510,9 +510,11 @@ class App:
             pack_id = int(body.get("pack_id"))
         except (TypeError, ValueError):
             raise web.HTTPBadRequest(text="Banner fehlt")
-        if action not in ("remove", "assign") or not re.fullmatch(r"T([1-9]\d?)", tier):
+        if action not in ("remove", "assign", "mark") or not re.fullmatch(r"T([1-9]\d?)", tier):
             raise web.HTTPBadRequest(text="Ungültig")
         target = admin
+        if action == "mark":   # "Hit ist raus" ohne Person - löst keine Versand-Frist aus
+            target = {"user_id": "0", "name": f"Admin {admin['name']}"}
         if action == "assign":
             known = {u["user_id"]: u for u in await self.bridge.known_users()}
             target = known.get(str(body.get("user_id", "")))
@@ -605,7 +607,9 @@ class App:
     async def api_medal_status(self, request):
         user = await self._user(request)
         req = await self.bridge.get_request(int(request.match_info["id"]))
-        if not user or not req or req["discord_user_id"] != user["user_id"]:
+        mine = user and req and (req["discord_user_id"] == user["user_id"]
+                                 or (req["action"].startswith("admin_") and is_admin(user["user_id"])))
+        if not mine:
             raise web.HTTPNotFound()
         return web.json_response({"status": req["status"], "reason": req["reason"]})
 

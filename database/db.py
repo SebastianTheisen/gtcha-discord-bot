@@ -923,8 +923,9 @@ class Database:
                 threads = [r[0] for r in await cur.fetchall()]
             medals = {}
             if threads:
-                cur = await db.execute(f"SELECT tier, created_at FROM medals WHERE thread_id IN "
-                                       f"({','.join('?' * len(threads))})", threads)
+                # vom Admin abgehakt: kein Zugzeitpunkt, keine Versand-Anforderung
+                cur = await db.execute(f"SELECT tier, created_at FROM medals WHERE COALESCE(source, '') != 'admin' "
+                                       f"AND thread_id IN ({','.join('?' * len(threads))})", threads)
                 medals = {tier: ts(t) for tier, t in await cur.fetchall() if ts(t)}
             cur = await db.execute("SELECT changed_at, old_count - new_count FROM pack_history "
                                    "WHERE banner_id = ? AND new_count < old_count ORDER BY id", (pack_id,))
