@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 79;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 80;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -560,11 +560,12 @@ async function showBanner(id) {
         ${b.hits_open != null ? stat(b.archived ? "Hits beim Ende" : "Hits noch drin", hitsText(b) + (b.unsure ? " ❓" : ""), b.cost_to_hit && !b.archived ? `Ø ${num(b.cost_to_hit)} Coins bis Hit` : "") : ""}
         ${b.min_value != null ? stat("Mindestens zurück", num(b.min_value) + " Coins", b.price ? pct(b.min_value / b.price * 100) + " vom Preis" : "") : ""}
         ${b.pool_value ? stat("Alle Karten", num(b.pool_value) + " Coins", b.all_packs_cost ? `Alle Packs: ${num(b.all_packs_cost)} (${pct(b.pool_value / b.all_packs_cost * 100)})` : "") : ""}
-        ${b.out_total != null ? stat("Aus dem Banner raus", `${num(b.out_total)} Coins`,
-          `📦 verschickt: ${num(b.ship_cards)} ${b.ship_cards === 1 ? "Karte" : "Karten"} · ${num(b.ship_counted)} Coins`
+        ${b.out_total != null ? stat("Aus dem Banner raus", `${num(b.out_total + (b.undecided || 0))} Coins`,
+          `📦 verschickt: ${num(b.ship_cards)} ${b.ship_cards === 1 ? "Karte" : "Karten"} · ${num(b.ship_value)} Coins`
            + `${b.ship_players ? ` · ${num(b.ship_players)} Spieler` : ""}<br>
            🪙 umgewandelt: ${num(b.converted)} Coins${b.converted_max_cards != null ? ` · höchstens ${num(b.converted_max_cards)} Karten` : ""}<br>
-           <i>Werte wie von der Seite geliefert</i>`) : ""}
+           ${b.undecided != null ? `🎒 noch bei Spielern: ${num(b.undecided)} Coins (gezogen, noch nicht verschickt oder umgewandelt)<br>` : ""}
+           <i>Kartenwerte; die Seite zählt den Versand ohne 10 % Steuer (${num(b.ship_counted)})</i>`) : ""}
         ${b.left_value != null && !b.archived ? stat("Noch im Banner (rechnerisch)", `${num(b.left_value)} Coins`,
           (b.left_per_pack != null ? `Ø ${num(b.left_per_pack)} pro Restpack${b.price ? ` (${pct(b.left_per_pack / b.price * 100)} vom Preis)` : ""}` : "")
           + restCost(b)) : ""}

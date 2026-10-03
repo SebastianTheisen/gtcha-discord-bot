@@ -30,7 +30,8 @@ def test_out_of_banner_uses_site_values():
     row = {"converted": 1_166_707, "decided_value": 1, "current_packs": 315, "total_packs": 1200, "site_stats": site}
     data = BannerView._out_of_banner(row, pool)
     assert data["converted"] == 1_166_707                       # eigene Spalte hat Vorrang
-    assert data["out_total"] == 1_166_707 + 633_293             # wie von der Seite geliefert
+    assert data["out_total"] == 1_166_707 + 696_622             # Kartenwerte: Versand ×1,1
+    assert data["undecided"] is None                            # läuft noch
     assert data["converted_max_cards"] == 885 - 45              # gezogen minus verschickt
     assert data["left_value"] == 2_922_940 - 1_166_707 - 696_622  # Versand als Kartenwert (x1,1)
     assert data["left_per_pack"] == round(data["left_value"] / 315)
@@ -38,6 +39,10 @@ def test_out_of_banner_uses_site_values():
     old = {"decided_value": 1_800_000, "current_packs": 315, "total_packs": 1200, "site_stats": site}
     assert BannerView._out_of_banner(old, pool)["converted"] == 1_800_000 - 633_293
     assert BannerView._out_of_banner({"site_stats": site}, pool)["out_total"] is None
+    # leer gezogen: alles raus - der Rest liegt gezogen bei den Spielern
+    done = {**row, "current_packs": 0}
+    data = BannerView._out_of_banner(done, pool)
+    assert data["undecided"] == 2_922_940 - 1_166_707 - 696_622 and data["left_value"] is None
 
 
 def test_my_medals_lists_claimed_cards(tmp_path, monkeypatch):
