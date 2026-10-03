@@ -16,6 +16,7 @@ from utils.card_pool import card_value, fmt_coins
 
 
 PACK_HISTORY_DAYS = 90
+API_LOG_DAYS = 30
 # Store-Packs (gtchaxonline.com/store) liegen in derselben Tabelle, aber mit is_active = 2: alle Funktionen des Bots
 # für Discord (Threads, Top 10, "nicht gefunden") arbeiten nur mit is_active = 1 und sehen sie nie; Funktionen
 # nach Banner-ID (Kartenpool, Pack-Verlauf, Preis ...) und die App funktionieren für beide.
@@ -129,6 +130,12 @@ class Database:
 
                 -- Discord sieht automatisch erkannte Hits zeitversetzt: öffentlicher Stand je Banner
                 -- (fehlt die Zeile, gilt der echte Stand) und Warteschlange für spätere Posts
+                -- Rohdaten der Seite je Banner, bei jeder Änderung (zum Prüfen der Versand-/Umwandlungs-Rechnung)
+                CREATE TABLE IF NOT EXISTS api_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, banner_id INTEGER, changed_at TEXT,
+                    pack_count INTEGER, sendcount INTEGER, sendprice INTEGER, kangen INTEGER, sendpeople INTEGER,
+                    price INTEGER);
+                CREATE INDEX IF NOT EXISTS api_log_banner ON api_log (banner_id, id);
                 CREATE TABLE IF NOT EXISTS discord_public (
                     pack_id INTEGER PRIMARY KEY, pulled_cards TEXT, unsure_cards TEXT);
                 CREATE TABLE IF NOT EXISTS discord_outbox (
@@ -869,6 +876,33 @@ class Database:
             await db.commit()
             return len(old_ids)
 
+    async def log_api_values(self, pack_id: int, item: Dict) -> bool:
+        """Rohwerte aus pack/list protokollieren, wenn sich etwas geändert hat. True = neuer Eintrag."""
+        def num(key):
+            try:
+                return int(float(item.get(key))) if item.get(key) is not None else None
+            except (TypeError, ValueError):
+                return None
+        values = (num("pack_count"), num("total_sendcount"), num("total_sendprice"), num("total_kangen"),
+                  num("total_sendpeople"), num("point"))
+        last = self.__dict__.setdefault("_api_last", {})
+        if last.get(pack_id) == values:
+            return False
+        async with aiosqlite.connect(self.db_path) as db:
+            if pack_id not in last:   # nach Neustart: letzten gespeicherten Stand als Vergleich nehmen
+                cur = await db.execute("SELECT pack_count, sendcount, sendprice, kangen, sendpeople, price FROM api_log "
+                                       "WHERE banner_id = ? ORDER BY id DESC LIMIT 1", (pack_id,))
+                row = await cur.fetchone()
+                if row and tuple(row) == values:
+                    last[pack_id] = values
+                    return False
+            await db.execute("INSERT INTO api_log (banner_id, changed_at, pack_count, sendcount, sendprice, kangen, "
+                             "sendpeople, price) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                             (pack_id, datetime.now().isoformat(), *values))
+            await db.commit()
+        last[pack_id] = values
+        return True
+
     async def purge_old_history(self) -> int:
         """Pack-Bewegungen und Archiv älter als PACK_HISTORY_DAYS Tage löschen."""
         cutoff = (datetime.now() - timedelta(days=PACK_HISTORY_DAYS)).isoformat()
@@ -876,6 +910,8 @@ class Database:
             cur = await db.execute("DELETE FROM pack_history WHERE changed_at < ?", (cutoff,))
             removed = cur.rowcount
             await db.execute("DELETE FROM banner_archive WHERE ended_at < ?", (cutoff,))
+            await db.execute("DELETE FROM api_log WHERE changed_at < ?",
+                             ((datetime.now() - timedelta(days=API_LOG_DAYS)).isoformat(),))
             await db.commit()
             return removed
 
