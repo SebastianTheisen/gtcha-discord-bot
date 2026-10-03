@@ -33,7 +33,7 @@ from webapp.view import BannerView, banner_label
 
 STATIC = Path(__file__).parent / "static"
 REFRESH_SECONDS = 20
-BOOKMARKLET_VERSION = 3   # = SYNC_VERSION in app.js; ältere Lesezeichen bekommen einen Hinweis
+BOOKMARKLET_VERSION = 4   # = SYNC_VERSION in app.js; ältere Lesezeichen bekommen einen Hinweis
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
        "img-src 'self' data: https://gtchaxonline.com https://*.gtchaxonline.com; connect-src 'self'; "
        "manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; "
@@ -83,6 +83,26 @@ def import_result_page(lines: list, ok: bool = True, report: list = None) -> web
 def admin_ids() -> list:
     """Admins = genau die Discord-IDs in APP_ADMIN_IDS (.env, bei jeder Anfrage gelesen). Leer = niemand."""
     return [i.strip() for i in os.getenv("APP_ADMIN_IDS", "").split(",") if i.strip().isdigit()]
+
+
+def sync_rule(state: Dict, now: Optional[datetime] = None) -> Dict:
+    """7-Tage-Pflicht für eine Person: state = {"expected": n, "accounts": [{account, synced_at}, ...]}.
+    Offen nur, wenn mindestens n Konten übertragen haben und jedes davon in den letzten SYNC_REQUIRED_DAYS Tagen."""
+    now = now or datetime.now()
+    expected = max(1, int(state.get("expected") or 1))
+    accounts = []
+    for i, a in enumerate(state.get("accounts") or [], 1):
+        age = (now - datetime.fromisoformat(a["synced_at"])).total_seconds() / 86400
+        accounts.append({"label": f"Konto {i}", "account": a["account"], "last_sync": a["synced_at"],
+                         "ok": age < SYNC_REQUIRED_DAYS, "days_left": max(0, round(SYNC_REQUIRED_DAYS - age, 1))})
+    missing = max(0, expected - len(accounts))
+    stale = [a for a in accounts if not a["ok"]]
+    oldest = min(accounts, key=lambda a: a["last_sync"]) if accounts else None
+    ok = not missing and not stale
+    return {"ok": ok, "reason": None if ok else ("accounts" if missing and not stale and accounts else "sync"),
+            "days": SYNC_REQUIRED_DAYS, "expected": expected, "missing": missing, "accounts": accounts,
+            "last_sync": oldest["last_sync"] if oldest else None,
+            "days_left": min((a["days_left"] for a in accounts), default=0)}
 
 
 def is_admin(user_id) -> bool:
@@ -267,18 +287,13 @@ class App:
         return await self.bridge.device(request.headers.get("X-Device-Token"))
 
     async def _sync_info(self, user: Optional[Dict]) -> Dict:
-        """Zugang zu Bannern & Co.: verknüpft und in den letzten SYNC_REQUIRED_DAYS Tagen übertragen (Admin immer)."""
+        """Zugang zu Bannern & Co.: verknüpft und in den letzten SYNC_REQUIRED_DAYS Tagen übertragen (Admin immer).
+        Mit mehreren GTCHA-Konten (vom Admin eingestellt): jedes Konto muss übertragen haben."""
         if not user:
             return {"ok": False, "reason": "link"}
         if is_admin(user["user_id"]):
             return {"ok": True, "exempt": True}
-        last = await self.bridge.last_sync(user["user_id"])
-        if not last:
-            return {"ok": False, "reason": "sync", "last_sync": None, "days": SYNC_REQUIRED_DAYS}
-        age = (datetime.now() - datetime.fromisoformat(last)).total_seconds() / 86400
-        return {"ok": age < SYNC_REQUIRED_DAYS, "reason": None if age < SYNC_REQUIRED_DAYS else "sync",
-                "last_sync": last, "days": SYNC_REQUIRED_DAYS,
-                "days_left": max(0, round(SYNC_REQUIRED_DAYS - age, 1))}
+        return sync_rule(await self.bridge.sync_state(user["user_id"]))
 
     async def _locked(self, request) -> Optional[web.Response]:
         """None = Zugang erlaubt; sonst die Antwort "gesperrt" (423) mit Grund für die App."""
@@ -286,9 +301,9 @@ class App:
         return None if info["ok"] else web.json_response({"locked": info}, status=423)
 
     async def allowed_users(self) -> set:
-        """Discord-IDs, die Banner-Pushes bekommen: Admins und wer in den letzten 7 Tagen übertragen hat."""
-        cutoff = (datetime.now() - timedelta(days=SYNC_REQUIRED_DAYS)).isoformat()
-        return set(admin_ids()) | {u for u, t in (await self.bridge.last_syncs()).items() if t >= cutoff}
+        """Discord-IDs, die Banner-Pushes bekommen: Admins und wer mit allen Konten in den letzten 7 Tagen
+        übertragen hat."""
+        return set(admin_ids()) | {u for u, st in (await self.bridge.sync_overview()).items() if sync_rule(st)["ok"]}
 
     async def api_link(self, request):
         now = time.time()
@@ -385,14 +400,16 @@ class App:
         logger.info(f"Sync von {user['name']}: {saved} Bereiche, {pages} Seiten ({partial} nur Neues)"
                     + (f" in {seconds} s" if seconds else "") + " · "
                     + ", ".join(f"{p}={n if n is not None else 'FEHLER ' + how}" for p, n, how in report))
-        gap, added = False, {}
+        gap, added, sync_now = False, {}, None
         try:
             stored = await self.bridge.get_history(user["user_id"])
             before = {a: len((stored.get(a) or {}).get("items") or []) for a in ("coins", "shipped")}
             changed = ingest(stored, entries)
             await self.bridge.set_history(user["user_id"], changed)
-            if saved:
-                await self.bridge.mark_synced(user["user_id"])   # zählt für die 7-Tage-Pflicht
+            if saved:   # zählt für die 7-Tage-Pflicht, je GTCHA-Konto (Fingerabdruck aus dem Lesezeichen)
+                acc = str(data.get("acc") or "")
+                await self.bridge.mark_synced(user["user_id"], acc if re.fullmatch(r"[0-9a-f]{8,32}", acc) else None)
+                sync_now = sync_rule(await self.bridge.sync_state(user["user_id"]))
             gap = any(a.get("gap") for a in changed.values())
             added = {a: len(changed[a]["items"]) - before[a] for a in before if a in changed}
         except Exception as e:
@@ -413,7 +430,7 @@ class App:
             lines.append(f"📦 Versand: {max(0, added['shipped'])} neue Karte(n).")
         if int(data.get("v") or 0) < BOOKMARKLET_VERSION:
             lines.append("🔁 Dein Lesezeichen ist veraltet – in der App unter „Ich“ → „Eigene GTCHA-Daten“ neu "
-                         "kopieren und im Safari-Lesezeichen ersetzen.")
+                         "kopieren und das Lesezeichen in jedem Browser ersetzen.")
         if failed:
             lines.append(f"⚠️ Nicht geladen: {', '.join(AREA_NAMES.get(p, p) for p in failed)} – der gespeicherte Stand "
                          f"bleibt erhalten. Einfach noch einmal übertragen.")
@@ -421,6 +438,11 @@ class App:
             lines.append("⚠️ Zwischen alt und neu fehlt evtl. etwas – einmal „Komplett übertragen“ benutzen.")
         if claims:
             lines.append(f"🏅 {claims} Medaille(n) automatisch gemeldet.")
+        if sync_now and (sync_now["expected"] > 1 or len(sync_now["accounts"]) > 1):
+            konten = ", ".join(f"{a['label']} {'✅' if a['ok'] else '⏳'}" for a in sync_now["accounts"])
+            lines.append(f"👤 GTCHA-Konten: {konten}" + (f" · noch {sync_now['missing']} Konto/Konten nicht übertragen "
+                                                       f"– im anderen Browser das Lesezeichen aufrufen."
+                                                       if sync_now["missing"] else ""))
         return import_result_page(lines, report=report)
 
     async def auto_claim(self, user: Dict) -> list:
@@ -647,7 +669,22 @@ class App:
         data["medals"] = await self.view.my_medals(user_id)
         data["devices"] = [{**d, "created_at": local_time(d["created_at"]), "last_seen": local_time(d["last_seen"])}
                            for d in await self.bridge.devices(user_id)]
+        data["sync"] = {**sync_rule(await self.bridge.sync_state(user_id)), "exempt": is_admin(user_id)}
         return web.json_response(data)
+
+    async def api_admin_accounts(self, request):
+        """Anzahl GTCHA-Konten einer Person einstellen oder ein übertragenes Konto zurücksetzen."""
+        admin = await self._admin(request)
+        body = await request.json()
+        user_id = str(body.get("user_id", ""))
+        if not user_id.isdigit():
+            raise web.HTTPBadRequest(text="Person fehlt")
+        if body.get("expected") is not None:
+            await self.bridge.set_expected_accounts(user_id, int(body["expected"]))
+        if body.get("remove"):
+            await self.bridge.remove_account(user_id, str(body["remove"])[:40])
+        logger.info(f"Admin {admin['name']}: GTCHA-Konten von {user_id} geändert ({body})")
+        return web.json_response(sync_rule(await self.bridge.sync_state(user_id)))
 
     async def api_my_devices(self, request):
         user = await self._user(request)
@@ -781,7 +818,10 @@ class App:
             return
         state = await self.push.load_state("reminders")
         changed = False
-        for user_id, last in (await self.bridge.last_syncs()).items():
+        for user_id, st in (await self.bridge.sync_overview()).items():
+            if not st["accounts"]:
+                continue
+            last = min(a["synced_at"] for a in st["accounts"])   # das am längsten nicht übertragene Konto zählt
             age = now - datetime.fromisoformat(last).timestamp()
             if age < REMIND_AFTER or now - state.get(user_id, 0) < REMIND_AFTER:
                 continue
@@ -856,6 +896,7 @@ def make_app(app: App) -> web.Application:
         web.post("/api/admin/medal", app.api_admin_medal),
         web.get("/api/admin/auto_ticks", app.api_admin_auto_ticks),
         web.post("/api/admin/reject", app.api_admin_reject),
+        web.post("/api/admin/accounts", app.api_admin_accounts),
         web.post("/api/admin/block", app.api_admin_block),
         web.post("/api/admin/push", app.api_admin_push),
         web.post("/api/me/devices/remove", app.api_remove_device),

@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 85;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 86;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -90,10 +90,23 @@ async function api(path, options) {
   return res.json();
 }
 
+// Je GTCHA-Konto: wann zuletzt übertragen (für Personen mit mehreren Konten)
+function accountLines(s) {
+  const day = (t) => `${t.slice(8, 10)}.${t.slice(5, 7)}. ${t.slice(11, 16)}`;
+  const lines = (s.accounts || []).map((a) => `${a.ok ? "✅" : "⏳"} ${a.label}: ${day(a.last_sync)}${a.ok
+    ? ` · noch ${Math.floor(a.days_left)} Tag${Math.floor(a.days_left) === 1 ? "" : "e"}` : " · abgelaufen"}`);
+  for (let i = 0; i < (s.missing || 0); i++) lines.push(`❌ Konto ${(s.accounts || []).length + i + 1}: noch nie übertragen`);
+  return lines;
+}
+
 // "Letzter Abgleich" mit Resttagen bis zur Sperre (Admins ausgenommen)
 function syncLine(user) {
   const s = user?.sync;
   if (!s || s.exempt) return "";
+  if ((s.accounts || []).length > 1 || (s.expected || 1) > 1) {
+    return `<div class="${s.ok ? "hint" : "notice"}">GTCHA-Konten (alle ${s.days} Tage übertragen):<br>
+      ${accountLines(s).join("<br>")}</div>`;
+  }
   if (!s.last_sync) return `<div class="notice">Noch nie übertragen – bis dahin sind Banner & Co. gesperrt.</div>`;
   const last = `${s.last_sync.slice(8, 10)}.${s.last_sync.slice(5, 7)}. ${s.last_sync.slice(11, 16)}`;
   if (!s.ok) return `<div class="notice">Zuletzt übertragen am ${last} – länger als ${s.days} Tage her, App gesperrt.</div>`;
@@ -105,14 +118,19 @@ function syncLine(user) {
 // Sperrbildschirm: Banner & Co. erst nach Verknüpfen bzw. Übertragen (alle 7 Tage)
 function lockHtml(info) {
   const last = info.last_sync ? `${info.last_sync.slice(8, 10)}.${info.last_sync.slice(5, 7)}.` : null;
+  const accounts = (info.accounts || []).length > 1 || (info.expected || 1) > 1
+    ? `<div class="lock-text">${accountLines(info).join("<br>")}</div>` : "";
   const why = info.reason === "link"
     ? "Bitte zuerst dieses Gerät mit Discord verknüpfen (Reiter <b>Ich</b> → „Discord verknüpfen“)."
-    : `Alle ${info.days || 7} Tage müssen deine GTCHA-Daten einmal übertragen werden${last
-      ? ` – zuletzt am <b>${last}</b>` : " – bisher noch nie"}. Danach ist sofort alles wieder offen.`;
+    : info.reason === "accounts"
+      ? `Du spielst mit ${info.expected} GTCHA-Konten – ${info.missing === 1 ? "eins wurde" : `${info.missing} wurden`} noch nie
+         übertragen. Im anderen Browser (eingeloggt mit dem anderen Konto) das Lesezeichen aufrufen.`
+      : `Alle ${info.days || 7} Tage müssen deine GTCHA-Daten einmal übertragen werden${last
+        ? ` – zuletzt am <b>${last}</b>` : " – bisher noch nie"}. Danach ist sofort alles wieder offen.`;
   return `<div class="lock">
     <div class="lock-icon">🔒</div>
     <div class="lock-title">${info.reason === "link" ? "Gerät nicht verknüpft" : "Bitte Daten übertragen"}</div>
-    <div class="lock-text">${why}</div>
+    <div class="lock-text">${why}</div>${accounts}
     ${info.reason === "link" ? `<a class="btn primary" href="#/settings">Zu „Ich“</a>`
       : `<a class="btn primary" href="${esc(buyHref("https://gtchaxonline.com/pending-detail"))}" target="_blank" rel="noopener">📥 GTCHA öffnen</a>
          <div class="lock-text">Dort das Lesezeichen „An GTCHA Tracker“ aufrufen. Noch nicht eingerichtet?
@@ -874,6 +892,9 @@ async function showSettings() {
           zu blättern, sobald es bekannte Einträge sieht (alle 30 Tage einmal komplett).</div>
         <button class="btn" id="bm-full">Lesezeichen „Komplett übertragen“ kopieren</button>
         <div class="hint">Nur nötig, wenn im Verlauf eine Lücke gemeldet wird – überträgt wieder alle Seiten.</div>
+        <div class="hint">Mehrere GTCHA-Konten (z. B. eins in Safari, eins in Chrome)? In jedem Browser das Lesezeichen
+          einrichten und aufrufen – die App erkennt die Konten an einem Fingerabdruck der Mitglieds-ID (die ID selbst
+          wird nicht übertragen).</div>
         <div class="hint">Einrichten (einmalig): siehe 📖 Anleitung oben – für Safari, Chrome (iPhone/Android) und PC.
           Der Code enthält deinen persönlichen Schlüssel – nicht weitergeben.</div>
         <div class="hint" id="bm-msg"></div>
@@ -1240,7 +1261,7 @@ const SYNC_PAGES = ["undecided-detail", "pending-detail", "shipped-detail", "dow
 // Nur Neues: Das Lesezeichen merkt sich (im Speicher von gtchaxonline.com auf diesem Gerät) den neuesten
 // Eintrag je Verlaufsbereich und hört auf zu blättern, sobald eine Seite ihn enthält. Der VPS hängt dann
 // nur das Neue an. Alle 30 Tage (oder mit "komplett") wird wieder alles übertragen.
-const SYNC_VERSION = 3;    // mit BOOKMARKLET_VERSION in webapp/server.py erhöhen, wenn sich das Lesezeichen ändert
+const SYNC_VERSION = 4;    // mit BOOKMARKLET_VERSION in webapp/server.py erhöhen, wenn sich das Lesezeichen ändert
 const SYNC_PARALLEL = 4;   // Bereiche gleichzeitig (je ein unsichtbares Fenster)
 const SYNC_INCREMENTAL = ["buy-point-history", "shipped-detail", "ticket-history", "purchase-history", "downloaded-detail"];
 function bookmarkletSync(token, full = false) {
@@ -1277,8 +1298,9 @@ out[i]={path:p,pages,partial}}finally{fr.remove();say((++done)+' von '+P.length+
 say('lade '+P.length+' Bereiche gleichzeitig …');
 let next=0;await Promise.all(Array.from({length:PAR},async()=>{while(next<P.length){const i=next++;await area(P[i],i)}}));
 say('sende …');try{localStorage.setItem(LS,JSON.stringify(NM))}catch(e){}
+let ACC=null;try{const r=await fetch('/api/user/detail',{credentials:'include'});const j=await r.json();const id=j&&j.detail&&j.detail.id;if(id){const h=await crypto.subtle.digest('SHA-256',new TextEncoder().encode('gtcha-tracker:'+id));ACC=[...new Uint8Array(h)].slice(0,8).map(b=>b.toString(16).padStart(2,'0')).join('')}}catch(e){}
 const f=document.createElement('form');f.method='POST';f.action=${JSON.stringify(location.origin)}+'/api/import-form';
-const i=document.createElement('input');i.type='hidden';i.name='d';i.value=JSON.stringify({t:${JSON.stringify(token)},v:${SYNC_VERSION},at:new Date().toISOString(),ms:Date.now()-T0,pages:out.filter(Boolean)});
+const i=document.createElement('input');i.type='hidden';i.name='d';i.value=JSON.stringify({t:${JSON.stringify(token)},v:${SYNC_VERSION},acc:ACC,at:new Date().toISOString(),ms:Date.now()-T0,pages:out.filter(Boolean)});
 f.appendChild(i);document.body.appendChild(f);f.submit()})()`;
   return "javascript:" + src.replace(/\n/g, "");
 }
@@ -1477,6 +1499,16 @@ async function showUsers() {
           ${stat("Coin-Stand", h.member?.coins != null ? num(h.member.coins) + " Coins" : "–")}
           ${stat("Geräte", String((h.devices || []).length))}
         </div>
+        <h3 class="sub-title">👤 GTCHA-Konten ${h.sync?.exempt ? "<small>Admin – keine Pflicht</small>" : ""}</h3>
+        <div class="rows">
+          <div class="line"><span>Anzahl Konten (alle müssen alle ${h.sync?.days || 7} Tage übertragen)</span>
+            <select data-expected>${[1, 2, 3].map((n) => `<option value="${n}" ${n === (h.sync?.expected || 1) ? "selected" : ""}>${n}</option>`).join("")}</select></div>
+          ${(h.sync?.accounts || []).map((a, i) => `<div class="line"><span>${a.ok ? "✅" : "⏳"} ${a.label} ·
+            ${esc(a.last_sync.slice(8, 10) + "." + a.last_sync.slice(5, 7) + ". " + a.last_sync.slice(11, 16))}
+            ${a.account === "default" ? '<span class="muted">· altes Lesezeichen</span>' : ""}</span>
+            <button class="seg-btn" data-acc="${i}">zurücksetzen</button></div>`).join("")}
+          ${h.sync?.missing ? `<div class="line muted">❌ ${h.sync.missing} Konto/Konten noch nie übertragen</div>` : ""}
+        </div>
         ${u.user_id !== String(user.user_id) ? `<div style="margin:0 10px 6px"><button class="btn" data-block="${u.blocked ? 0 : 1}">
           ${u.blocked ? "Entsperren" : "⛔ Sperren"}</button></div>` : ""}
         <h3 class="sub-title">🏅 Medaillen (${(h.medals || []).length})</h3>
@@ -1487,6 +1519,17 @@ async function showUsers() {
           || `<div class="line muted">Keine</div>`}</div>
         ${h.empty ? `<div class="hint pad">Nichts übertragen.</div>`
           : historySection(h).replace(/<h2>📊 Mein Verlauf/, "<h2>📊 Verlauf")}`;
+      body.querySelector("[data-expected]")?.addEventListener("change", async (e) => {
+        await authApi("/api/admin/accounts", { user_id: u.user_id, expected: Number(e.target.value) });
+        haptic();
+      });
+      body.querySelectorAll("[data-acc]").forEach((btn) => btn.addEventListener("click", async () => {
+        const a = h.sync.accounts[Number(btn.dataset.acc)];
+        if (await ask("Konto zurücksetzen?", `${esc(a.label)} wird vergessen und muss neu übertragen werden.`,
+          ["Abbrechen", "Zurücksetzen"]) !== "Zurücksetzen") return;
+        await authApi("/api/admin/accounts", { user_id: u.user_id, remove: a.account });
+        haptic(); showUsers();
+      }));
       body.querySelector("[data-block]")?.addEventListener("click", async (e) => {
         const block = e.target.dataset.block === "1";
         if (block && await ask("Sperren?", `${esc(u.name || "")}: alle Geräte abmelden, Verknüpfen blockieren.`,
