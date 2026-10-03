@@ -86,6 +86,8 @@ def test_learning_job_and_app_show_odds(tmp_path, monkeypatch):
         text = " ".join(line["text"] for s in detail["shipments"] for line in s["explain"])
         assert "~" in text and "%" in text, text                    # ❓ mit Wahrscheinlichkeit
 
+        hits = {h["tier"]: h for h in detail["hits"]}
+        assert hits["T2"]["origin"]["via"] == "discord" and hits["T2"]["origin"]["at"]   # Medaille mit Zeit
         await db.mark_banner_inactive(24152)
         await Bot()._learn_ship_odds()
         case = (await db.get_cases())[24152]

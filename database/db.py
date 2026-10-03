@@ -926,6 +926,23 @@ class Database:
             moves = [(ts(t), n) for t, n in await cur.fetchall() if ts(t)]
         return {"shipments": shipments, "medals": medals, "moves": moves}
 
+    async def medal_rows(self, thread_id: int) -> Dict[str, Dict]:
+        """Medaillen eines Threads mit Herkunft: Stufe -> {user_id, source ("discord"/"app"), at (Unix-Zeit)}."""
+        if not thread_id:
+            return {}
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT tier, user_id, source, created_at FROM medals WHERE thread_id = ?",
+                                   (thread_id,))
+            rows = await cur.fetchall()
+        out = {}
+        for tier, user, source, created in rows:
+            try:
+                at = int(datetime.fromisoformat(created).replace(tzinfo=timezone.utc).timestamp())
+            except (TypeError, ValueError):
+                at = None
+            out[tier] = {"user_id": user, "source": source or "discord", "at": at}
+        return out
+
     async def save_case(self, pack_id: int, ended_at: Optional[str], data: Dict) -> None:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("INSERT OR REPLACE INTO banner_cases (pack_id, ended_at, data) VALUES (?, ?, ?)",

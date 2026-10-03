@@ -1,6 +1,6 @@
 """Lernen aus komplett mitgeschnittenen Bannern (siehe utils/ship_odds.py).
 
-Alle 30 Minuten: für laufende und beendete Banner die Beobachtungen "Hit mit Medaille -> sicher erkannter
+Alle 5 Minuten: für laufende und beendete Banner die Beobachtungen "Hit mit Medaille -> sicher erkannter
 Versand" sammeln. Beendete Banner werden als Lernfall gespeichert (banner_cases, bleibt auch nach dem Archiv),
 daraus entsteht die Verteilung "Zeit vom Zug bis zum Versand" (bot_meta ship_delay_counts). Die App rechnet
 damit die Wahrscheinlichkeiten in ❓-Gruppen.
@@ -20,7 +20,8 @@ class LearningMixin:
         medal_t = {keys[t]: ts for t, ts in inputs["medals"].items() if t in keys}
         state = await self.db.get_pull_tracking(pid)
         return {
-            "observations": ship_odds.observations(pool, inputs["shipments"], medal_t),
+            # Rechnen im Hintergrund-Thread (das Auftrags-Modell kann bei großen Schüben etwas dauern)
+            "observations": await asyncio.to_thread(ship_odds.observations, pool, inputs["shipments"], medal_t),
             "shipments": inputs["shipments"], "medals": inputs["medals"], "moves_count": len(inputs["moves"]),
             "total_packs": row.get('total_packs'), "remaining_at_end": row.get('current_packs'),
             "hits": [{"key": u["key"], "value": u["value"], "name": u["name"]} for u in tracked_units(pool)

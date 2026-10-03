@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 78;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 79;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -411,6 +411,24 @@ function hitCard(h) {
 const unitsOf = (b, card) => (b.hits || []).filter((h) => h.key === card.id || h.key.startsWith(card.id + "#"))
   .sort((x, y) => x.rank - y.rank);
 
+// Unter der Karte: wer hat sie, wann und wie (Medaille aus Discord/App/Lesezeichen) oder wann verschickt
+const VIA = { discord: "Discord", app: "App", lesezeichen: "Lesezeichen" };
+function originLines(units, meId) {
+  return units.map((u) => {
+    const o = u.origin;
+    if (!o) return u.state === "unsure" && u.odds != null ? `❓ ${u.tier} · wohl ~${u.odds} % raus` : "";
+    if (o.via === "versand") {
+      return u.state === "unsure"
+        ? `❓ ${u.tier} · ${u.odds != null ? `wohl ~${u.odds} % · ` : ""}Versand ${time(o.shipped_at)}`
+        : `📦 ${u.tier} · verschickt ${time(o.shipped_at)} · gezogen spätestens da`;
+    }
+    const who = meId && o.user === String(meId) ? "du" : o.name || (o.user === "0" ? "unbekannt" : "Discord-Nutzer");
+    const pulled = o.via === "lesezeichen" && o.pulled_on
+      ? ` · gezogen ${o.pulled_on.slice(8, 10)}.${o.pulled_on.slice(5, 7)}.` : "";
+    return `🏅 ${u.tier} · ${who} · ${VIA[o.via] || "Discord"}${pulled}${o.at ? ` · ${time(o.at)}` : ""}`;
+  }).filter(Boolean).slice(0, 3);
+}
+
 function cardTile(c, price, units = [], meId = null) {
   const gone = c.pulled >= c.copies;
   const share = c.share.toLocaleString("de-DE", { maximumFractionDigits: c.share < 0.1 ? 3 : c.share < 1 ? 2 : 1 }) + " %";
@@ -428,7 +446,8 @@ function cardTile(c, price, units = [], meId = null) {
     <div class="tile-value ${price && c.value >= price ? "above" : ""}"><span class="coin"></span>${num(c.value)}</div>
     <div class="tile-name">${esc(c.name)}</div>
     <div class="tile-meta">${share}${c.pulled && !gone ? ` · ${c.pulled}/${c.copies} gezogen` : ""}${mine ? " · von dir" : ""}</div>
-    ${c.unsure && !gone ? `<div class="tile-meta unsure-note">❓ ${esc(c.unsure)}</div>` : ""}
+    ${c.unsure && !gone && !units.some((u) => u.odds != null) ? `<div class="tile-meta unsure-note">❓ ${esc(c.unsure)}</div>` : ""}
+    ${originLines(units, meId).map((l) => `<div class="tile-meta origin">${esc(l)}</div>`).join("")}
   </div>`;
 }
 

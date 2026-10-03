@@ -96,7 +96,7 @@ class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, Hits
         )
         # Lernen aus beendeten Bannern: Zeit vom Zug bis zum Versand (für ❓-Wahrscheinlichkeiten)
         self.scheduler.add_job(
-            self._learn_ship_odds, 'interval', minutes=30,
+            self._learn_ship_odds, 'interval', minutes=5,
             id='learn_job', replace_existing=True, coalesce=True, max_instances=1,
             next_run_time=datetime.now() + timedelta(minutes=2),
         )
