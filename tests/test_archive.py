@@ -79,3 +79,24 @@ def test_discord_thread_deleted_once_after_an_hour(tmp_path):
         assert await db.get_archived_thread_ids(max_age_hours=1) == []   # nicht bei jedem Lauf erneut
 
     asyncio.run(run())
+
+
+def test_ended_banner_with_last_zero_from_site_is_set_to_zero(tmp_path):
+    async def run():
+        db = Database(str(tmp_path / "b.db"))
+        await db.init()
+        for pid in (24152, 24153):
+            await db.save_banner(ScrapedBanner(pack_id=pid, category="One piece", current_packs=2, total_packs=500))
+        await db.log_api_values(24152, {"pack_count": 2})
+        await db.log_api_values(24152, {"pack_count": 0})     # Seite: leer gezogen
+        await db.log_api_values(24153, {"pack_count": 2})     # einfach verschwunden: bleibt bei 2
+        for pid in (24152, 24153):
+            await db.mark_banner_inactive(pid)
+        ended = (await db.get_banner(24152))["updated_at"]
+        assert await db.fix_sold_out_counts() == [24152]
+        assert await db.fix_sold_out_counts() == []
+        row = await db.get_banner(24152)
+        assert row["current_packs"] == 0 and row["updated_at"] == ended
+        assert (await db.get_banner(24153))["current_packs"] == 2
+
+    asyncio.run(run())

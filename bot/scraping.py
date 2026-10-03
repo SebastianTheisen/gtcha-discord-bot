@@ -715,6 +715,9 @@ class ScrapingMixin:
             if deleted_threads > 0:
                 logger.info(f"Archiv-Bereinigung: {deleted_threads} Discord-Threads gelöscht")
 
+            fixed = await self.db.fix_sold_out_counts()
+            if fixed:
+                logger.info(f"Archiv: leer gezogen, Packs auf 0 gesetzt: {fixed}")
             # Daten beendeter Banner bleiben ARCHIVE_DAYS Tage (App: Kategorie Archiv)
             purged = await self.db.purge_archived_data(max_age_hours=ARCHIVE_DAYS * 24)
             if purged > 0:

@@ -863,6 +863,25 @@ class Database:
                                  [(int(t),) for t in thread_ids])
             await db.commit()
 
+    async def fix_sold_out_counts(self) -> List[int]:
+        """Beendete Banner, bei denen die Seite zuletzt 0 Packs gemeldet hat, auf 0 setzen (leer gezogen,
+        die 0 wurde damals als möglicher Fehlwert übersprungen). Gibt die korrigierten IDs zurück."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("""
+                SELECT b.pack_id, b.current_packs, b.updated_at FROM banners b
+                WHERE b.is_active = 0 AND b.current_packs > 0
+                  AND (SELECT a.pack_count FROM api_log a WHERE a.banner_id = b.pack_id
+                       ORDER BY a.id DESC LIMIT 1) = 0
+            """)
+            rows = await cursor.fetchall()
+            for pid, old, ended in rows:
+                # updated_at bleibt (= Ende des Banners, zählt für die 30 Tage im Archiv)
+                await db.execute("UPDATE banners SET current_packs = 0 WHERE pack_id = ?", (pid,))
+                await db.execute("INSERT INTO pack_history (banner_id, old_count, new_count, changed_at) "
+                                 "VALUES (?, ?, 0, ?)", (pid, old, ended))
+            await db.commit()
+        return [r[0] for r in rows]
+
     async def get_ended_banners(self, days: int = ARCHIVE_DAYS) -> Dict[int, Dict]:
         """Beendete Banner (auch Store-Packs) der letzten `days` Tage, neueste zuerst."""
         cutoff = (datetime.now() - timedelta(days=days)).isoformat()
