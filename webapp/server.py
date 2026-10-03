@@ -15,7 +15,7 @@ import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 import aiosqlite
 from aiohttp import web
@@ -120,6 +120,7 @@ def search_cards(banners: list, q: str, ids: set) -> list:
 IMAGE_MAX_AGE = 30 * 24 * 3600
 PUSH_CHECK_SECONDS = 60
 REMIND_AFTER = 3 * 86400
+SYNC_REQUIRED_DAYS = 7   # ohne Übertragen in dieser Zeit sind Banner & Co. gesperrt (Admins ausgenommen)
 
 
 class App:
@@ -190,11 +191,15 @@ class App:
 
     # --- API ---
     async def api_banners(self, request):
+        if locked := await self._locked(request):
+            return locked
         lite = [{k: v for k, v in b.items() if k not in POOL_KEYS} for b in await self.banners()]
         return web.json_response({"banners": lite, "updated": self._updated or int(time.time())})
 
     async def api_archive(self, request):
         """Beendete Banner der letzten 30 Tage - selten aufgerufen, eine Minute zwischengespeichert."""
+        if locked := await self._locked(request):
+            return locked
         now = time.monotonic()
         if not getattr(self, "_archive", None) or now - self._archive[0] > 60:
             data = await self.view.archived_banners()
@@ -202,11 +207,15 @@ class App:
         return web.json_response({"banners": self._archive[1], "updated": int(time.time())})
 
     async def api_hot(self, request):
+        if locked := await self._locked(request):
+            return locked
         hot = self.view.hot(await self.banners())
         return web.json_response({"hot": [{k: v for k, v in b.items() if k not in POOL_KEYS} for b in hot]})
 
     async def api_cards(self, request):
         """Kartensuche über alle aktiven Banner (Name oder Kartennummer-ID) bzw. bestimmte Karten (ids=1,2)."""
+        if locked := await self._locked(request):
+            return locked
         q = request.query.get("q", "").strip().lower()
         ids = [i for i in request.query.get("ids", "").split(",") if i.strip().isdigit()][:200]
         if len(q) < 2 and not ids:
@@ -214,6 +223,8 @@ class App:
         return web.json_response({"cards": search_cards(await self.banners(), q, set(ids))})
 
     async def api_banner(self, request):
+        if locked := await self._locked(request):
+            return locked
         try:
             pack_id = int(request.match_info["id"])
         except ValueError:
@@ -255,6 +266,30 @@ class App:
     async def _user(self, request):
         return await self.bridge.device(request.headers.get("X-Device-Token"))
 
+    async def _sync_info(self, user: Optional[Dict]) -> Dict:
+        """Zugang zu Bannern & Co.: verknüpft und in den letzten SYNC_REQUIRED_DAYS Tagen übertragen (Admin immer)."""
+        if not user:
+            return {"ok": False, "reason": "link"}
+        if is_admin(user["user_id"]):
+            return {"ok": True, "exempt": True}
+        last = await self.bridge.last_sync(user["user_id"])
+        if not last:
+            return {"ok": False, "reason": "sync", "last_sync": None, "days": SYNC_REQUIRED_DAYS}
+        age = (datetime.now() - datetime.fromisoformat(last)).total_seconds() / 86400
+        return {"ok": age < SYNC_REQUIRED_DAYS, "reason": None if age < SYNC_REQUIRED_DAYS else "sync",
+                "last_sync": last, "days": SYNC_REQUIRED_DAYS,
+                "days_left": max(0, round(SYNC_REQUIRED_DAYS - age, 1))}
+
+    async def _locked(self, request) -> Optional[web.Response]:
+        """None = Zugang erlaubt; sonst die Antwort "gesperrt" (423) mit Grund für die App."""
+        info = await self._sync_info(await self._user(request))
+        return None if info["ok"] else web.json_response({"locked": info}, status=423)
+
+    async def allowed_users(self) -> set:
+        """Discord-IDs, die Banner-Pushes bekommen: Admins und wer in den letzten 7 Tagen übertragen hat."""
+        cutoff = (datetime.now() - timedelta(days=SYNC_REQUIRED_DAYS)).isoformat()
+        return set(admin_ids()) | {u for u, t in (await self.bridge.last_syncs()).items() if t >= cutoff}
+
     async def api_link(self, request):
         now = time.time()
         self._link_fails = [t for t in self._link_fails if now - t < 600]
@@ -271,7 +306,7 @@ class App:
     async def api_me(self, request):
         user = await self._user(request)
         if user:
-            user = {**user, "admin": is_admin(user["user_id"])}
+            user = {**user, "admin": is_admin(user["user_id"]), "sync": await self._sync_info(user)}
         return web.json_response(user or {}, status=200 if user else 401)
 
     async def _admin(self, request):
@@ -307,6 +342,8 @@ class App:
         return web.json_response({"medals": await self.view.my_medals(user["user_id"])})
 
     async def api_accuracy(self, request):
+        if locked := await self._locked(request):
+            return locked
         return web.json_response(await self.accuracy.report())
 
     async def api_health(self, request):
@@ -354,6 +391,8 @@ class App:
             before = {a: len((stored.get(a) or {}).get("items") or []) for a in ("coins", "shipped")}
             changed = ingest(stored, entries)
             await self.bridge.set_history(user["user_id"], changed)
+            if saved:
+                await self.bridge.mark_synced(user["user_id"])   # zählt für die 7-Tage-Pflicht
             gap = any(a.get("gap") for a in changed.values())
             added = {a: len(changed[a]["items"]) - before[a] for a in before if a in changed}
         except Exception as e:
@@ -746,9 +785,12 @@ class App:
             age = now - datetime.fromisoformat(last).timestamp()
             if age < REMIND_AFTER or now - state.get(user_id, 0) < REMIND_AFTER:
                 continue
+            left = SYNC_REQUIRED_DAYS - int(age // 86400)
+            lock = (f" Noch {left} Tag{'' if left == 1 else 'e'}, dann ist die App gesperrt." if left > 0 and not
+                    is_admin(user_id) else "")
             if await self.push.send_user(user_id, "remind", "📥 Zeit zum Übertragen",
                                          f"Seit {int(age // 86400)} Tagen nichts übertragen – auf gtchaxonline.com das "
-                                         f"Lesezeichen „Alles übertragen“ antippen.", "/#/settings"):
+                                         f"Lesezeichen „Alles übertragen“ antippen.{lock}", "/#/settings"):
                 state[user_id] = now
                 changed = True
         if changed:
@@ -764,7 +806,7 @@ class App:
                 for kind, title, body, _, _ in messages:
                     if kind != "packs":   # Pack-Bewegungen kämen jede Minute - nicht ins Log
                         logger.info(f"Ereignis: {title} - {body}")
-                await self.push.deliver(messages)
+                await self.push.deliver(messages, await self.allowed_users())
                 await self.push.save_state(new_state)
                 await self.personal_pushes()
             except Exception as e:

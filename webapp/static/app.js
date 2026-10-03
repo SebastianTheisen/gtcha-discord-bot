@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 84;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 85;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -78,9 +78,46 @@ function setHtml(el, html) {
 }
 
 async function api(path, options) {
-  const res = await fetch(path, { cache: "no-store", ...options });
+  const token = load("deviceToken", "");
+  const res = await fetch(path, { cache: "no-store", ...options,
+    headers: { ...(options?.headers || {}), ...(token ? { "X-Device-Token": token } : {}) } });
+  if (res.status === 423) {   // gesperrt: nicht verknüpft oder länger als 7 Tage nicht übertragen
+    const err = new Error("locked");
+    err.locked = (await res.json().catch(() => ({}))).locked || {};
+    throw err;
+  }
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json();
+}
+
+// "Letzter Abgleich" mit Resttagen bis zur Sperre (Admins ausgenommen)
+function syncLine(user) {
+  const s = user?.sync;
+  if (!s || s.exempt) return "";
+  if (!s.last_sync) return `<div class="notice">Noch nie übertragen – bis dahin sind Banner & Co. gesperrt.</div>`;
+  const last = `${s.last_sync.slice(8, 10)}.${s.last_sync.slice(5, 7)}. ${s.last_sync.slice(11, 16)}`;
+  if (!s.ok) return `<div class="notice">Zuletzt übertragen am ${last} – länger als ${s.days} Tage her, App gesperrt.</div>`;
+  const left = Math.floor(s.days_left);
+  return `<div class="${left <= 2 ? "notice" : "hint"}">Zuletzt übertragen: ${last} · ${left <= 0 ? "heute"
+    : `noch ${left} Tag${left === 1 ? "" : "e"}`} bis zur nächsten Pflicht (alle ${s.days} Tage)</div>`;
+}
+
+// Sperrbildschirm: Banner & Co. erst nach Verknüpfen bzw. Übertragen (alle 7 Tage)
+function lockHtml(info) {
+  const last = info.last_sync ? `${info.last_sync.slice(8, 10)}.${info.last_sync.slice(5, 7)}.` : null;
+  const why = info.reason === "link"
+    ? "Bitte zuerst dieses Gerät mit Discord verknüpfen (Reiter <b>Ich</b> → „Discord verknüpfen“)."
+    : `Alle ${info.days || 7} Tage müssen deine GTCHA-Daten einmal übertragen werden${last
+      ? ` – zuletzt am <b>${last}</b>` : " – bisher noch nie"}. Danach ist sofort alles wieder offen.`;
+  return `<div class="lock">
+    <div class="lock-icon">🔒</div>
+    <div class="lock-title">${info.reason === "link" ? "Gerät nicht verknüpft" : "Bitte Daten übertragen"}</div>
+    <div class="lock-text">${why}</div>
+    ${info.reason === "link" ? `<a class="btn primary" href="#/settings">Zu „Ich“</a>`
+      : `<a class="btn primary" href="${esc(buyHref("https://gtchaxonline.com/pending-detail"))}" target="_blank" rel="noopener">📥 GTCHA öffnen</a>
+         <div class="lock-text">Dort das Lesezeichen „An GTCHA Tracker“ aufrufen. Noch nicht eingerichtet?
+           <a href="#/settings">Ich → 📖 Anleitung</a></div>`}
+  </div>`;
 }
 
 function hitsText(b) {
@@ -754,7 +791,7 @@ function watchCard(id, kinds, banner) {
 
 async function showSettings() {
   const { supported, sub, prefs } = await pushState();
-  const { banners } = sub ? await api("/api/banners") : { banners: [] };
+  const { banners } = sub ? await api("/api/banners").catch(() => ({ banners: [] })) : { banners: [] };
   const byId = Object.fromEntries(banners.map((b) => [b.id, b]));
   const watched = Object.keys(prefs.watch);
   const options = banners.filter((b) => !prefs.watch[b.id]).sort((a, b) => b.id - a.id);
@@ -825,6 +862,7 @@ async function showSettings() {
     ${user ? `<h2>📥 Eigene GTCHA-Daten</h2>
       <div class="panel">
         <div class="hint">Überträgt deine GTCHA-Verlaufsseiten – ohne Passwort.</div>
+        ${syncLine(user)}
         <div class="gt-links">
           <a class="btn primary" href="${esc(buyHref("https://gtchaxonline.com/pending-detail"))}" target="_blank" rel="noopener">📥 GTCHA öffnen</a>
         </div>
@@ -1560,9 +1598,10 @@ async function showSearch() {
     wire(res.cards);
   };
   let timer;
-  input.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => run().catch(() => {}), 300); });
-  view.querySelector("#card-search").addEventListener("submit", (e) => { e.preventDefault(); input.blur(); run().catch(() => {}); });
-  await run();
+  const guarded = () => run().catch((e) => { if (e.locked) view.querySelector("#find-out").innerHTML = lockHtml(e.locked); });
+  input.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(guarded, 300); });
+  view.querySelector("#card-search").addEventListener("submit", (e) => { e.preventDefault(); input.blur(); guarded(); });
+  await guarded();
 }
 
 // --- Benachrichtigungen: Verlauf der Pushes dieses Geräts (Glocke oben) ---
@@ -1683,7 +1722,7 @@ async function route() {
     await render();
     window.scrollTo({ top: 0 });
   } catch (e) {
-    view.innerHTML = e.message === "404"
+    view.innerHTML = e.locked ? lockHtml(e.locked) : e.message === "404"
       ? `<div class="empty">Banner nicht gefunden.<br><a class="back" href="#/">‹ Zur Übersicht</a></div>`
       : `<div class="empty">Daten nicht erreichbar (${esc(e.message)})</div>`;
   }

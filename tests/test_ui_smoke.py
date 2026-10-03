@@ -136,6 +136,7 @@ async def _run(tmp_path, browser_path):
         page2 = await browser.new_page(viewport={"width": 390, "height": 844})
         await page2.route("**/*", lambda route: route.continue_() if route.request.url.startswith(base)
                           else route.abort())
+        await page2.add_init_script(f"localStorage.setItem('deviceToken', {json.dumps(token)})")
         await page2.goto(base + "/#/banner/24099")
         await page2.wait_for_timeout(1000)
         detail = await page2.inner_text("#view")
@@ -154,6 +155,15 @@ async def _run(tmp_path, browser_path):
         await page2.wait_for_timeout(800)
         if not page2.url.endswith("#/hot"):
             problems.append(f"Zurück geht nicht eine Ebene zurück: {page2.url}")
+        # 7-Tage-Pflicht: Gerät ohne Verknüpfung sieht den Sperrbildschirm statt Banner
+        page3 = await browser.new_page(viewport={"width": 390, "height": 844})
+        await page3.route("**/*", lambda route: route.continue_() if route.request.url.startswith(base)
+                          else route.abort())
+        await page3.goto(base + "/#/")
+        await page3.wait_for_timeout(1200)
+        locked = await page3.inner_text("#view")
+        if "Gerät nicht verknüpft" not in locked or "24114" in locked:
+            problems.append(f"Sperrbildschirm fehlt: {locked[:120]!r}")
         await browser.close()
     await server.close()
     return problems
