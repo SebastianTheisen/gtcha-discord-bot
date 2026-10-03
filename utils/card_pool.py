@@ -400,7 +400,8 @@ ORDER_MAX_HITS = 4          # so viele Versand-Hits höchstens in einem Schub (m
 
 
 def order_options(pool: Dict, orders: int, value: int, tol: Optional[int] = None,
-                  max_normals: int = ORDER_MAX_NORMALS, sums: Optional[List[int]] = None) -> List[frozenset]:
+                  max_normals: int = ORDER_MAX_NORMALS, sums: Optional[List[int]] = None,
+                  prefer_hits: bool = True) -> List[frozenset]:
     """Modell "Aufträge": total_sendcount zählt Versand-Aufträge, nicht Karten.
 
     Ein Auftrag enthält mindestens eine, aber beliebig viele Karten; orders = 0 heißt, Karten kamen zu einem
@@ -413,19 +414,26 @@ def order_options(pool: Dict, orders: int, value: int, tol: Optional[int] = None
     if sums is None:
         sums = (_pool_sums(pool, value + tol) if max_normals == ORDER_MAX_NORMALS
                 else _normal_sums(pool, max_normals, value + tol))
-    found = []
+    found, hits_only = [], []
     for r in range(0, min(len(hits), ORDER_MAX_HITS) + 1):
         for combo in combinations(hits, r):
             rest = value - sum(u["value"] for u in combo)
             if rest < -tol:
                 continue
+            keys = frozenset(u["key"] for u in combo)
+            if r and r >= orders and abs(rest) <= tol:
+                hits_only.append(keys)
             need = max(orders - r, 0)       # mindestens eine Karte je Auftrag
             if r == 0:
                 need = max(need, 1)            # ganz ohne Hit braucht der Wert mindestens eine normale Karte
             for j in range(need, len(sums)):
                 if _any_bit(sums[j], rest - tol, rest + tol):
-                    found.append(frozenset(u["key"] for u in combo))
+                    found.append(keys)
                     break
+    # Normale Karten wandelt praktisch jeder um, verschickt werden die großen Hits: geht der Schub allein mit
+    # Versand-Hits auf, zählen nur diese Erklärungen; normale Karten nur, wenn es ohne sie nicht geht
+    if hits_only and prefer_hits:
+        return list(dict.fromkeys(hits_only))
     return found
 
 
