@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 80;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 81;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -412,20 +412,24 @@ const unitsOf = (b, card) => (b.hits || []).filter((h) => h.key === card.id || h
   .sort((x, y) => x.rank - y.rank);
 
 // Unter der Karte: wer hat sie, wann und wie (Medaille aus Discord/App/Lesezeichen) oder wann verschickt
-const VIA = { discord: "Discord", app: "App", lesezeichen: "Lesezeichen" };
+// kurz, weil die Kachel schmal ist: Platz nur bei mehreren Exemplaren, Weg als Symbol (💬 Discord, 📱 App, 🔖 Lesezeichen)
+const VIA = { discord: "💬", app: "📱", lesezeichen: "🔖" };
+const shortTime = (t) => new Date(t * 1000).toLocaleString("de-DE",
+  { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).replace(",", "");
 function originLines(units, meId) {
+  const many = units.length > 1;
   return units.map((u) => {
-    const o = u.origin;
-    if (!o) return u.state === "unsure" && u.odds != null ? `❓ ${u.tier} · wohl ~${u.odds} % raus` : "";
+    const o = u.origin, tier = many ? `${u.tier} ` : "";
+    if (!o) return u.state === "unsure" && u.odds != null ? `❓ ${tier}~${u.odds} % raus` : "";
     if (o.via === "versand") {
       return u.state === "unsure"
-        ? `❓ ${u.tier} · ${u.odds != null ? `wohl ~${u.odds} % · ` : ""}Versand ${time(o.shipped_at)}`
-        : `📦 ${u.tier} · verschickt ${time(o.shipped_at)} · gezogen spätestens da`;
+        ? `❓ ${tier}${u.odds != null ? `~${u.odds} % · ` : ""}📦 ${shortTime(o.shipped_at)}`
+        : `📦 ${tier}verschickt ${shortTime(o.shipped_at)}`;
     }
-    const who = meId && o.user === String(meId) ? "du" : o.name || (o.user === "0" ? "unbekannt" : "Discord-Nutzer");
-    const pulled = o.via === "lesezeichen" && o.pulled_on
-      ? ` · gezogen ${o.pulled_on.slice(8, 10)}.${o.pulled_on.slice(5, 7)}.` : "";
-    return `🏅 ${u.tier} · ${who} · ${VIA[o.via] || "Discord"}${pulled}${o.at ? ` · ${time(o.at)}` : ""}`;
+    const who = meId && o.user === String(meId) ? "du" : o.name || "unbekannt";
+    const when = o.via === "lesezeichen" && o.pulled_on ? `gez. ${o.pulled_on.slice(8, 10)}.${o.pulled_on.slice(5, 7)}.`
+      : o.at ? shortTime(o.at) : "";
+    return `🏅 ${tier}${who} ${VIA[o.via] || "💬"}${when ? ` · ${when}` : ""}`;
   }).filter(Boolean).slice(0, 3);
 }
 
