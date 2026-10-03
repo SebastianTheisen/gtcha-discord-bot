@@ -396,6 +396,39 @@ def _summarize_options(classes: List[Dict], possible: List[tuple], units: List[D
     return result
 
 
+ORDER_MAX_NORMALS = 60      # so viele normale Karten kann ein Versand-Schub höchstens enthalten
+ORDER_MAX_HITS = 4          # so viele Versand-Hits höchstens in einem Schub (mehr ist praktisch nie)
+
+
+def order_options(pool: Dict, orders: int, value: int, tol: Optional[int] = None,
+                  max_normals: int = ORDER_MAX_NORMALS, sums: Optional[List[int]] = None) -> List[frozenset]:
+    """Modell "Aufträge": total_sendcount zählt Versand-Aufträge, nicht Karten.
+
+    Ein Auftrag enthält mindestens eine, aber beliebig viele Karten; orders = 0 heißt, Karten kamen zu einem
+    bestehenden Auftrag dazu. Dafür muss der Wert (fast) exakt aufgehen - die Seite zählt ganze Coins.
+    value = Kartenwert (Versandsumme × 1,1). Gibt alle möglichen Mengen verschickter Versand-Hits zurück
+    (leere Menge = nur normale Karten möglich); leere Liste = gar nicht erklärbar.
+    """
+    hits = [u for u in tracked_units(pool) if u.get("shipping_only")]
+    tol = tol if tol is not None else max(2, round(value * 0.001))
+    if sums is None:
+        sums = _normal_sums(pool, max_normals, value + tol)
+    found = []
+    for r in range(0, min(len(hits), ORDER_MAX_HITS) + 1):
+        for combo in combinations(hits, r):
+            rest = value - sum(u["value"] for u in combo)
+            if rest < -tol:
+                continue
+            need = max(orders - r, 0)       # mindestens eine Karte je Auftrag
+            if r == 0:
+                need = max(need, 1)            # ganz ohne Hit braucht der Wert mindestens eine normale Karte
+            for j in range(need, len(sums)):
+                if _any_bit(sums[j], rest - tol, rest + tol):
+                    found.append(frozenset(u["key"] for u in combo))
+                    break
+    return found
+
+
 def match_shipped_hits(pool: Dict, count: int, value: int, pulled_keys: Set[str],
                        tol: float = VALUE_TOLERANCE) -> Dict:
     """Welche Versand-Hits stecken in einer einzelnen Sendung aus `count` Karten im Wert `value`?
