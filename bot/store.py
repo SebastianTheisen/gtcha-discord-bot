@@ -56,6 +56,9 @@ class StoreMixin:
         for pid, item in items.items():
             packs = _int(item.get('pack_count'))
             if packs <= 0:      # ausverkauft (oder Fehlwert der Seite): zählt wie "fehlt"
+                old = (known.get(pid) or {}).get('current_packs')
+                if sold_out(old, packs):   # leer gezogen: 0 noch festhalten (Verlauf, Anzeige)
+                    await self.db.update_banner_packs(pid, 0)
                 continue
             image = (item.get('image') or [None])[0]
             is_new = await self.db.upsert_store_pack(
