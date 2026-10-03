@@ -65,14 +65,27 @@ class AppLinkMixin:
         emoji = MEDAL_EMOJIS.get(tier, MEDAL_EMOJI_DEFAULT)
         existing = await self.db.get_medal(thread_id, tier)
 
-        if req["action"] in ("admin_remove", "admin_assign"):
+        if req["action"] == "admin_mark":
+            # Admin hakt ab ("Hit ist raus"), ohne Person - in Discord als Admin-Korrektur
+            if existing:
+                return False, f"{tier} ist schon vergeben"
+            problem = await self._invalid_medal_reason(pack_id, tier)
+            if problem:
+                return False, problem.replace("❌ ", "")
+            await self.db.save_medal(thread_id, tier, 0, source="admin")
+            await self._set_starter_reaction(thread, thread_data, emoji, add=True)
+            await discord_rate_limiter.acquire("message_send")
+            await thread.send(f"🛠️ {tier} als raus abgehakt *(Admin)*", allowed_mentions=discord.AllowedMentions.none())
+            logger.info(f"Admin-Korrektur: {tier} bei {pack_id} abgehakt (ohne Person)")
+        elif req["action"] in ("admin_remove", "admin_assign"):
             # Korrektur durch den Admin (in der App geprüft): sofort, auch in Discord
             if req["action"] == "admin_remove":
                 if not existing:
                     return False, f"{tier} ist nicht vergeben"
                 await self.db.delete_medal(thread_id, tier)
                 await self._set_starter_reaction(thread, thread_data, emoji, add=False)
-                text = f"🛠️ {tier} von <@{existing.get('user_id')}> entfernt *(Admin)*"
+                text = (f"🛠️ {tier} von <@{existing.get('user_id')}> entfernt *(Admin)*" if existing.get('user_id')
+                        else f"🛠️ {tier}: Abhaken aufgehoben *(Admin)*")
             else:
                 problem = await self._invalid_medal_reason(pack_id, tier)
                 if problem:
@@ -121,15 +134,15 @@ class AppLinkMixin:
             if action == "unclaim" and int(existing.get("user_id") or 0) != user_id:
                 return False, f"{tier} hat jemand anderes gemeldet"
             await self.db.delete_medal(medal_thread, tier)
-        else:   # claim / admin_assign
+        else:   # claim / admin_assign / admin_mark
             problem = await self._invalid_medal_reason(pack_id, tier)
             if problem:
                 return False, problem.replace("❌ ", "")
-            if existing and action == "claim":
+            if existing and action in ("claim", "admin_mark"):
                 return False, f"{tier} ist schon vergeben"
             if existing:
                 await self.db.delete_medal(medal_thread, tier)
-            await self.db.save_medal(medal_thread, tier, user_id, source="app")
+            await self.db.save_medal(medal_thread, tier, user_id, source="admin" if action == "admin_mark" else "app")
         logger.info(f"Store-Medaille: {action} {tier} bei {pack_id} ({req.get('discord_name')})")
         return True, None
 

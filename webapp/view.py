@@ -434,6 +434,8 @@ class BannerView:
             m = medals.get(h["tier"]) if h.get("medal_user") is not None else None
             if m:
                 h["origin"] = {"via": m["source"], "user": str(m["user_id"]), "at": m["at"]}
+                if m["source"] == "admin":
+                    h["note"] = "durch Admin abgehakt"
             elif h.get("state") in ("pulled", "unsure") and h.get("key") in shipped:
                 h["origin"] = {"via": "versand", "shipped_at": shipped[h["key"]]}
         data.update(await self._card_list(row, data, odds))
