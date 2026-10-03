@@ -132,6 +132,27 @@ async def _run(tmp_path, browser_path):
         text = await page.inner_text("#results")
         if "24099" not in text or "Beendet am" not in text or "24126" in text:
             problems.append(f"Archiv falsch: {text[:160]!r}")
+        # Zurück: direkt geöffnete Detailseite -> Übersicht; aus der Liste -> wieder die Liste (eine Ebene)
+        page2 = await browser.new_page(viewport={"width": 390, "height": 844})
+        await page2.route("**/*", lambda route: route.continue_() if route.request.url.startswith(base)
+                          else route.abort())
+        await page2.goto(base + "/#/banner/24099")
+        await page2.wait_for_timeout(1000)
+        detail = await page2.inner_text("#view")
+        if "Beendet" not in detail or "Lohnt sich" in detail or "Rest kaufen" in detail:
+            problems.append(f"Archiv-Detail falsch: {detail[:160]!r}")
+        await page2.click("[data-back]")
+        await page2.wait_for_timeout(800)
+        if not page2.url.endswith("#/"):
+            problems.append(f"Zurück ohne Vorgeschichte geht nicht zur Übersicht: {page2.url}")
+        await page2.goto(base + "/#/hot")
+        await page2.wait_for_timeout(800)
+        await page2.evaluate("location.hash = '#/banner/24114'")
+        await page2.wait_for_timeout(1000)
+        await page2.click("[data-back]")
+        await page2.wait_for_timeout(800)
+        if not page2.url.endswith("#/hot"):
+            problems.append(f"Zurück geht nicht eine Ebene zurück: {page2.url}")
         await browser.close()
     await server.close()
     return problems
