@@ -482,6 +482,11 @@ def explain_batch(pool: Dict, count: int, value: int, pulled_keys: Set[str],
     possible = _batch_options(pool, classes, count, gross, tol)
     if possible is None:
         return {**base, "kind": "too_big"}
+    if not possible and classes and gross <= ORDER_MAX_VALUE:
+        # wie match_shipment_history: als Versand-Aufträge - nur wenn dabei ein Hit ins Spiel kommt
+        # (aus vielen normalen Karten lässt sich fast jeder Betrag bilden, das erklärt nichts)
+        orders = _order_class_options(pool, classes, count, gross)
+        possible = orders if any(any(t) for t in orders) else []
     if not possible:
         return base
     if all(not any(t) for t in possible):

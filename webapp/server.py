@@ -468,6 +468,10 @@ class App:
             except aiosqlite.OperationalError:
                 outbox = None
             meta = dict(await (await q("SELECT key, value FROM bot_meta")).fetchall())
+        try:
+            learn = json.loads(meta.get("ship_delay_counts") or "{}")
+        except ValueError:
+            learn = {}
         view = await self.bridge.discord_view()
         users = await self.bridge.known_users()
         return web.json_response({
@@ -483,6 +487,7 @@ class App:
             "users": len([u for u in users if not u.get("blocked")]),
             "blocked": len([u for u in users if u.get("blocked")]),
             "push_devices": await self.push.count(),
+            "learn_cases": learn.get("cases", 0), "learn_observations": learn.get("n", 0),
         })
 
     async def api_admin_medal(self, request):

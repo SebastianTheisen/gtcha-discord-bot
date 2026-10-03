@@ -16,6 +16,7 @@ from utils.card_pool import (
     card_value, estimate, explain_batch, out_of_banner_value, fmt_coins, pool_minimum, relevant_units, resolve_pulled, tier_keys,
     tracked_units, claimable_units, medal_units,
 )
+from utils import ship_odds
 from utils.translate import set_cache as set_translations, to_german
 from utils.hot_list import min_rank, needs_password, rank_entries
 
@@ -112,6 +113,10 @@ class BannerView:
             return
         self._translations_at = now
         set_translations(await self.db.get_translations())
+        try:   # gelernte Zeiten vom Zug bis zum Versand (Bot, bot/learning.py)
+            self._ship_delays = json.loads(await self.db.get_meta("ship_delay_counts") or "{}").get("counts")
+        except (ValueError, aiosqlite.OperationalError):
+            self._ship_delays = None
 
     async def summary(self, row: Dict, with_pool: bool = False) -> Dict:
         pid = row['pack_id']
@@ -404,7 +409,12 @@ class BannerView:
                          for r in await cur.fetchall()]
         data["history"] = history
         data["shipments"] = await self._explain_shipments(row, data, shipments)
-        data.update(await self._card_list(row, data))
+        odds = data.pop("_key_odds", {})
+        for h in data.get("hits") or []:   # ❓ in der Hit-Liste: wie wahrscheinlich ist dieser Hit raus?
+            if h.get("state") == "unsure" and h.get("key") in odds:
+                h["note"] = f"{h['note']} · wohl ~{round(odds[h['key']] * 100)} %"
+                h["odds"] = round(odds[h["key"]] * 100)
+        data.update(await self._card_list(row, data, odds))
         return data
 
     async def _explain_shipments(self, row: Dict, data: Dict, shipments: List[Dict]) -> List[Dict]:
@@ -418,6 +428,13 @@ class BannerView:
             return shipments
         _, _, winners, _, _ = await self._pulled(data.get("medal_thread") or 0, row['pack_id'], pool)
         units = {u["key"]: u for u in tracked_units(pool)}
+        # Wahrscheinlichkeiten für ❓-Gruppen aus dem zeitlichen Ablauf (utils/ship_odds.py)
+        inputs = await self.db.odds_inputs(row['pack_id'])
+        keys = tier_keys(pool)
+        medal_t = {keys[t]: ts for t, ts in inputs["medals"].items() if t in keys}
+        total = to_int(row.get('total_packs')) or pool.get('total_count') or 0
+        learned = getattr(self, "_ship_delays", None)
+        key_odds: Dict[str, float] = {}
         label = lambda k: f"{units[k]['name']} ({fmt_coins(units[k]['value'])} Coins)" if k in units else k
         sent: set = set()
         for s in reversed(shipments):
@@ -427,7 +444,12 @@ class BannerView:
             lines = [{"icon": "✅", "text": label(k)} for k in res["certain"]]
             for g in res["groups"]:
                 names = " / ".join(dict.fromkeys(units[k]["name"] for k in g["keys"] if k in units))
-                lines.append({"icon": "❓", "text": f"{g['pulled']} von: {names}"})
+                odds = ship_odds.group_odds(g["keys"], g["pulled"], s.get("t"), medal_t, inputs["moves"], total,
+                                            learned)
+                shown = ship_odds.fmt_odds(odds, {k: units[k]["name"] for k in g["keys"] if k in units})
+                for k, p in odds.items():
+                    key_odds[k] = max(key_odds.get(k, 0), p)
+                lines.append({"icon": "❓", "text": f"{g['pulled']} von: {shown or names}"})
             for g in res["maybe"]:
                 names = " / ".join(dict.fromkeys(units[k]["name"] for k in g["keys"] if k in units))
                 lines.append({"icon": "❓", "text": f"vielleicht {names} – oder nur normale Karten"})
@@ -442,9 +464,10 @@ class BannerView:
             elif res["kind"] == "unclear":
                 lines.append({"icon": "·", "text": "keine passende Kombination"})
             s["explain"] = lines
+        data["_key_odds"] = key_odds
         return shipments
 
-    async def _card_list(self, row: Dict, data: Dict) -> Dict:
+    async def _card_list(self, row: Dict, data: Dict, odds: Optional[Dict[str, float]] = None) -> Dict:
         """Alle Karten des Banners mit Exemplaren, Anteil im Pool und wie viele davon schon gezogen sind."""
         pool = json.loads(row['card_pool']) if row.get('card_pool') else None
         if not pool or not pool.get('cards') or not pool.get('total_count'):
@@ -461,6 +484,9 @@ class BannerView:
             gone = len(of_card(certain, cid))
             groups = [g for g in open_groups if of_card(g["keys"], cid)]
             unsure = (f"{groups[0]['pulled']} von {len(groups[0]['keys'])} raus" if groups else None)
+            chance = max((p for k, p in (odds or {}).items() if k == cid or k.startswith(cid + "#")), default=None)
+            if unsure and chance is not None:
+                unsure += f" · ~{round(chance * 100)} %"
             cards.append({"id": cid, "name": c["name"], "value": c["value"], "copies": c["copies"], "image": c.get("image"),
                           "hit": bool(c.get("hit")), "pulled": min(gone, c["copies"]), "unsure": unsure,
                           "share": round(c["copies"] / total * 100, 3)})

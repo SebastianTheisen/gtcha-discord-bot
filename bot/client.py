@@ -17,10 +17,11 @@ from bot.app_link import AppLinkMixin
 from bot.discord_view import DiscordViewMixin
 from bot.store import StoreMixin
 from bot.translate import TranslateMixin
+from bot.learning import LearningMixin
 
 
 class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, HitsMixin, MedalsMixin, HotBannerMixin,
-              AppLinkMixin, DiscordViewMixin, StoreMixin, TranslateMixin, commands.Bot):
+              AppLinkMixin, DiscordViewMixin, StoreMixin, TranslateMixin, LearningMixin, commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
@@ -92,6 +93,12 @@ class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, Hits
         self.scheduler.add_job(
             self._scrape_store, 'cron', minute='*/5', second=50,
             id='store_job', replace_existing=True, coalesce=True, max_instances=1,
+        )
+        # Lernen aus beendeten Bannern: Zeit vom Zug bis zum Versand (für ❓-Wahrscheinlichkeiten)
+        self.scheduler.add_job(
+            self._learn_ship_odds, 'interval', minutes=30,
+            id='learn_job', replace_existing=True, coalesce=True, max_instances=1,
+            next_run_time=datetime.now() + timedelta(minutes=2),
         )
         # Japanische Namen auf Deutsch (Wörterbuch + DeepL), siehe bot/translate.py
         self.scheduler.add_job(
