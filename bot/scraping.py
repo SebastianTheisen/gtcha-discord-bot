@@ -1,6 +1,7 @@
 """Scrape-Ablauf: pack/list, Tab-Scrape, Banner anlegen, Pack-Updates, Löschen."""
 
 from bot.common import *  # noqa: F401,F403
+from utils.translate import translate_pool
 
 
 class ScrapingMixin:
@@ -179,6 +180,7 @@ class ScrapingMixin:
                         pools = {}
                     for pid, pool in pools.items():
                         old_pool = await self.db.get_card_pool(pid)
+                        pool, _ = translate_pool(pool)   # deutsche Namen (was schon übersetzt ist)
                         await self.db.save_card_pool(pid, pool)
                         changes = card_value_changes(old_pool, pool)
                         if changes:

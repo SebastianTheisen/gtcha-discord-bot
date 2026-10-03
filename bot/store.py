@@ -11,6 +11,7 @@ import time
 from bot.common import *  # noqa: F401,F403
 from utils.banner_info import banner_conditions, is_upcoming, jst_timestamp, shipping_stats
 from utils.store_client import StoreClient
+from utils.translate import translate_pool
 
 DISCOVER_EVERY_SECONDS = 3600
 MISSING_BEFORE_END = 2
@@ -84,5 +85,6 @@ class StoreMixin:
         if not missing:
             return
         for pid, pool in (await client.fetch_store_pools(missing[:10])).items():
+            pool, _ = translate_pool(pool)   # deutsche Namen (was schon übersetzt ist)
             await self.db.save_card_pool(pid, pool)
             logger.info(f"[STORE] {pid}: Kartenpool mit {pool.get('total_count', 0)} Packs gespeichert")

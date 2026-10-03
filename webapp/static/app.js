@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 73;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 74;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -150,6 +150,7 @@ function row(b, rank) {
       ${rank ? `<span class="rank-no ${rank <= 3 ? "r" + rank : ""}">${rank}</span>` : ""}
       ${flags(b)}
       <div class="row-card ${b.status === "hits_out" ? "done" : ""}" data-href="#/banner/${b.id}">
+        ${b.headline ? `<div class="row-title">${esc(b.headline)}</div>` : ""}
         <div class="media">
           ${img(b.image, b.title)}
           ${b.status !== "running" ? `<span class="status ${b.status}">${icon} ${label}</span>` : ""}
@@ -182,6 +183,7 @@ function compactRow(b) {
     <div class="crow-main">
       <div class="crow-top"><b>${b.id}</b> <span class="muted">${esc(b.category || "")}</span>
         ${b.status !== "running" ? `<span class="crow-status">${icon}</span>` : ""}</div>
+      ${b.headline ? `<div class="crow-title">${esc(b.headline)}</div>` : ""}
       <div class="crow-sub">${num(b.remaining)} / ${num(b.total)} Packs${hitsText(b) ? ` · ${hitsText(b)}` : ""}${b.unsure ? " ❓" : ""}</div>
       <div class="bar thin"><span style="width:${left}%"></span></div>
     </div>
@@ -514,6 +516,7 @@ async function showBanner(id) {
     ${flags(b)}
     <div class="hero">${img(b.image, b.title, true)}${b.status !== "running" ? `<span class="status ${b.status}">${icon} ${label}</span>` : ""}
       <span class="price-pill">${coins(b.price)}</span></div>
+    ${b.headline ? `<h1 class="d-title">${esc(b.headline)}</h1>` : ""}
     ${notMineNote(b)}
     ${glance(b)}
     <div class="watch-row"><button class="watch-btn" id="watch-btn">🔔 Beobachten</button>

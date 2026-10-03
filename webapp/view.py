@@ -16,6 +16,7 @@ from utils.card_pool import (
     card_value, estimate, explain_batch, out_of_banner_value, fmt_coins, pool_minimum, relevant_units, resolve_pulled, tier_keys,
     tracked_units, claimable_units, medal_units,
 )
+from utils.translate import set_cache as set_translations, to_german
 from utils.hot_list import min_rank, needs_password, rank_entries
 
 BASE_URL = "https://gtchaxonline.com"
@@ -39,9 +40,9 @@ def buy_url(row: Dict) -> str:
 def banner_label(title, best_hit, category, price) -> str:
     """Lesbarer Name, auch wenn der Banner keinen Titel hat (sonst nur "Banner 24114")."""
     if title:
-        return title
+        return to_german(title)
     if best_hit:
-        return best_hit
+        return to_german(best_hit)
     return " · ".join(x for x in (category, f"{fmt_coins(to_int(price))} Coins" if to_int(price) else None) if x) or ""
 
 
@@ -104,8 +105,17 @@ class BannerView:
             return "endspurt"
         return "running"
 
+    async def _refresh_translations(self) -> None:
+        """Übersetzungen des Bots (DeepL) höchstens jede Minute neu laden."""
+        now = asyncio.get_running_loop().time()
+        if now - getattr(self, "_translations_at", -1e9) < 60:
+            return
+        self._translations_at = now
+        set_translations(await self.db.get_translations())
+
     async def summary(self, row: Dict, with_pool: bool = False) -> Dict:
         pid = row['pack_id']
+        await self._refresh_translations()
         thread = await self.db.get_thread_by_banner_id(pid) or {}
         thread_id = int(thread['thread_id']) if thread.get('thread_id') and not thread.get('is_expired') else 0
         store = row.get('is_active') == STORE
@@ -125,6 +135,7 @@ class BannerView:
             pool = None
         low = pool_minimum(pool) if pool else None
         data = {
+            "headline": to_german(row.get('title') or row.get('best_hit')) or "",   # echter Name für die Anzeige
             "id": pid, "title": banner_label(row.get('title'), row.get('best_hit'), row.get('category'),
                                                      row.get('price_coins')) or f"Pack {pid}", "category": row.get('category'),
             "price": price, "remaining": remaining, "total": total,

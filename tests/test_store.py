@@ -124,7 +124,7 @@ def test_store_packs_in_app_data(tmp_path, env):
         assert banners[1].get("store") is None
         assert 24126 in [b["id"] for b in view.hot(list(banners.values()))]    # wie alle anderen Packs
         detail = await view.detail(24126)
-        assert detail["title"] == "宝石ガチャ BtoB" and detail["cards"]
+        assert detail["title"] == "Edelstein-Gacha BtoB" and detail["cards"]   # übersetzt
         assert any("/pack/24126/1.webp" in u for u in await view.image_urls())
 
     asyncio.run(run())
