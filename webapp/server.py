@@ -186,6 +186,14 @@ class App:
         lite = [{k: v for k, v in b.items() if k not in POOL_KEYS} for b in await self.banners()]
         return web.json_response({"banners": lite, "updated": self._updated or int(time.time())})
 
+    async def api_archive(self, request):
+        """Beendete Banner der letzten 30 Tage - selten aufgerufen, eine Minute zwischengespeichert."""
+        now = time.monotonic()
+        if not getattr(self, "_archive", None) or now - self._archive[0] > 60:
+            data = await self.view.archived_banners()
+            self._archive = (now, [{k: v for k, v in b.items() if k not in POOL_KEYS} for b in data])
+        return web.json_response({"banners": self._archive[1], "updated": int(time.time())})
+
     async def api_hot(self, request):
         hot = self.view.hot(await self.banners())
         return web.json_response({"hot": [{k: v for k, v in b.items() if k not in POOL_KEYS} for b in hot]})
@@ -719,6 +727,7 @@ def make_app(app: App) -> web.Application:
         web.get("/sw.js", app.service_worker),
         web.get("/manifest.webmanifest", app.manifest),
         web.get("/api/banners", app.api_banners),
+        web.get("/api/archive", app.api_archive),
         web.get("/api/hot", app.api_hot),
         web.get("/api/cards", app.api_cards),
         web.get(r"/api/banner/{id}", app.api_banner),

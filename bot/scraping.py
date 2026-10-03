@@ -711,13 +711,14 @@ class ScrapingMixin:
                 except Exception as e:
                     logger.debug(f"Konnte archivierten Thread {tid} nicht löschen: {e}")
 
+            await self.db.mark_threads_expired(thread_ids)   # nicht bei jedem Lauf erneut versuchen
             if deleted_threads > 0:
                 logger.info(f"Archiv-Bereinigung: {deleted_threads} Discord-Threads gelöscht")
 
-            # Dann DB-Einträge löschen
-            purged = await self.db.purge_archived_data(max_age_hours=1)
+            # Daten beendeter Banner bleiben ARCHIVE_DAYS Tage (App: Kategorie Archiv)
+            purged = await self.db.purge_archived_data(max_age_hours=ARCHIVE_DAYS * 24)
             if purged > 0:
-                logger.info(f"Archiv-Bereinigung: {purged} alte Banner aus DB gelöscht")
+                logger.info(f"Archiv-Bereinigung: {purged} Banner älter als {ARCHIVE_DAYS} Tage aus DB gelöscht")
             old_moves = await self.db.purge_old_history()
             if old_moves > 0:
                 logger.info(f"Archiv-Bereinigung: {old_moves} Pack-Bewegungen älter als 90 Tage gelöscht")

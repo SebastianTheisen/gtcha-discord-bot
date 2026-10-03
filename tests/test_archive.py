@@ -1,0 +1,81 @@
+"""Archiv: beendete Banner bleiben 30 Tage komplett erhalten (App: Kategorie Archiv)."""
+
+import asyncio
+from datetime import datetime, timedelta
+
+import aiosqlite
+
+from database.db import ARCHIVE_DAYS, Database, store_thread_id
+from scraper.models import ScrapedBanner
+from utils.card_pool import summarize_cards
+
+CARDS = [{"id": 1, "name": "Lugia", "buy_point": 90000, "duplication": 1, "action_type": 2},
+         {"id": 2, "name": "Normal", "buy_point": 300, "duplication": 99, "action_type": 0}]
+
+
+async def _setup(tmp_path):
+    db = Database(str(tmp_path / "b.db"))
+    await db.init()
+    await db.save_banner(ScrapedBanner(pack_id=24152, category="One piece", title="Luffy", price_coins=1200,
+                                       current_packs=0, total_packs=100))
+    await db.save_card_pool(24152, summarize_cards(CARDS))
+    await db.save_thread(24152, 555, 1, 2)
+    await db.save_medal(555, "T1", 42)
+    await db.upsert_store_pack(24126, "宝石ガチャ BtoB", 5000, 200, 200, None, None, None, "x")
+    await db.save_card_pool(24126, summarize_cards(CARDS))
+    await db.save_medal(store_thread_id(24126), "T1", 42, source="app")
+    for pid in (24152, 24126):
+        await db.mark_banner_inactive(pid)
+    await db.mark_thread_expired(24152)
+    return db
+
+
+async def _age(db, days):
+    old = (datetime.now() - timedelta(days=days)).isoformat()
+    async with aiosqlite.connect(db.db_path) as conn:
+        await conn.execute("UPDATE banners SET updated_at = ? WHERE is_active = 0", (old,))
+        await conn.commit()
+
+
+def test_ended_banners_stay_30_days_with_medals(tmp_path):
+    async def run():
+        db = await _setup(tmp_path)
+        await _age(db, 2)
+        assert await db.purge_archived_data(max_age_hours=ARCHIVE_DAYS * 24) == 0
+        assert set(await db.get_ended_banners()) == {24152, 24126}
+        assert await db.get_medals(555) and await db.get_medals(store_thread_id(24126))
+
+        from webapp.view import BannerView
+        view = BannerView(db)
+        banners = {b["id"]: b for b in await view.archived_banners()}
+        lugia = banners[24152]
+        assert lugia["archived"] and lugia["status"] == "ended" and lugia["ended_at"]
+        assert [h["name"] for h in lugia["out"]] == ["Lugia"]        # Medaille gilt weiter
+        assert banners[24126]["store"] and [h["name"] for h in banners[24126]["out"]] == ["Lugia"]
+        detail = await view.detail(24152)
+        assert detail["archived"] and detail["cards"]
+
+        await _age(db, ARCHIVE_DAYS + 1)
+        assert await db.purge_archived_data(max_age_hours=ARCHIVE_DAYS * 24) == 2
+        assert await db.get_ended_banners(days=365) == {}
+        assert not await db.get_medals(555) and not await db.get_medals(store_thread_id(24126))
+        async with aiosqlite.connect(db.db_path) as conn:
+            kept = await (await conn.execute("SELECT pack_id FROM banner_archive ORDER BY pack_id")).fetchall()
+        assert kept == [(24126,), (24152,)]                           # Mini-Archiv für die Bilanz bleibt
+
+    asyncio.run(run())
+
+
+def test_discord_thread_deleted_once_after_an_hour(tmp_path):
+    async def run():
+        db = Database(str(tmp_path / "b.db"))
+        await db.init()
+        await db.save_banner(ScrapedBanner(pack_id=1, category="MIX", current_packs=0, total_packs=10))
+        await db.save_thread(1, 777, 1, 2)
+        await db.mark_banner_inactive(1)
+        await _age(db, 1)
+        assert await db.get_archived_thread_ids(max_age_hours=1) == [777]
+        await db.mark_threads_expired([777])
+        assert await db.get_archived_thread_ids(max_age_hours=1) == []   # nicht bei jedem Lauf erneut
+
+    asyncio.run(run())

@@ -1,15 +1,16 @@
 "use strict";
 
-const APP_VERSION = 74;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 75;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
 const STATUS = {
   running: ["🎯", "Läuft"], endspurt: ["⚡", "Endspurt"], hits_out: ["🔴", "Hits raus"], upcoming: ["🕒", "Bald"],
+  ended: ["🗄️", "Beendet"],
 };
 const CATEGORIES = [["Alle", "Alle"], ["Bonus", "BONUS"], ["MIX", "MIX"], ["Pokémon", "Pokémon"],
                     ["One piece", "One Piece"], ["Dragon Ball", "Dragon Ball"], ["Store", "🏪 Store"],
-                    ["Wunsch", "⭐ Wunschkarten"]];
+                    ["Wunsch", "⭐ Wunschkarten"], ["Archiv", "🗄️ Archiv"]];
 const SORTS = {
   site: ["Wie auf der Seite", (a, b) => b.id - a.id],
   ev: ["Ø Rückgabe", (a, b) => (b.ev_pct ?? -1) - (a.ev_pct ?? -1)],
@@ -65,7 +66,7 @@ function buyHref(url) {
   if (!installed || !isIOS() || mode === "app") return url;
   return mode === "chrome" ? url.replace(/^https:/, "googlechromes:") : `x-safari-${url}`;
 }
-const openLink = (b, label = "Öffnen ↗") => (safeUrl(b.buy_url)
+const openLink = (b, label = "Öffnen ↗") => (safeUrl(b.buy_url) && !b.archived
   ? `<a class="open-btn" href="${esc(buyHref(b.buy_url))}" target="_blank" rel="noopener noreferrer" data-stop>${label}</a>` : "");
 
 // HTML nur ersetzen, wenn es sich geändert hat - sonst laden alle Bilder neu (alle 30 s, beim Start doppelt)
@@ -131,6 +132,7 @@ const notMineNote = (b) => (canBuy(b) === false ? `<div class="notice warn">🚫
 
 // Verkaufsende einheitlich in deutscher Zeit (die Seite liefert verschiedene Formate, teils japanisch)
 function untilText(b) {
+  if (b.archived) return b.ended_at ? `Beendet am ${time(b.ended_at)} Uhr` : "Beendet";
   if (b.end_ts) {
     const d = new Date(b.end_ts * 1000);
     const date = d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "Europe/Berlin" });
@@ -168,7 +170,7 @@ function row(b, rank) {
           </div>
           ${shipLine(b)}
           ${outLine(b)}
-          ${b.end ? `<div class="until">${esc(untilText(b))}</div>` : ""}
+          ${b.end || b.archived ? `<div class="until">${esc(untilText(b))}</div>` : ""}
         </div>
       </div>
     </div>`;
@@ -297,12 +299,17 @@ async function showList() {
 }
 
 function drawList() {
-  const { banners, updated } = state.listData;
   const q = state.query || "";
+  const archive = state.category === "Archiv" && !q;
+  if (archive && !state.archive) {   // erst beim Öffnen der Kategorie laden (selten gebraucht)
+    state.archive = { banners: [], updated: state.listData.updated };
+    api("/api/archive").then((d) => { state.archive = d; drawList(); }).catch(() => { state.archive = null; });
+  }
+  const { banners, updated } = archive ? state.archive : state.listData;
   const sort = SORTS[state.sort] || SORTS.ev;
   const active = [...state.filters].filter((k) => QUICK_FILTERS[k] && (k !== "mine" || myRank()));
   const shown = banners
-    .filter((b) => (q ? matches(b, q) : state.category === "Alle" || b.category === state.category
+    .filter((b) => (q ? matches(b, q) : archive || state.category === "Alle" || b.category === state.category
       || (state.category === "Wunsch" && state.wishBanners?.has(b.id) && canBuy(b) !== false)))
     .filter((b) => active.every((k) => QUICK_FILTERS[k][1](b)))
     .sort(sort[1]);
@@ -317,6 +324,7 @@ function drawList() {
       : `<div class="empty">${q ? "Nicht gefunden – Enter öffnet die ID"
         : state.category === "Wunsch" ? (wishList().length ? "Gerade keine Wunschkarte kaufbar."
           : "Noch keine Wunschkarten (⭐ merken).")
+        : archive ? "Noch keine beendeten Banner (sie bleiben hier 30 Tage)"
         : active.length ? "Keine Banner für diese Filter" : "Keine Banner"}</div>`}
     <div class="updated" id="updated"></div>`);
   view.querySelector("#updated").textContent = `Stand ${time(updated)}`;
@@ -463,7 +471,7 @@ function renderCards(b) {
   });
   box.querySelectorAll(".tile[data-card]").forEach((el) => el.addEventListener("click", () => {
     const card = b.cards.find((c) => c.id === el.dataset.card);
-    if (card) claimFlow(b, card).catch((e) => ask("Fehler", esc(e.message), ["OK"]));
+    if (card && !b.archived) claimFlow(b, card).catch((e) => ask("Fehler", esc(e.message), ["OK"]));
   }));
   box.querySelectorAll("[data-page]").forEach((el) => el.addEventListener("click", () => {
     state.cardPage[b.id] = Number(el.dataset.page);
@@ -519,7 +527,8 @@ async function showBanner(id) {
     ${b.headline ? `<h1 class="d-title">${esc(b.headline)}</h1>` : ""}
     ${notMineNote(b)}
     ${glance(b)}
-    <div class="watch-row"><button class="watch-btn" id="watch-btn">🔔 Beobachten</button>
+    ${b.archived ? `<div class="archived-note">🗄️ ${esc(untilText(b))} · bleibt 30 Tage im Archiv</div>` : ""}
+    <div class="watch-row" ${b.archived ? "hidden" : ""}><button class="watch-btn" id="watch-btn">🔔 Beobachten</button>
       <a class="hint" href="#/settings">Einstellungen ›</a></div>
     <div class="dtabs" role="tablist">${Object.entries(DETAIL_TABS).map(([k, l]) =>
       `<button class="dtab ${k === tab ? "on" : ""}" data-tab="${k}" role="tab">${l}</button>`).join("")}</div>
@@ -547,7 +556,7 @@ async function showBanner(id) {
 
     <section class="pane" data-pane="cards" ${tab === "cards" ? "" : "hidden"}>
       ${b.cards.length ? `<h2 id="cards-title">🃏 Alle Karten <small>${num(b.cards.reduce((n, c) => n + c.copies, 0))} Karten · ${b.cards.length} verschiedene</small></h2>
-        <div class="hint pane-hint">${b.share_above_price != null ? `${pct(b.share_above_price)} ≥ Packpreis (<b>gold</b>) · ` : ""}Antippen = melden</div>
+        <div class="hint pane-hint">${b.share_above_price != null ? `${pct(b.share_above_price)} ≥ Packpreis (<b>gold</b>) · ` : ""}${b.archived ? "beendet" : "Antippen = melden"}</div>
         <div id="cards"></div>`
         : hits.length ? `<h2>🏆 Hits <small>${open} von ${hits.length} noch drin</small></h2>
         <div class="hits">${hits.map(hitCard).join("")}</div>` : `<div class="empty">Kartenliste noch nicht geladen</div>`}
@@ -569,7 +578,7 @@ async function showBanner(id) {
         : `<div class="rows"><div class="line muted">Noch keine Versandschübe aufgezeichnet</div></div>`}
     </section>
 
-    <div class="buybar">
+    <div class="buybar" ${b.archived ? "hidden" : ""}>
       <div class="big">${coins(b.price)}</div>
       <div class="remaining"><b>${num(b.remaining)}</b> / ${num(b.total)}
         <div class="bar"><span style="width:${left}%"></span></div></div>

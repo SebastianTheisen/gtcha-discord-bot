@@ -119,6 +119,8 @@ select { background: var(--surface); color: var(--text); border: 1px solid var(-
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid var(--line);
 }
 .crow-title { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.archived-note { margin: 8px 2px; padding: 8px 12px; border-radius: 10px; background: var(--surface-2, var(--surface));
+  color: var(--muted); font-size: 14px; }
 .d-title { font-size: 18px; line-height: 1.3; margin: 10px 2px 4px; }
 .row-card.done .media img { filter: grayscale(.9) brightness(.75); }
 .media { position: relative; background: #20283d; overflow: hidden; }
@@ -479,7 +481,7 @@ details.section > summary small { font-size: 13px; color: var(--muted); font-wei
   background: var(--surface-2); color: inherit; text-decoration: none; }
 .find-b.out { opacity: .55; }
 .find-b .muted { white-space: nowrap; }
-.tabbar a[hidden] { display: none; }
+.tabbar a[hidden], .buybar[hidden], .watch-row[hidden] { display: none; }
 
 /* Admin: Nutzer-Statistiken */
 .user-card { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); margin: 0 10px 10px; }
