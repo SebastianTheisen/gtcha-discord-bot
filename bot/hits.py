@@ -1,6 +1,7 @@
 """Hits: Kartenpool, Erkennung, Hit-Liste, Hit-Chance, Endspurt und Lohnt-sich-Hinweis."""
 
 from bot.common import *  # noqa: F401,F403
+from database.db import STORE, store_thread_id
 
 
 class HitsMixin:
@@ -135,13 +136,18 @@ class HitsMixin:
                 pool = await self.db.get_card_pool(pid)
                 if not pool or pool.get('version') != 2 or not pool.get('total_count'):
                     continue
-                thread_data = await self.db.get_thread_by_banner_id(pid)
-                if not thread_data or thread_data.get('is_expired'):
-                    continue
+                store = (await self.db.get_banner(pid) or {}).get('is_active') == STORE
+                if store:   # Store-Pack: Erkennung genauso, aber ohne Discord (Medaillen an der internen Nummer)
+                    medal_thread = store_thread_id(pid)
+                else:
+                    thread_data = await self.db.get_thread_by_banner_id(pid)
+                    if not thread_data or thread_data.get('is_expired'):
+                        continue
+                    medal_thread = int(thread_data['thread_id'])
 
                 state = await self.db.get_pull_tracking(pid)
                 pulled, unsure = list(state["pulled"]), list(state["unsure"])
-                medals = await self.db.get_medals(int(thread_data['thread_id']))
+                medals = await self.db.get_medals(medal_thread)
                 claimed = {k for t, k in tier_keys(pool).items() if t in medals}
                 ships = shipment_values(item) or (None, None)
                 value = decided_value(item)
@@ -192,7 +198,9 @@ class HitsMixin:
 
                 logger.info(f"[HIT] {pid}: {reason} -> sicher {match['certain']}, "
                             f"wertgleich {match['groups']}, möglich {match['maybe']}")
-                thread_id = int(thread_data['thread_id'])
+                if store:
+                    continue   # gespeichert ist alles (die App liest es) - kein Post, keine Hit-Liste in Discord
+                thread_id = medal_thread
                 text = None
                 if not first_look:
                     medals = await self.db.get_medals(thread_id)

@@ -4,6 +4,7 @@ import os
 import time
 
 from bot.common import *  # noqa: F401,F403
+from database.db import STORE, store_thread_id
 from config import DATABASE_PATH
 from utils.app_bridge import CODE_MINUTES, AppBridge
 
@@ -51,6 +52,8 @@ class AppLinkMixin:
         pack_id, tier, user_id = int(req["pack_id"]), str(req["tier"]).upper(), int(req["discord_user_id"])
         if not re.fullmatch(r"T([1-9]\d?)", tier):
             return False, "Ungültige Medaille"
+        if (await self.db.get_banner(pack_id) or {}).get("is_active") == STORE:
+            return await self._apply_store_medal(req, pack_id, tier, user_id)
         thread_data = await self.db.get_thread_by_banner_id(pack_id)
         if not thread_data or thread_data.get("is_expired"):
             return False, "Zu diesem Banner gibt es keinen aktiven Thread"
@@ -105,6 +108,29 @@ class AppLinkMixin:
 
         await self._update_probability_message(thread_id, pack_id)
         await self._refresh_pool_views(pack_id)
+        return True, None
+
+    async def _apply_store_medal(self, req: dict, pack_id: int, tier: str, user_id: int) -> tuple:
+        """Store-Pack: dieselben Regeln wie bei normalen Bannern, aber nichts in Discord."""
+        medal_thread = store_thread_id(pack_id)
+        existing = await self.db.get_medal(medal_thread, tier)
+        action = req["action"]
+        if action in ("unclaim", "admin_remove"):
+            if not existing:
+                return False, f"{tier} ist nicht vergeben"
+            if action == "unclaim" and int(existing.get("user_id") or 0) != user_id:
+                return False, f"{tier} hat jemand anderes gemeldet"
+            await self.db.delete_medal(medal_thread, tier)
+        else:   # claim / admin_assign
+            problem = await self._invalid_medal_reason(pack_id, tier)
+            if problem:
+                return False, problem.replace("❌ ", "")
+            if existing and action == "claim":
+                return False, f"{tier} ist schon vergeben"
+            if existing:
+                await self.db.delete_medal(medal_thread, tier)
+            await self.db.save_medal(medal_thread, tier, user_id, source="app")
+        logger.info(f"Store-Medaille: {action} {tier} bei {pack_id} ({req.get('discord_name')})")
         return True, None
 
     async def _post_app_medal(self, thread, thread_data: dict, pack_id: int, emoji: str, add: bool, silent: bool,

@@ -1,4 +1,4 @@
-"""Store-Packs (gtchaxonline.com/store) - nur für die App, nichts davon geht nach Discord.
+"""Store-Packs (gtchaxonline.com/store) - wie normale Banner (Hits, Medaillen, Abhaken), aber nichts in Discord.
 
 Die Packs liegen in der Tabelle banners mit is_active = 2 (siehe database/db.py): Threads, Top 10, "nicht gefunden"-
 Zähler und alle anderen Discord-Funktionen sehen sie nicht. Der Lauf holt alle 5 Minuten die Pack-Zahlen (damit der
@@ -42,6 +42,8 @@ class StoreMixin:
                 await self.db.set_meta("store_discovered_at", str(time.time()))
             await self._save_store_items(items)
             await self._load_store_pools(client)
+            # gezogene Hits erkennen wie bei normalen Bannern (Versand/Umwandlung) - ohne Discord
+            await self._detect_pulled_hits({pid: it for pid, it in items.items() if _int(it.get('pack_count')) > 0})
         except Exception as e:
             logger.warning(f"[STORE] Lauf fehlgeschlagen: {type(e).__name__}: {e}")
         finally:

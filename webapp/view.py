@@ -10,7 +10,7 @@ from typing import Dict, List, Optional
 
 import aiosqlite
 
-from database.db import STORE, Database
+from database.db import STORE, Database, store_thread_id
 from utils.banner_info import RANK_ORDER, format_conditions, format_shipping, sale_end_timestamp, to_int
 from utils.card_pool import (
     card_value, estimate, explain_batch, out_of_banner_value, fmt_coins, pool_minimum, relevant_units, resolve_pulled, tier_keys,
@@ -108,12 +108,14 @@ class BannerView:
         pid = row['pack_id']
         thread = await self.db.get_thread_by_banner_id(pid) or {}
         thread_id = int(thread['thread_id']) if thread.get('thread_id') and not thread.get('is_expired') else 0
+        store = row.get('is_active') == STORE
+        medal_thread = store_thread_id(pid) if store else thread_id   # Store-Pack: Medaillen ohne Discord-Thread
         price, remaining, total = (to_int(row.get(k)) for k in ('price_coins', 'current_packs', 'total_packs'))
         pool = json.loads(row['card_pool']) if row.get('card_pool') else None
         stats, sure, winners, open_groups, unsure, pulled, held = None, set(), {}, [], [], set(), set()
         shipped_keys = set()
         if pool and pool.get('total_count'):
-            pulled, sure, winners, open_groups, unsure = await self._pulled(thread_id, pid, pool)
+            pulled, sure, winners, open_groups, unsure = await self._pulled(medal_thread, pid, pool)
             # gezogene Hits mit Medaille, die noch nicht verschickt sind - auch nicht mehr im Banner
             shipped_keys = set((await self.db.get_pull_tracking(pid))["pulled"])
             held = set(winners) - shipped_keys
@@ -148,13 +150,11 @@ class BannerView:
             **self._shipping(row.get('site_stats')),
             **self._out_of_banner(row, pool, held, shipped_keys),
             "thread_id": thread_id or None,
+            "medal_thread": medal_thread or None,
             **self._out(pool, sure, winners, open_groups),
         }
-        if row.get('is_active') == STORE:
-            # Store-Pack: nur in der App, kein Thread. Hits werden dort nicht beobachtet (keine Versand-Erkennung) -
-            # darum keine "Hits noch drin"-Angaben; Ø Rückgabe kommt weiter aus den Zahlen der Seite.
-            data.update(store=True, hits_open=None, hits_total=None, tracked_hits=False, cost_to_hit=None,
-                        unsure=False, out=[], out_unsure=0)
+        if store:
+            data["store"] = True   # wie ein normaler Banner, nur ohne Discord
         if with_pool:
             data["hits"] = self._hit_list(pool, pulled, sure, winners, unsure, price) if pool else []
             data["hit_keys_detected"] = sorted(sure)
@@ -283,7 +283,11 @@ class BannerView:
             cur = await conn.execute(
                 "SELECT m.tier, t.banner_id, m.created_at FROM medals m "
                 "JOIN discord_threads t ON t.thread_id = m.thread_id "
-                "WHERE m.user_id = ? AND t.is_expired = 0 ORDER BY m.created_at DESC", (int(user_id),))
+                "WHERE m.user_id = ? AND t.is_expired = 0 "
+                "UNION ALL "   # Store-Packs: interne Nummer = -pack_id, nur solange der Pack läuft
+                "SELECT m.tier, b.pack_id, m.created_at FROM medals m JOIN banners b ON b.pack_id = -m.thread_id "
+                "WHERE m.user_id = ? AND m.thread_id < 0 AND b.is_active = ? "
+                "ORDER BY 3 DESC", (int(user_id), int(user_id), STORE))
             rows = await cur.fetchall()
         result = []
         for tier, banner_id, created in rows:
@@ -327,14 +331,18 @@ class BannerView:
     async def claim_targets(self) -> Dict[int, Dict]:
         """Aktive Banner: meldbare Plätze (Karten ab Packpreis) und schon vergebene Medaillen."""
         result = {}
-        for pid, row in (await self.db.get_active_banners()).items():
+        rows = {**await self.db.get_active_banners(), **await self.db.get_store_banners()}
+        for pid, row in rows.items():
             if not row.get('card_pool'):
                 continue
             pool = json.loads(row['card_pool'])
-            thread = await self.db.get_thread_by_banner_id(pid) or {}
-            if not thread.get('thread_id') or thread.get('is_expired'):
-                continue
-            medals = await self.db.get_medals(int(thread['thread_id']))
+            if row.get('is_active') == STORE:
+                medals = await self.db.get_medals(store_thread_id(pid))
+            else:
+                thread = await self.db.get_thread_by_banner_id(pid) or {}
+                if not thread.get('thread_id') or thread.get('is_expired'):
+                    continue
+                medals = await self.db.get_medals(int(thread['thread_id']))
             result[pid] = {"units": claimable_units(pool, to_int(row.get('price_coins')) or None),
                            "medals": medals}
         return result
@@ -348,7 +356,7 @@ class BannerView:
         """Top 10 wie im Hot-Banner-Kanal: ziehbar, nach Ø Rückgabe."""
         candidates = [
             {**b, "pack_id": b["id"], "pct": b["ev_pct"]} for b in banners
-            if b["category"] not in ("Bonus", "Store") and b["price"] > 0 and b["remaining"] > 0 and not b["password"]
+            if b["category"] != "Bonus" and b["price"] > 0 and b["remaining"] > 0 and not b["password"]
             and b["status"] not in ("upcoming", "hits_out") and b["ev_pct"] is not None
         ]
         return rank_entries(candidates)
@@ -383,7 +391,7 @@ class BannerView:
                 s["value"] = card_value(max(0, s["coins"]))
                 s["explain"] = []
             return shipments
-        _, _, winners, _, _ = await self._pulled(data.get("thread_id") or 0, row['pack_id'], pool)
+        _, _, winners, _, _ = await self._pulled(data.get("medal_thread") or 0, row['pack_id'], pool)
         units = {u["key"]: u for u in tracked_units(pool)}
         label = lambda k: f"{units[k]['name']} ({fmt_coins(units[k]['value'])} Coins)" if k in units else k
         sent: set = set()
@@ -418,7 +426,7 @@ class BannerView:
             return {"cards": [], "share_above_price": None}
         # Nur sicher Gezogenes abhaken (Medaille oder eindeutig erkannter Versand). Stellvertreter aus
         # ❓-Gruppen zählen nur für die Rechnung - im Raster steht dort "❓ x von n raus".
-        _, sure, winners, open_groups, _ = await self._pulled(data.get("thread_id") or 0, row['pack_id'], pool)
+        _, sure, winners, open_groups, _ = await self._pulled(data.get("medal_thread") or 0, row['pack_id'], pool)
         certain = set(sure) | set(winners)
         total, price = pool['total_count'], data.get("price") or 0
         of_card = lambda keys, cid: [k for k in keys if k == cid or k.startswith(cid + "#")]
