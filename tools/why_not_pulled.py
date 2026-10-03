@@ -17,8 +17,8 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, "/app")
 from utils.banner_info import berlin_time  # noqa: E402
 from utils.card_pool import (  # noqa: E402
-    card_value, claimable_units, fmt_coins, match_shipment_history, medal_units, resolve_pulled, tier_keys,
-    tracked_units,
+    TAX_FACTOR, VALUE_TOLERANCE, _batch_options, _normal_sums, _value_classes, card_value, claimable_units,
+    fmt_coins, match_shipment_history, medal_units, resolve_pulled, tier_keys, tracked_units,
 )
 
 DB = os.getenv("BOT_DB", "/app/data/gtcha_bot.db")
@@ -109,6 +109,55 @@ if batches is not None and has_ship_hits:
     print(f"Auswertung aller {len(batches)} Schübe: sicher {joint['certain'] or '–'} · "
           f"Gruppen {[(g['pulled'], g['keys']) for g in joint['groups']] or '–'} · "
           f"genutzt {joint['used_batches']} von {len(batches)}")
+
+
+def nearest_sum(pool, cards, target, search=20000):
+    """Nächster Wert, den genau `cards` normale Karten zusammen ergeben können (oder None)."""
+    if cards == 0:
+        return 0
+    if target <= 0:
+        return None
+    sums = _normal_sums(pool, cards, target + search)[cards]
+    for d in range(search + 1):
+        for v in (target - d, target + d):
+            if v >= 0 and (sums >> v) & 1:
+                return v
+    return None
+
+
+if batches and has_ship_hits:
+    section("Jeder Versand-Schub einzeln (so wertet der Bot sie aus)")
+    ship_hits = [u for u in tracked_units(pool) if u["shipping_only"]]
+    classes = _value_classes(ship_hits, VALUE_TOLERANCE)
+    print("Versand-Hits im Pool: " + ", ".join(f"{u['name']} {fmt_coins(u['value'])}" for u in ship_hits))
+    for i, (count, net) in enumerate(batches, 1):
+        value = round(net * TAX_FACTOR)
+        options = _batch_options(pool, classes, count, value, VALUE_TOLERANCE) if count > 0 and value > 0 else None
+        line = f"Schub {i}: {count} Karte(n) · {fmt_coins(value)} Coins Kartenwert"
+        if count <= 0:
+            print(line + " → ohne Karte (nur Wert geändert) - nicht auswertbar")
+            continue
+        if options:
+            print(line + f" → erklärbar ({len(options)} Möglichkeit(en))")
+            continue
+        wide = _batch_options(pool, classes, count, value, 0.05)
+        hint = " · mit 5 % Spielraum erklärbar (Kartenwerte haben sich wohl geändert)" if wide else ""
+        print(line + " → NICHT erklärbar" + hint)
+        if unit.get("shipping_only") and count >= 1 and value >= unit["value"] * (1 - VALUE_TOLERANCE):
+            rest = value - unit["value"]
+            near = nearest_sum(pool, count - 1, rest)
+            if near is None:
+                print(f"   mit {tier} ({fmt_coins(unit['value'])}): Rest {fmt_coins(rest)} - keine passenden normalen Karten")
+            else:
+                print(f"   mit {tier} ({fmt_coins(unit['value'])}): Rest {fmt_coins(rest)} für {count - 1} normale Karte(n), "
+                      f"nächstmöglich {fmt_coins(near)} → Abweichung {fmt_coins(rest - near)} Coins")
+
+changes = db.execute("SELECT name, old_value, new_value, changed_at FROM card_value_history WHERE banner_id = ? "
+                     "AND changed_at >= ? ORDER BY id", (pid, since)).fetchall()
+section(f"Geänderte Kartenwerte (letzte {DAYS} Tage)")
+for c in changes[:30]:
+    print(f"{when(c['changed_at'])}: {c['name']} {fmt_coins(c['old_value'] or 0)} → {fmt_coins(c['new_value'] or 0)}")
+print("keine" if not changes else (f"… und {len(changes) - 30} weitere" if len(changes) > 30 else ""))
 
 section(f"Umwandlungen (letzte {DAYS} Tage)")
 convs = db.execute("SELECT * FROM convert_history WHERE banner_id = ? AND changed_at >= ? ORDER BY id",
