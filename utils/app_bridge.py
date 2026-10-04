@@ -73,6 +73,19 @@ class AppBridge:
                 "DELETE FROM user_imports WHERE id NOT IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER "
                 "(PARTITION BY discord_user_id ORDER BY id DESC) AS n FROM user_imports) WHERE n <= ?)", (KEEP_IMPORTS,))
             removed = cur.rowcount
+            # Einmalig: wer vor den Konto-Kennungen übertragen hat, bekommt einen festen Eintrag "default"
+            # (danach zählt nur noch sync_accounts - so lässt sich ein Konto auch wirklich zurücksetzen)
+            cur = await db.execute("SELECT value FROM app_settings WHERE key = 'sync_accounts_migrated'")
+            if not await cur.fetchone():
+                await db.execute("""
+                    INSERT OR IGNORE INTO sync_accounts (discord_user_id, account, first_at, synced_at)
+                    SELECT u, 'default', t, t FROM (
+                        SELECT discord_user_id AS u, max(t) AS t FROM (
+                            SELECT discord_user_id, updated_at AS t FROM user_history
+                            UNION ALL SELECT discord_user_id, synced_at FROM sync_marks)
+                        GROUP BY discord_user_id)
+                    WHERE t IS NOT NULL AND u NOT IN (SELECT discord_user_id FROM sync_accounts)""")
+                await db.execute("INSERT INTO app_settings (key, value) VALUES ('sync_accounts_migrated', '1')")
             for column in ("last_seen TEXT", "agent TEXT"):   # Geräte verwalten: zuletzt aktiv, Gerätetyp
                 try:
                     await db.execute(f"ALTER TABLE devices ADD COLUMN {column}")
@@ -373,7 +386,7 @@ class AppBridge:
 
     async def sync_overview(self) -> Dict[str, Dict]:
         """Discord-ID -> {"expected": Anzahl Konten, "accounts": [{account, first_at, synced_at}, ...]} (älteste
-        Konten zuerst). Wer vor den Konto-Kennungen übertragen hat, zählt mit einem Konto "default"."""
+        Konten zuerst). Wer vor den Konto-Kennungen übertragen hat, hat beim Start ein Konto "default" bekommen."""
         async with aiosqlite.connect(self.db_path) as db:
             cur = await db.execute("SELECT discord_user_id, account, first_at, synced_at FROM sync_accounts "
                                    "ORDER BY first_at")
@@ -381,16 +394,6 @@ class AppBridge:
             for u, acc, first, synced in await cur.fetchall():
                 out.setdefault(u, {"expected": 1, "accounts": []})["accounts"].append(
                     {"account": acc, "first_at": first, "synced_at": synced})
-            legacy = {}
-            cur = await db.execute("SELECT discord_user_id, max(updated_at) FROM user_history GROUP BY discord_user_id")
-            legacy.update({u: t for u, t in await cur.fetchall() if t})
-            cur = await db.execute("SELECT discord_user_id, synced_at FROM sync_marks")
-            for u, t in await cur.fetchall():
-                if t and t > legacy.get(u, ""):
-                    legacy[u] = t
-            for u, t in legacy.items():
-                if u not in out:
-                    out[u] = {"expected": 1, "accounts": [{"account": "default", "first_at": t, "synced_at": t}]}
             cur = await db.execute("SELECT discord_user_id, expected FROM account_counts")
             for u, n in await cur.fetchall():
                 out.setdefault(u, {"expected": 1, "accounts": []})["expected"] = max(1, int(n or 1))

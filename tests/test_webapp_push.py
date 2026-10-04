@@ -164,10 +164,12 @@ def test_personal_pushes_auto_medal_and_reminder(tmp_path, monkeypatch):
         assert "T3 ist schon vergeben" in sent[0][1]["body"]
         # Erinnerung: letztes Übertragen vor 4 Tagen
         await app.bridge.set_history("42", {"coins": {"items": []}})
+        await app.bridge.mark_synced("42")
         import aiosqlite
         async with aiosqlite.connect(app.bridge.db_path) as db:
-            await db.execute("UPDATE user_history SET updated_at = ?",
-                             ((datetime.fromtimestamp(noon) - timedelta(days=4)).isoformat(),))
+            old = (datetime.fromtimestamp(noon) - timedelta(days=4)).isoformat()
+            await db.execute("UPDATE user_history SET updated_at = ?", (old,))
+            await db.execute("UPDATE sync_accounts SET synced_at = ?, first_at = ?", (old, old))
             await db.commit()
         sent.clear()
         await app.personal_pushes(now=datetime(2026, 10, 2, 22, 0).timestamp())   # nachts: nichts

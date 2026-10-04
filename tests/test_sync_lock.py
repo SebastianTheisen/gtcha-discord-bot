@@ -100,3 +100,24 @@ def test_accounts_by_gtcha_member_id(tmp_path):
         assert st["ok"] and [a["gtcha_id"] for a in st["accounts"]] == ["111", "222"]
 
     asyncio.run(run())
+
+
+def test_reset_removes_legacy_account_for_good(tmp_path):
+    from utils.app_bridge import AppBridge
+    from webapp.server import sync_rule
+
+    async def run():
+        bridge = AppBridge(str(tmp_path / "w.db"))
+        await bridge.init()
+        await bridge.set_history("7", {"coins": {"items": []}})     # übertragen vor den Konto-Kennungen
+        bridge2 = AppBridge(bridge.db_path)
+        async with aiosqlite.connect(bridge.db_path) as db:
+            await db.execute("DELETE FROM app_settings WHERE key = 'sync_accounts_migrated'")
+            await db.commit()
+        await bridge2.init()                                          # Start: einmalig als "default" übernommen
+        assert [a["account"] for a in (await bridge2.sync_state("7"))["accounts"]] == ["default"]
+        await bridge2.remove_account("7", "default")
+        assert (await bridge2.sync_state("7"))["accounts"] == []      # bleibt weg
+        assert sync_rule(await bridge2.sync_state("7"))["reason"] == "sync"
+
+    asyncio.run(run())
