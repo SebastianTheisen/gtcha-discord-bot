@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 92;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 93;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -221,7 +221,7 @@ function row(b, rank) {
           <div class="remaining">Verbleibend: <b>${num(b.remaining)} / ${num(b.total)}</b></div>
           <div class="bar"><span style="width:${left}%"></span></div>
           <div class="extra">
-            ${b.ev_pct != null && !b.archived ? `<span class="pill ${evClass(b.ev_pct)}">Ø ${pct(b.ev_pct)}</span>` : ""}
+            ${b.ev_pct != null && !b.archived ? `<span class="pill ${evClass(b.ev_pct)}">Ø ${pct(b.ev_pct)}${b.ev_uncertain ? " ⚠️" : ""}</span>` : ""}
             ${hitsText(b) ? `<span class="pill">${hitsText(b)}${b.unsure ? " ❓" : ""}</span>` : ""}
           </div>
           ${shipLine(b)}
@@ -246,7 +246,7 @@ function compactRow(b) {
       <div class="bar thin"><span style="width:${left}%"></span></div>
     </div>
     <div class="crow-right"><div class="crow-price">${coins(b.price)}</div>
-      ${b.ev_pct != null && !b.archived ? `<span class="pill ${evClass(b.ev_pct)}">Ø ${pct(b.ev_pct)}</span>` : ""}</div>
+      ${b.ev_pct != null && !b.archived ? `<span class="pill ${evClass(b.ev_pct)}">Ø ${pct(b.ev_pct)}${b.ev_uncertain ? " ⚠️" : ""}</span>` : ""}</div>
   </div>`;
 }
 
@@ -576,7 +576,7 @@ function glance(b) {
   return `<div class="glance ${color}">
     <div class="glance-head"><span class="light"></span><div><div class="glance-title">${title}</div>
       ${sub ? `<div class="glance-sub">${sub}</div>` : ""}</div>
-      ${b.ev_pct != null && !b.archived ? `<div class="glance-pct">${pct(b.ev_pct)}<small>Ø ${num(b.ev)} Coins/Zug</small></div>` : ""}</div>
+      ${b.ev_pct != null && !b.archived ? `<div class="glance-pct">${pct(b.ev_pct)}<small>Ø ${num(b.ev)} Coins/Zug${b.ev_uncertain ? " · ⚠️ unsicher" : ""}</small></div>` : ""}</div>
     <div class="glance-facts">
       ${b.hits_open != null ? `<span>🎯 <b>${hitsText(b)}</b>${b.unsure ? " ❓" : ""}</span>` : ""}
       <span>📦 <b>${num(b.remaining)}</b> von ${num(b.total)} ${b.archived ? "übrig beim Ende" : "übrig"}</span>
@@ -660,7 +660,7 @@ async function showBanner(id) {
 
     <section class="pane" data-pane="overview" ${tab === "overview" ? "" : "hidden"}>
       <div class="stats">
-        ${b.ev != null && !b.archived ? stat("Ø Rückgabe pro Zug", `<span class="ev ${evClass(b.ev_pct)}">${num(b.ev)} Coins</span>`, (b.ev_pct != null ? pct(b.ev_pct) + " vom Preis" : "") + (b.ev_from_site ? " · aus Zahlen der Seite" : " · geschätzt")) : ""}
+        ${b.ev != null && !b.archived ? stat("Ø Rückgabe pro Zug", `<span class="ev ${evClass(b.ev_pct)}">${num(b.ev)} Coins</span>`, (b.ev_pct != null ? pct(b.ev_pct) + " vom Preis" : "") + (b.ev_uncertain ? " · ⚠️ unsicher, nur noch wenige Packs" : "") + (b.ev_from_site ? " · aus Zahlen der Seite" : " · geschätzt")) : ""}
         ${b.hits_open != null ? stat(b.archived ? "Hits beim Ende" : "Hits noch drin", hitsText(b) + (b.unsure ? " ❓" : ""), b.cost_to_hit && !b.archived ? `Ø ${num(b.cost_to_hit)} Coins bis Hit` : "") : ""}
         ${b.min_value != null ? stat("Mindestens zurück", num(b.min_value) + " Coins", b.price ? pct(b.min_value / b.price * 100) + " vom Preis" : "") : ""}
         ${b.pool_value ? stat("Alle Karten", num(b.pool_value) + " Coins", b.all_packs_cost ? `Alle Packs: ${num(b.all_packs_cost)} (${pct(b.pool_value / b.all_packs_cost * 100)})` : "") : ""}
