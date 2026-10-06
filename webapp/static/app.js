@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 89;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 90;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -601,28 +601,35 @@ function archiveSummary(b) {
   return parts.length ? `<div class="glance-until">${parts.join(" · ")}</div>` : "";
 }
 
-// Pack-Verlauf wie in Discord: Abschnitte bis zum nächsten Sammellauf der Seite, aufklappbar
+// Pack-Verlauf wie in Discord: jedes Pack-Update, dazwischen jeder Lauf der Seite mit verschickten/umgewandelten
+// Coins und dem Pack-Stand - pro Tag aufklappbar (neuester Tag offen)
 const hhmm = (t) => new Date(t * 1000).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
-function packTimeline(groups) {
-  if (!groups.length) return `<div class="rows"><div class="line muted">Noch keine Pack-Bewegungen</div></div>`;
-  return `<div class="ptl">${groups.map((g) => {
-    const o = g.out;
-    const outParts = o ? [o.converted ? `🪙 ${num(o.converted)} umgewandelt` : "",
-      o.ship_cards ? `📦 ${num(o.ship_cards)} ${o.ship_cards === 1 ? "Karte" : "Karten"} · ${num(o.ship_value)}` : ""]
-      .filter(Boolean) : [];
-    const head = g.from ? `${time(g.from)}${g.to && g.to !== g.from ? `–${hhmm(g.to)}` : ""}` : (o ? time(o.t) : "");
-    const packs = g.sold ? `<b>−${num(g.sold)}</b> Packs <span class="muted">(${num(g.packs_from)} → ${num(g.packs_to)})</span>` : "";
-    const out = o ? `→ ${hhmm(o.t)}: ${outParts.join(" · ") || "nichts"}${o.players ? ` · +${num(o.players)} Spieler` : ""}`
-      : "→ noch kein Lauf der Seite";
-    const hits = o && o.explain.length ? `<div class="explain">${o.explain.map((l) =>
-      `<div><span class="ico">${esc(l.icon)}</span>${esc(l.text)}</div>`).join("")}</div>` : "";
-    return `<details class="ptl-item ${o && o.explain.some((l) => l.icon === "✅") ? "has-hit" : ""}">
-      <summary><span class="ptl-time">${esc(head)}</span><span>${packs}</span>
-        <span class="ptl-out">${esc(out)}</span></summary>
-      ${hits}
-      ${g.moves.length ? `<div class="ptl-moves">${g.moves.map((m) => `<div><span class="muted">${hhmm(m.t)}</span>
-        📉 ${num(m.old)} → ${num(m.new)} <b>(−${num(m.old - m.new)})</b></div>`).join("")}</div>` : ""}
-    </details>`;
+const dayOf = (t) => new Date(t * 1000).toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit" });
+function packTimeline(events) {
+  if (!events.length) return `<div class="rows"><div class="line muted">Noch keine Pack-Bewegungen</div></div>`;
+  const days = [];
+  for (const e of events) {
+    const d = dayOf(e.t);
+    if (!days.length || days[days.length - 1].day !== d) days.push({ day: d, items: [] });
+    days[days.length - 1].items.push(e);
+  }
+  const line = (e) => {
+    if (e.kind === "pack") {
+      return `<div class="ptl-row"><span class="muted">${hhmm(e.t)}</span>
+        <span>📉 ${num(e.old)} → ${num(e.new)} <b>(−${num(e.old - e.new)})</b></span></div>`;
+    }
+    const parts = [e.ship_cards ? `📦 <b>${num(e.ship_cards)}</b> ${e.ship_cards === 1 ? "Karte" : "Karten"} · <b>${num(e.ship_value)}</b> Coins verschickt` : "",
+      e.converted ? `🪙 <b>${num(e.converted)}</b> umgewandelt` : ""].filter(Boolean);
+    return `<div class="ptl-row out ${e.explain.some((l) => l.icon === "✅") ? "has-hit" : ""}"><span class="muted">${hhmm(e.t)}</span>
+      <span>${parts.join(" · ")}${e.packs != null ? ` · bei <b>${num(e.packs)}</b> Packs` : ""}${e.players ? ` · +${num(e.players)} Spieler` : ""}
+      ${e.explain.map((l) => `<br>${esc(l.icon)} ${esc(l.text)}`).join("")}</span></div>`;
+  };
+  return `<div class="ptl">${days.map((d, i) => {
+    const sold = d.items.filter((e) => e.kind === "pack").reduce((n, e) => n + e.old - e.new, 0);
+    const shipped = d.items.filter((e) => e.kind === "out").reduce((n, e) => n + e.ship_value, 0);
+    return `<details class="ptl-item" ${i === 0 ? "open" : ""}>
+      <summary><b>${esc(d.day)}</b> <span class="muted">· −${num(sold)} Packs${shipped ? ` · ${num(shipped)} Coins verschickt` : ""}</span></summary>
+      <div class="ptl-moves">${d.items.map(line).join("")}</div></details>`;
   }).join("")}</div>`;
 }
 
@@ -682,7 +689,7 @@ async function showBanner(id) {
     </section>
 
     <section class="pane" data-pane="history" ${tab === "history" ? "" : "hidden"}>
-      <h2>📉 Pack-Verlauf <small>je Abschnitt: was danach raus war</small></h2>
+      <h2>📉 Pack-Verlauf <small>mit Versand/Umwandlung der Seite</small></h2>
       ${packTimeline(b.pack_timeline || [])}
       <h2>💰 Ø Rückgabe im Verlauf <small>gestrichelt = 100 %</small></h2>
       ${evChart(b.ev_history)}
