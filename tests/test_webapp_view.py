@@ -81,3 +81,12 @@ def test_pack_timeline_lists_every_update_and_site_runs_with_coins():
     run = events[1]
     assert run["packs"] == 347 and run["ship_value"] == 19580 and run["converted"] == 33440
     assert [l["text"] for l in run["explain"]] == ["Mewtwo"]
+
+
+def test_pack_timeline_shows_shipments_from_before_recording_last():
+    from webapp.view import pack_timeline
+    ships = [{"t": 1800, "cards": 1, "value": 100, "explain": []},
+             {"t": None, "before": True, "cards": 5, "value": 772255, "explain": [{"icon": "❓", "text": "x"}]}]
+    events = pack_timeline([(1000, 10, 9)], [], ships)
+    assert events[-1]["before"] and events[-1]["t"] is None and events[-1]["ship_cards"] == 5
+    assert [e["kind"] for e in events] == ["out", "pack", "out"]

@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 93;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 94;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -609,7 +609,7 @@ function packTimeline(events) {
   if (!events.length) return `<div class="rows"><div class="line muted">Noch keine Pack-Bewegungen</div></div>`;
   const days = [];
   for (const e of events) {
-    const d = dayOf(e.t);
+    const d = e.t ? dayOf(e.t) : "Vor Beginn der Aufzeichnung";
     if (!days.length || days[days.length - 1].day !== d) days.push({ day: d, items: [] });
     days[days.length - 1].items.push(e);
   }
@@ -620,7 +620,7 @@ function packTimeline(events) {
     }
     const parts = [e.ship_cards ? `📦 <b>${num(e.ship_cards)}</b> ${e.ship_cards === 1 ? "Karte" : "Karten"} · <b>${num(e.ship_value)}</b> Coins verschickt` : "",
       e.converted ? `🪙 <b>${num(e.converted)}</b> umgewandelt` : ""].filter(Boolean);
-    return `<div class="ptl-row out ${e.explain.some((l) => l.icon === "✅") ? "has-hit" : ""}"><span class="muted">${hhmm(e.t)}</span>
+    return `<div class="ptl-row out ${e.explain.some((l) => l.icon === "✅") ? "has-hit" : ""}"><span class="muted">${e.t ? hhmm(e.t) : "–"}</span>
       <span>${parts.join(" · ")}${e.packs != null ? ` · bei <b>${num(e.packs)}</b> Packs` : ""}${e.players ? ` · +${num(e.players)} Spieler` : ""}
       ${e.explain.map((l) => `<br>${esc(l.icon)} ${esc(l.text)}`).join("")}</span></div>`;
   };
@@ -696,7 +696,7 @@ async function showBanner(id) {
       <h2>📦 Versandschübe <small>Kartenwert = gezählter Wert × 1,1 (Steuer)</small></h2>
       ${b.shipments.length ? `<div class="rows">${b.shipments.map((s) => `
         <div class="batch ${s.kind === "hits" ? "has-hit" : ""}">
-          <div class="line"><span class="muted">${time(s.t)}</span>
+          <div class="line"><span class="muted">${s.t ? time(s.t) : "vor Beginn der Aufzeichnung"}</span>
             <span><b>+${num(s.cards)}</b> ${s.cards === 1 ? "Karte" : "Karten"} · <b>${num(s.value)}</b> Coins${s.players ? ` · +${num(s.players)} Spieler` : ""}</span></div>
           ${s.explain.length ? `<div class="explain">${s.explain.map((l) =>
             `<div><span class="ico">${esc(l.icon)}</span>${esc(l.text)}</div>`).join("")}</div>` : ""}
