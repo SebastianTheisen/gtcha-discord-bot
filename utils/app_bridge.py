@@ -57,6 +57,21 @@ def _hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def _merge_areas(area: str, parts: List[Dict]) -> Dict:
+    """Gleichen Bereich mehrerer GTCHA-Konten zusammenführen (ein Konto: unverändert)."""
+    if len(parts) == 1:
+        return parts[0]
+    parts = sorted(parts, key=lambda p: p.get("updated_at") or "")
+    merged = {"updated_at": parts[-1].get("updated_at"), "gap": any(p.get("gap") for p in parts)}
+    if any("items" in p for p in parts):
+        items = [i for p in parts for i in p.get("items") or []]
+        key = "t" if area == "coins" else "date"
+        merged["items"] = sorted(items, key=lambda i: str(i.get(key) or ""), reverse=True)
+    if any("info" in p for p in parts):
+        merged["info"] = {k: v for p in parts for k, v in (p.get("info") or {}).items()}   # neuester Stand gewinnt
+    return merged
+
+
 def _now() -> str:
     return datetime.now().isoformat()
 
@@ -306,19 +321,51 @@ class AppBridge:
         return areas
 
     # --- Zusammengeführter Verlauf (nur Neues wird angehängt) ---
+    # Je GTCHA-Konto eigene Bereiche ("shipped@id:94"); ohne Konto-Kennung ohne Zusatz. Gelesen wird für die
+    # Anzeige alles zusammen (mehrere Konten einer Person), geschrieben je Konto - sonst überschreibt ein Konto
+    # beim vollständigen Übertragen die Karten des anderen.
     async def get_history(self, user_id: str) -> Dict:
+        """Alle Konten einer Person zusammen: Karten und Buchungen vereint (neueste zuerst)."""
         async with aiosqlite.connect(self.db_path) as db:
             cur = await db.execute("SELECT area, data, updated_at FROM user_history WHERE discord_user_id = ?",
                                    (str(user_id),))
             rows = await cur.fetchall()
-        return {area: {**json.loads(data), "updated_at": updated} for area, data, updated in rows}
+        groups: Dict[str, List[Dict]] = {}
+        for area, data, updated in rows:
+            groups.setdefault(area.split("@", 1)[0], []).append({**json.loads(data), "updated_at": updated})
+        return {area: _merge_areas(area, parts) for area, parts in groups.items()}
 
-    async def set_history(self, user_id: str, areas: Dict[str, Dict]):
+    async def get_account_history(self, user_id: str, account: Optional[str]) -> Dict:
+        """Nur die Bereiche eines Kontos (ohne Zusatz im Namen) - Grundlage für "nur Neues anhängen"."""
+        suffix = f"@{account}" if account else None
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT area, data, updated_at FROM user_history WHERE discord_user_id = ?",
+                                   (str(user_id),))
+            rows = await cur.fetchall()
+        out = {}
+        for area, data, updated in rows:
+            if (suffix and area.endswith(suffix)) or (not suffix and "@" not in area):
+                out[area.split("@", 1)[0]] = {**json.loads(data), "updated_at": updated}
+        return out
+
+    async def adopt_default_history(self, user_id: str, account: str) -> None:
+        """Erstes Übertragen mit Konto-Kennung: der bisherige Verlauf ohne Kennung gehört ab jetzt zu diesem Konto
+        (nur wenn noch kein Konto eigene Bereiche hat)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT 1 FROM user_history WHERE discord_user_id = ? AND area LIKE '%@%' LIMIT 1",
+                                   (str(user_id),))
+            if not await cur.fetchone():
+                await db.execute("UPDATE user_history SET area = area || ? WHERE discord_user_id = ? "
+                                 "AND area NOT LIKE '%@%'", (f"@{account}", str(user_id)))
+                await db.commit()
+
+    async def set_history(self, user_id: str, areas: Dict[str, Dict], account: Optional[str] = None):
         async with aiosqlite.connect(self.db_path) as db:
             for area, data in areas.items():
                 data = {k: v for k, v in data.items() if k != "updated_at"}
+                name = f"{area}@{account}" if account else area
                 await db.execute("INSERT OR REPLACE INTO user_history (discord_user_id, area, data, updated_at) "
-                                 "VALUES (?, ?, ?, ?)", (str(user_id), area, json.dumps(data, ensure_ascii=False), _now()))
+                                 "VALUES (?, ?, ?, ?)", (str(user_id), name, json.dumps(data, ensure_ascii=False), _now()))
             await db.commit()
 
     # --- Automatische Medaillen aus den angeforderten Karten (jede Karte nur einmal) ---

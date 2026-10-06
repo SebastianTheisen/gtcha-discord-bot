@@ -26,7 +26,7 @@ from utils.app_bridge import MAX_DELAY_MINUTES, MAX_IMPORT_BYTES, AppBridge
 from utils.banner_info import berlin_time
 from webapp.accuracy import AccuracyStore
 from webapp.history import (JST_OFFSET, build_from_stored, ingest, local_time, plan_claims, profile, stored_events,
-                            summarize)
+                            summarize, attribute_opens, opens_by_banner, CLAIM_OPEN_DAYS)
 from webapp.images import ImageCache, content_type
 from webapp.push import DEFAULTS, EVENTS, WATCH_EVENTS, PushService, build_events
 from webapp.view import BannerView, banner_label
@@ -404,29 +404,43 @@ class App:
         logger.info(f"Sync von {user['name']}: {saved} Bereiche, {pages} Seiten ({partial} nur Neues)"
                     + (f" in {seconds} s" if seconds else "") + " · "
                     + ", ".join(f"{p}={n if n is not None else 'FEHLER ' + how}" for p, n, how in report))
-        gap, added, sync_now = False, {}, None
+        gap, added, sync_now, warnings = False, {}, None, []
         try:
-            stored = await self.bridge.get_history(user["user_id"])
-            before = {a: len((stored.get(a) or {}).get("items") or []) for a in ("coins", "shipped")}
+            # Konto: Zuordnung über die GTCHA-Mitglieds-ID; ältere Lesezeichen schicken nur einen Fingerabdruck
+            mid = str(data.get("mid") or "")
+            acc = str(data.get("acc") or "")
+            if re.fullmatch(r"[A-Za-z0-9_-]{1,32}", mid):
+                hashed = hashlib.sha256(f"gtcha-tracker:{mid}".encode()).hexdigest()[:16]
+                await self.bridge.rename_account(user["user_id"], hashed, f"id:{mid}")
+                acc = f"id:{mid}"
+            else:
+                acc = acc if re.fullmatch(r"[0-9a-f]{8,32}", acc) else None
+            # Verlauf je Konto: sonst ersetzt ein Konto beim vollständigen Übertragen die Karten des anderen
+            if acc:
+                await self.bridge.adopt_default_history(user["user_id"], acc)
+            stored = await self.bridge.get_account_history(user["user_id"], acc)
+            before = {a: len((stored.get(a) or {}).get("items") or []) for a in ("coins", "shipped", "pending")}
             changed = ingest(stored, entries)
-            await self.bridge.set_history(user["user_id"], changed)
-            if saved:   # zählt für die 7-Tage-Pflicht, je GTCHA-Konto (Fingerabdruck aus dem Lesezeichen)
-                # Zuordnung über die GTCHA-Mitglieds-ID; ältere Lesezeichen schicken nur einen Fingerabdruck davon
-                mid = str(data.get("mid") or "")
-                acc = str(data.get("acc") or "")
-                if re.fullmatch(r"[A-Za-z0-9_-]{1,32}", mid):
-                    hashed = hashlib.sha256(f"gtcha-tracker:{mid}".encode()).hexdigest()[:16]
-                    await self.bridge.rename_account(user["user_id"], hashed, f"id:{mid}")
-                    acc = f"id:{mid}"
-                else:
-                    acc = acc if re.fullmatch(r"[0-9a-f]{8,32}", acc) else None
+            # Seite geladen, aber keine Karte erkannt (z. B. geändertes Layout): melden und Seitenanfang loggen
+            for path, area, label in (("pending-detail", "pending", "Angefordert"), ("shipped-detail", "shipped", "Versendet")):
+                entry = next((e for e in entries if e["path"] == path), None)
+                if entry and area in changed and not changed[area]["items"]:
+                    head = [ln.strip()[:60] for ln in ((entry["pages"][0] or {}).get("text") or "").split("\n")
+                            if ln.strip()][:15]
+                    logger.info(f"Sync von {user['name']}: {path} ohne erkannte Karten "
+                                f"(vorher {before.get(area, 0)}) · Seitenanfang: {' | '.join(head)}")
+                    if before.get(area):
+                        warnings.append(f"⚠️ {label}: auf der Seite keine Karten erkannt (vorher {before[area]}). "
+                                        f"Falls dort Karten stehen, bitte dem Admin Bescheid geben.")
+            await self.bridge.set_history(user["user_id"], changed, acc)
+            if saved:   # zählt für die 7-Tage-Pflicht, je GTCHA-Konto
                 await self.bridge.mark_synced(user["user_id"], acc)
                 sync_now = sync_rule(await self.bridge.sync_state(user["user_id"]))
                 sync_now["this"] = acc
                 logger.info(f"Sync von {user['name']}: Konto-Kennung {acc or 'FEHLT'} "
                             f"(Quelle {data.get('accsrc') or '–'}, Lesezeichen v{data.get('v')})")
             gap = any(a.get("gap") for a in changed.values())
-            added = {a: len(changed[a]["items"]) - before[a] for a in before if a in changed}
+            added = {a: len(changed[a]["items"]) - before[a] for a in before if a in changed and a != "pending"}
         except Exception as e:
             logger.warning(f"Verlauf nicht übernommen: {type(e).__name__}: {e}")
         claims = 0
@@ -453,6 +467,7 @@ class App:
             lines.append("⚠️ Zwischen alt und neu fehlt evtl. etwas – einmal „Komplett übertragen“ benutzen.")
         if claims:
             lines.append(f"🏅 {claims} Medaille(n) automatisch gemeldet.")
+        lines += warnings
         if sync_now and not sync_now.get("this"):
             lines.append("👤 Konto-Kennung nicht erkannt – wer mehrere GTCHA-Konten hat: Lesezeichen in der App neu "
                          "kopieren und ersetzen; sonst zählen beide Konten als eins.")
@@ -465,12 +480,21 @@ class App:
 
     async def auto_claim(self, user: Dict) -> list:
         """Angeforderte Karten (noch nicht verschickt) automatisch als Medaille melden, wenn eindeutig."""
-        cards = ((await self.history(user)).get("pending") or {}).get("items") or []
+        stored = await self.history(user)
+        cards = (stored.get("pending") or {}).get("items") or []
         if not cards:
             return []
-        banners, _ = await self.view.history_context(None)
+        # eigene Öffnungen je Banner (aus dem Münzverlauf) - ohne Verlauf wird nichts automatisch gemeldet
+        events = stored_events(stored)
+        if not events:
+            return []
+        first = min(c.get("date") or "9999" for c in cards)
+        since = datetime.strptime(first[:10], "%Y-%m-%d") - timedelta(days=CLAIM_OPEN_DAYS + 1) \
+            if first != "9999" else datetime.now() - timedelta(days=60)
+        banners, moves = await self.view.history_context(since)
+        attribute_opens(events, banners, moves)
         planned = plan_claims(cards, banners, await self.view.claim_targets(), user["user_id"],
-                              await self.bridge.auto_claim_keys(user["user_id"]))
+                              await self.bridge.auto_claim_keys(user["user_id"]), opens_by_banner(events))
         for p in planned:
             await self.bridge.add_auto_claim(user, p["key"], p["pack_id"], p["tier"])
             logger.info(f"Automatische Medaille für {user['name']}: {p['card']} -> {p['pack_id']} {p['tier']}")
