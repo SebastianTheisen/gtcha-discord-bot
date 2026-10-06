@@ -76,7 +76,23 @@ else:
 # 2./3. Versand-Schübe und Medaillen-Fristen
 out("\n== 2. Versand-Schübe: womit sie erklärt werden")
 rows = db.execute("SELECT pack_id, is_active, category, price_coins, card_pool, ship_batches FROM banners "
-                  "WHERE card_pool IS NOT NULL AND ship_batches IS NOT NULL").fetchall()
+                  "WHERE card_pool IS NOT NULL").fetchall()
+
+
+def rebuild_batches(pid):
+    """Schübe aus dem Versand-Verlauf (wie database.rebuild_ship_batches), falls nach einer neuen
+    Auswertungs-Version noch nicht neu aufgebaut."""
+    out, total_c, total_v = [], 0, 0
+    for r in db.execute("SELECT old_cards, new_cards, old_coins, new_coins, changed_at FROM shipment_history "
+                        "WHERE banner_id = ? ORDER BY id", (pid,)):
+        old_c, new_c, old_v, new_v, changed = r
+        if old_c is None or new_c is None or new_c <= old_c:
+            continue
+        if old_c > total_c:
+            out.append([old_c - total_c, (old_v or 0) - total_v, None])
+        out.append([new_c - old_c, (new_v or 0) - (old_v or 0), ts(changed)])
+        total_c, total_v = new_c, new_v or 0
+    return out
 tiers = Counter()
 per_factor = {}
 factor_diffs = []
@@ -84,7 +100,7 @@ deadline_stats = Counter()
 detail_lines = []
 for row in rows:
     pool = json.loads(row["card_pool"])
-    batches = json.loads(row["ship_batches"] or "[]")
+    batches = json.loads(row["ship_batches"]) if row["ship_batches"] else rebuild_batches(row["pack_id"])
     hits = [u for u in tracked_units(pool) if u.get("shipping_only")]
     if not hits or not batches:
         continue
@@ -177,8 +193,8 @@ if os.path.exists(APP_DB):
         acc = evaluate(by)
         out(f"{acc['count']} Banner · Ø Abweichung {acc['mean_abs']} %-Punkte · Richtung {acc['bias']} "
             f"(+ = Vorhersage zu hoch)")
-        out(f"Gesamt nach Packs gewichtet: vorhergesagt {acc.get('weighted_predicted')} % · tatsächlich "
-            f"{acc.get('weighted_realized')} % · {acc.get('sold')} Packs")
+        out(f"Gesamt nach Einsatz gewichtet: vorhergesagt {acc.get('weighted_predicted')} % · tatsächlich "
+            f"{acc.get('weighted_realized')} % · {acc.get('spent')} Coins Einsatz")
         for i in acc["items"]:
             out(f"  {i['id']}: vorhergesagt {i['predicted']} % · tatsächlich {i['realized']} % · {i['sold']} Packs",
                 detail=True)

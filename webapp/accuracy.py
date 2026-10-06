@@ -109,19 +109,21 @@ def evaluate(by_banner: Dict[int, list], lag: int = LAG_SECONDS) -> Dict:
         predicted = weighted / sold
         # Anfang: Stand beim ersten Eintrag; Ende: was `lag` nach dem letzten verglichenen Verkauf raus war
         realized = (out_at(end[1] + lag) - first[4]) / (sold * price) * 100
-        items.append({"id": bid, "title": snaps[-1][6], "sold": sold, "predicted": round(predicted, 1),
+        items.append({"id": bid, "title": snaps[-1][6], "sold": sold, "price": price, "predicted": round(predicted, 1),
                       "realized": round(realized, 1), "diff": round(predicted - realized, 1), "t": end[1]})
     items.sort(key=lambda x: -x["t"])
     items = items[:REPORT_LIMIT]
     n = len(items)
-    # gewichtet nach verkauften Packs: kleine Banner (ein Hit = riesiger Ausschlag) zählen weniger
+    # gewichtet nach eingesetzten Coins (Packs × Preis): kleine Banner (ein Hit = riesiger Ausschlag) und große
+    # Billig-Banner (zehntausende Packs zu wenigen Coins) verzerren den Gesamtwert nicht
+    spent = sum(i["sold"] * i["price"] for i in items)
+    w_pred = round(sum(i["predicted"] * i["sold"] * i["price"] for i in items) / spent, 1) if spent else None
+    w_real = round(sum(i["realized"] * i["sold"] * i["price"] for i in items) / spent, 1) if spent else None
     sold_all = sum(i["sold"] for i in items)
-    w_pred = round(sum(i["predicted"] * i["sold"] for i in items) / sold_all, 1) if sold_all else None
-    w_real = round(sum(i["realized"] * i["sold"] for i in items) / sold_all, 1) if sold_all else None
     return {"items": items, "count": n,
             "mean_abs": round(sum(abs(i["diff"]) for i in items) / n, 1) if n else None,
             "bias": round(sum(i["diff"] for i in items) / n, 1) if n else None,
-            "weighted_predicted": w_pred, "weighted_realized": w_real, "sold": sold_all}
+            "weighted_predicted": w_pred, "weighted_realized": w_real, "sold": sold_all, "spent": spent}
 
 
 def clean_snapshots(snaps: list) -> list:

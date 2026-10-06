@@ -30,10 +30,47 @@ class LearningMixin:
             "pulled": list(state["pulled"]), "unsure": list(state["unsure"]),
         }
 
+    async def _reevaluate_ended(self, ended: dict, limit: int = 10) -> int:
+        """Beendete Banner neu auswerten, deren Versand-Schübe nach einer neuen Auswertungs-Version fehlen (laufende
+        erledigt der normale Abruf; beendete kommen dort nicht mehr vor). Ohne Discord."""
+        done = 0
+        for pid, row in ended.items():
+            if done >= limit or row.get('ship_batches') or not row.get('card_pool') or not row.get('site_stats'):
+                continue
+            pool = json.loads(row['card_pool'])
+            if not pool.get('hits'):
+                continue
+            st = json.loads(row['site_stats'])
+            count, coins = _int(st.get("cards")), _int(st.get("coins"))
+            if not count:
+                continue
+            batches = await self.db.rebuild_ship_batches(pid, count, coins)
+            if row.get('category') == 'Store':
+                medal_thread = store_thread_id(pid)
+            else:
+                thread = await self.db.get_thread_by_banner_id(pid) or {}
+                medal_thread = int(thread['thread_id']) if thread.get('thread_id') else 0
+            keys = tier_keys(pool)
+            medal_t = {keys[t]: m["at"] for t, m in (await self.db.medal_rows(medal_thread)).items()
+                       if t in keys and m.get("at") and m["source"] != "admin"} if medal_thread else {}
+            deadlines = batch_deadlines(batches, medal_t)
+            joint = await asyncio.to_thread(match_shipment_history, pool, batches, VALUE_TOLERANCE, deadlines,
+                                            _int(row.get('price_coins')) or None)
+            rejected = await self.db.get_rejects(pid)
+            certain = [k for k in joint["certain"] if k not in rejected]
+            await self.db.set_pull_tracking(pid, row.get('decided_value'), count, coins, certain, joint["groups"],
+                                            batches)
+            done += 1
+        if done:
+            logger.info(f"[LERNEN] {done} beendete Banner neu ausgewertet")
+        return done
+
     async def _learn_ship_odds(self):
         try:
             cases = await self.db.get_cases()
             ended = await self.db.get_ended_banners()
+            if await self._reevaluate_ended(ended):
+                ended = await self.db.get_ended_banners()
             for pid, row in ended.items():
                 case = await self._banner_case(pid, row)
                 if case is not None:
