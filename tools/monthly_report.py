@@ -51,6 +51,21 @@ def ts(iso):
         return None
 
 
+def coins(v):
+    return f"{v:,}".replace(",", ".")
+
+
+def unexplained_line(pid, pool, price, count, value, when):
+    """Ein nicht erklärter Schub mit den Pool-Karten, die vom Wert her am nächsten liegen."""
+    when = datetime.fromtimestamp(when).strftime("%d.%m. %H:%M") if when else "Zeit unbekannt"
+    head = f"  {pid}: {count} Karte(n), {coins(value)} Coins, {when}"
+    if price and value < count * price * card_pool.SHIP_NORMAL_MIN_FACTOR:
+        return head + " · nur günstige Karten (für Hits egal)"
+    near = sorted(pool.get("cards") or [], key=lambda c: abs(c["value"] - value / count))[:3]
+    return head + " · nächste Karten: " + ", ".join(
+        f"{c['name'][:25]} {coins(c['value'])}{' (Hit)' if c.get('hit') else ''} ×{c['copies']}" for c in near)
+
+
 def table_exists(name):
     return bool(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone())
 
@@ -126,7 +141,7 @@ for row in rows:
                 break
         tiers[kind] += 1
         if kind == "gar nicht":
-            unexplained.append(f"  {row['pack_id']}: {count} Karte(n), {value:,} Coins, {b[2] or 'Zeit unbekannt'}".replace(",", "."))
+            unexplained.append(unexplained_line(row["pack_id"], pool, price, count, value, b[2]))
     # Medaillen mit Zeit (ohne Admin-Haken) für die Fristen
     keys = tier_keys(pool)
     if row["is_active"] == 2 or row["category"] == "Store":
