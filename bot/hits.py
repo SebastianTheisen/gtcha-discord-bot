@@ -46,7 +46,8 @@ class HitsMixin:
         site = json.loads(row['site_stats']) if row.get('site_stats') else {}
         out_value = out_of_banner_value(pool, row.get('converted'), _int(site.get('coins')),
                                         set(winners) - shipped_keys, shipped_keys)
-        return estimate(pool, get('current_packs'), get('total_packs'), pulled, get('price_coins'), out_value)
+        hidden = await self._hidden_rate() if hasattr(self, "_hidden_rate") else None
+        return estimate(pool, get('current_packs'), get('total_packs'), pulled, get('price_coins'), out_value, hidden)
 
     async def _pulled_cards(self, thread_id: int, pack_id: int, pool: dict) -> tuple:
         """(gezogene Karten inkl. Stellvertreter, nur automatisch erkannte, Gewinner, offene ❓-Gruppen).

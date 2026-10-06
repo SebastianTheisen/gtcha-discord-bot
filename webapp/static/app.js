@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 91;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 92;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -1468,6 +1468,7 @@ async function showUsers() {
       <div class="line"><span>Datenbank / App</span><span>${st.db_mb} / ${st.app_db_mb} MB</span></div>
       <div class="line"><span>Discord</span><span>${st.slim ? `schlank · ${st.delay_minutes} Min` : "voll"} · ${st.outbox ?? "–"} wartend${st.slim && !st.cleanup_done ? " · räumt auf" : ""}</span></div>
       <div class="line"><span>Lernen: Fälle / Versand-Beobachtungen</span><span>${num(st.learn_cases || 0)} / ${num(st.learn_observations || 0)}</span></div>
+      <div class="line"><span>Hits unsichtbar gezogen (gelernt)</span><span>${st.hidden_rate != null ? pct(st.hidden_rate * 100) : "–"}</span></div>
       <div class="line"><span>Nutzer / gesperrt / Push-Geräte</span><span>${st.users} / ${st.blocked} / ${st.push_devices}</span></div>
     </div>` : `<div class="hint pad">Status nicht verfügbar</div>`;
   view.innerHTML = `<div class="section-title">👥 Nutzer <small class="muted">${users.length}</small></div>

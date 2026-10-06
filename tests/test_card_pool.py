@@ -1,5 +1,5 @@
 from utils.card_pool import (
-    detect_jump_pulls, estimate, match_shipped_hits, summarize_cards, tier_keys, tracked_units,
+    detect_jump_pulls, estimate, hit_still_in, match_shipped_hits, summarize_cards, tier_keys, tracked_units,
 )
 
 
@@ -101,6 +101,24 @@ def test_estimate_drops_when_top_hit_is_pulled():
     without_top = estimate(pool, 90, 100, {top}, 1000)
     assert without_top["ev"] < with_top["ev"]
     assert without_top["hits_open"] == 4 and without_top["open_tiers"] == ["T2", "T3"]
+
+
+def test_hit_still_in_uses_learned_hidden_rate():
+    assert hit_still_in(1.0, 0.4) == 1.0
+    assert abs(hit_still_in(0.5, 0.4) - 0.5 / 0.7) < 1e-9
+    assert hit_still_in(0.5, None) == 1.0
+
+
+def test_estimate_counts_unseen_hits_only_by_chance_still_in():
+    pool = hit_pool()
+    plain = estimate(pool, 50, 100, set(), 1000)
+    hidden = estimate(pool, 50, 100, set(), 1000, hidden_rate=0.4)
+    assert hidden["ev"] < plain["ev"] and hidden["hits_left"] < plain["hits_left"]
+    assert abs(hidden["hit_still_in"] - 0.714) < 0.001
+    # mit echten Zahlen der Seite: unsichtbar gezogene Hits zusätzlich abziehen
+    seen = estimate(pool, 50, 100, set(), 1000, out_value=10000)
+    both = estimate(pool, 50, 100, set(), 1000, out_value=10000, hidden_rate=0.4)
+    assert both["data_based"] and both["ev"] < seen["ev"]
 
 
 def test_tier_keys_follow_hit_list_order():

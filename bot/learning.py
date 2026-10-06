@@ -65,12 +65,49 @@ class LearningMixin:
             logger.info(f"[LERNEN] {done} beendete Banner neu ausgewertet")
         return done
 
+    async def _learn_hidden_rate(self, ended: dict) -> None:
+        """Wie oft bleibt ein gezogener Versand-Hit unsichtbar (kein erkannter Versand, keine Medaille)?
+        Gemessen an ausverkauften Bannern - dort sind sicher alle Hits gezogen. Für die Ø Rückgabe."""
+        hits = hidden = banners = 0
+        for pid, row in ended.items():
+            if row.get('current_packs') or not row.get('card_pool'):
+                continue
+            pool = json.loads(row['card_pool'])
+            units = [u for u in tracked_units(pool) if u.get("shipping_only")]
+            if not units:
+                continue
+            if row.get('category') == 'Store':
+                medal_thread = store_thread_id(pid)
+            else:
+                thread = await self.db.get_thread_by_banner_id(pid) or {}
+                medal_thread = int(thread['thread_id']) if thread.get('thread_id') else 0
+            keys = tier_keys(pool)
+            medal_keys = {keys[t] for t in (await self.db.medal_rows(medal_thread)) if t in keys} if medal_thread else set()
+            seen = set((await self.db.get_pull_tracking(pid))["pulled"]) | medal_keys
+            hits += len(units)
+            hidden += sum(1 for u in units if u["key"] not in seen)
+            banners += 1
+        # mit Startannahme 40 % (Gewicht 5 Hits), damit wenige Banner nicht zu stark ausschlagen
+        rate = (hidden + 0.4 * 5) / (hits + 5)
+        await self.db.set_meta("hidden_hit_rate", json.dumps({"rate": round(rate, 3), "hits": hits,
+                                                              "hidden": hidden, "banners": banners}))
+        self._hidden_rate_value = rate
+
+    async def _hidden_rate(self) -> float:
+        if getattr(self, "_hidden_rate_value", None) is None:
+            try:
+                self._hidden_rate_value = json.loads(await self.db.get_meta("hidden_hit_rate") or "{}").get("rate", 0.4)
+            except ValueError:
+                self._hidden_rate_value = 0.4
+        return self._hidden_rate_value
+
     async def _learn_ship_odds(self):
         try:
             cases = await self.db.get_cases()
             ended = await self.db.get_ended_banners()
             if await self._reevaluate_ended(ended):
                 ended = await self.db.get_ended_banners()
+            await self._learn_hidden_rate(ended)
             for pid, row in ended.items():
                 case = await self._banner_case(pid, row)
                 if case is not None:
