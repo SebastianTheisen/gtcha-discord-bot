@@ -46,3 +46,12 @@ def test_evaluate_measures_result_one_day_later():
     assert item["realized"] == 100.0           # ohne Versatz wären es nur 60 %
     assert evaluate({1: snaps}, lag=0)["items"][0]["realized"] == 100.0   # Gesamtzeitraum: Archiv mit dabei
     assert evaluate({1: snaps[:2]})["count"] == 0                          # noch keine 24 Std. Abstand
+
+
+def test_evaluate_ignores_site_glitches_and_weights_by_packs():
+    h = 3600
+    # Ausreißer der Seite: 134 -> 432 -> 134 darf nicht als 298 verkaufte Packs zählen
+    snaps = [(1, 0, 100.0, 300, 0, 1000, "A"), (1, 1 * h, 100.0, 432, 0, 1000, "A"),
+             (1, 2 * h, 100.0, 200, 80_000, 1000, "A"), (1, 30 * h, None, 200, 100_000, 1000, "A")]
+    r = evaluate({1: snaps})
+    assert r["items"][0]["sold"] == 100 and r["weighted_predicted"] == 100.0 and r["sold"] == 100

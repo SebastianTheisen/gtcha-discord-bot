@@ -89,6 +89,9 @@ def evaluate(by_banner: Dict[int, list], lag: int = LAG_SECONDS) -> Dict:
     oder umgewandelt)."""
     items = []
     for bid, snaps in by_banner.items():
+        snaps = clean_snapshots(snaps)
+        if len(snaps) < 2:
+            continue
         last_t = snaps[-1][1]
         window = [s for s in snaps if s[1] <= last_t - lag]
         if len(window) < 2:
@@ -111,6 +114,22 @@ def evaluate(by_banner: Dict[int, list], lag: int = LAG_SECONDS) -> Dict:
     items.sort(key=lambda x: -x["t"])
     items = items[:REPORT_LIMIT]
     n = len(items)
+    # gewichtet nach verkauften Packs: kleine Banner (ein Hit = riesiger Ausschlag) zählen weniger
+    sold_all = sum(i["sold"] for i in items)
+    w_pred = round(sum(i["predicted"] * i["sold"] for i in items) / sold_all, 1) if sold_all else None
+    w_real = round(sum(i["realized"] * i["sold"] for i in items) / sold_all, 1) if sold_all else None
     return {"items": items, "count": n,
             "mean_abs": round(sum(abs(i["diff"]) for i in items) / n, 1) if n else None,
-            "bias": round(sum(i["diff"] for i in items) / n, 1) if n else None}
+            "bias": round(sum(i["diff"] for i in items) / n, 1) if n else None,
+            "weighted_predicted": w_pred, "weighted_realized": w_real, "sold": sold_all}
+
+
+def clean_snapshots(snaps: list) -> list:
+    """Kurze Ausreißer der Seite entfernen (z. B. 134 -> 432 -> 134 Packs): Packs können nur sinken - ein Stand
+    über dem vorigen fliegt raus."""
+    out = []
+    for s in snaps:
+        if out and s[3] > out[-1][3]:
+            continue
+        out.append(s)
+    return out
