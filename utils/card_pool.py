@@ -360,19 +360,25 @@ def _valuable_pool(pool: Dict, price: Optional[int]) -> Optional[Dict]:
 
 
 def _ship_options(pool: Dict, classes: List[Dict], count: int, value: int, tol: float,
-                  price: Optional[int] = None, hits_needed: bool = False) -> Optional[List[tuple]]:
+                  price: Optional[int] = None, hits_needed: bool = False,
+                  need: Optional[List[int]] = None) -> Optional[List[tuple]]:
     """Mögliche Aufteilungen eines Versand-Schubs, in dieser Rangfolge (die erste, die aufgeht, gilt):
       1. mit wertvollen normalen Karten (ab 3× Packpreis) - als Karten, sonst als Versand-Aufträge
          (dort zuerst allein aus Versand-Hits, siehe order_options)
       2. mit allen Karten - billige Karten werden fast immer umgewandelt, aber nicht immer
     hits_needed: als Versand-Aufträge nur zählen, wenn dabei ein Hit ins Spiel kommt (Einzelansicht).
+    need: nur Aufteilungen mit mindestens so vielen Hits je Klasse (Medaillen-Karten) - dann wird in jeder Stufe
+    gezielt danach gesucht, auch wenn eine frühere Stufe andere Erklärungen hatte.
     None = zu viele Möglichkeiten."""
+    ok = (lambda t: all(x >= n for x, n in zip(t, need))) if need else (lambda t: True)
+
     def options(p):
         found = _batch_options(p, classes, count, value, tol) if count > 0 else []
         if found is None:
             return None
+        found = [t for t in found if ok(t)]
         if not found and classes and value <= ORDER_MAX_VALUE:
-            orders = _order_class_options(p, classes, count, value)
+            orders = [t for t in _order_class_options(p, classes, count, value) if ok(t)]
             found = orders if not hits_needed or any(any(t) for t in orders) else []
         return found
     valuable = _valuable_pool(pool, price)
@@ -548,19 +554,30 @@ def explain_batch(pool: Dict, count: int, value: int, pulled_keys: Set[str],
     # Hits, deren Medaillen-Frist dieser Schub ist (batch_deadlines), müssen drin sein - wenn das aufgeht
     need = [sum(1 for k in required if k in cls["keys"]) for cls in classes]
     forced = [k for k in required if any(k in cls["keys"] for cls in classes)]
-    if not possible:
-        if forced and count >= len(forced):   # Medaille hat Vorrang vor dem Wert
-            return {**base, "kind": "hits", "certain": sorted(forced), "groups": [], "mismatch": sorted(forced)}
-        return base
     if forced:
-        kept = [t for t in possible if all(x >= n for x, n in zip(t, need))]
-        if kept:
-            possible = kept
+        # in allen Stufen gezielt nach Erklärungen MIT den Medaillen-Karten suchen
+        with_medal = _ship_options(pool, classes, count, gross, tol, price, need=need)
+        if with_medal:
+            possible = with_medal
         elif count >= len(forced):
-            # Medaille hat Vorrang vor dem Wert (siehe match_shipment_history)
-            return {**base, "kind": "hits", "certain": sorted(forced), "groups": [], "mismatch": sorted(forced)}
+            # Medaille hat Vorrang vor dem Wert (siehe match_shipment_history) - den Rest des Schubs trotzdem
+            # nach weiteren Hits durchsuchen
+            rest_count = count - len(forced)
+            rest_value = gross - sum(next(c["min"] for c in classes if k in c["keys"]) for k in forced)
+            rest_units = [u for u in open_hits if u["key"] not in forced]
+            rest_classes = _value_classes(rest_units, tol) if rest_units else []
+            out = {**base, "kind": "hits", "certain": sorted(forced), "groups": [], "mismatch": sorted(forced)}
+            if rest_count > 0 and rest_value > 0 and rest_classes:
+                rest = _ship_options(pool, rest_classes, rest_count, rest_value, tol, price, hits_needed=True)
+                if rest and any(any(t) for t in rest):
+                    more = _summarize_options(rest_classes, rest, rest_units)
+                    out["certain"] = sorted(forced) + more["certain"]
+                    out["groups"] = more["groups"]
+            return out
         else:
             forced = []
+    if not possible:
+        return base
     if all(not any(t) for t in possible):
         return {**base, "kind": "normal"}
     match = _summarize_options(classes, possible, open_hits)
@@ -629,22 +646,21 @@ def match_shipment_history(pool: Dict, batches: List[List], tol: float = VALUE_T
         now_due = [k for k, j in due.items() if j == i]
         value = round(net * TAX_FACTOR)
         options = None
-        if not (count < 0 or value <= 0 or count > MAX_SHIPMENT_CARDS or value > MAX_SHIPMENT_VALUE):
+        valid = not (count < 0 or value <= 0 or count > MAX_SHIPMENT_CARDS or value > MAX_SHIPMENT_VALUE)
+        if valid:
             # Geht der Schub als Karten nicht auf: der Zähler zählt manchmal Versand-Aufträge (mehrere Karten
             # je Auftrag, Karten nachträglich zu einem Auftrag) - dann muss der Wert fast exakt aufgehen
             options = _ship_options(pool, classes, count, value, tol, price)
-        # Medaille hat Vorrang vor dem Wert: die Seite zählt manchmal einen anderen Wert als den Kartenwert
-        # (24188: Mewtwo 26.740, um 17:49 angefordert, im Schub 18:00 als 19.580 gezählt) - dann gehört der Hit
-        # trotzdem in diesen Schub, der Wert wird nicht weiter zerlegt
-        def forced_states():
-            opt = [0] * len(classes)
-            for k in now_due:
-                opt[class_of[k]] += 1
+
+        def combine(opts):
             out = set()
             for st in states:
-                cand = tuple(x + y for x, y in zip(st, opt))
-                if all(c <= sz for c, sz in zip(cand, sizes)):
-                    out.add(cand)
+                for opt in opts:
+                    cand = tuple(x + y for x, y in zip(st, opt))
+                    if all(c <= sz for c, sz in zip(cand, sizes)):
+                        out.add(cand)
+                if len(out) > 50000:
+                    return None
             return out
 
         def need(keys):
@@ -653,36 +669,42 @@ def match_shipment_history(pool: Dict, batches: List[List], tol: float = VALUE_T
                 req[class_of[k]] += 1
             return req
 
-        can_force = bool(now_due) and count >= len(now_due) and value > 0
-        if not options:
-            if can_force and forced_states():
-                states = forced_states()
-                enforced |= set(now_due)
-                result["value_mismatch"] += now_due
-                result["used_batches"] += 1
-            else:
-                result["ignored_deadlines"] += now_due   # Frist-Schub nicht auswertbar: Frist nicht prüfbar
-            continue
-        combined = set()
-        for st in states:
-            for opt in options:
-                cand = tuple(x + y for x, y in zip(st, opt))
-                if all(c <= sz for c, sz in zip(cand, sizes)):
-                    combined.add(cand)
-            if len(combined) > 50000:
-                return result
         if now_due:
+            # 1. In allen Stufen gezielt nach Erklärungen MIT den Medaillen-Karten suchen
+            with_medal = _ship_options(pool, classes, count, value, tol, price, need=need(now_due)) if valid else None
+            combined = combine((options or []) + (with_medal or []))
+            if combined is None:
+                return result
             req = need(enforced | set(now_due))
             kept = {st for st in combined if all(x >= r for x, r in zip(st, req))}
             if kept:
                 combined = kept
                 enforced |= set(now_due)
-            elif can_force and forced_states():
-                combined = {st for st in forced_states() if all(x >= r for x, r in zip(st, req))} or forced_states()
-                enforced |= set(now_due)
-                result["value_mismatch"] += now_due
+            elif count >= len(now_due) and value > 0:
+                # 2. Medaille hat Vorrang vor dem Wert: die Seite zählt manchmal einen anderen Wert (24188: Mewtwo
+                # 26.740 im Schub 18:00 als 19.580). Den Rest des Schubs (übrige Karten, Betrag ohne die
+                # Medaillen-Karten) trotzdem nach weiteren Hits durchsuchen
+                forced = need(now_due)
+                rest_count = count - len(now_due)
+                rest_value = value - sum(classes[class_of[k]]["min"] for k in now_due)
+                rest = (_ship_options(pool, classes, rest_count, rest_value, tol, price)
+                        if rest_count > 0 and rest_value > 0 else None)
+                opts = [tuple(f + o for f, o in zip(forced, r)) for r in rest] if rest else [tuple(forced)]
+                combined = combine(opts) or combine([tuple(forced)]) or set()
+                combined = {st for st in combined if all(x >= r for x, r in zip(st, req))} or combined
+                if combined:
+                    enforced |= set(now_due)
+                    result["value_mismatch"] += now_due
+                else:
+                    result["ignored_deadlines"] += now_due
             else:
-                result["ignored_deadlines"] += now_due
+                result["ignored_deadlines"] += now_due   # Frist-Schub ohne Karte: nichts zu prüfen
+        else:
+            if not options:
+                continue
+            combined = combine(options)
+            if combined is None:
+                return result
         if not combined:
             continue  # widerspricht den anderen Schüben: übergehen statt falsch zuordnen
         states = combined
