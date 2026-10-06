@@ -63,7 +63,13 @@ def pack_timeline(moves: List[tuple], converts: List[tuple], shipments: List[Dic
             current = e["new"]
         else:
             e["packs"] = current
-    return list(reversed(timeline))[:limit]
+    events = list(reversed(timeline))[:limit]
+    for s in shipments:   # vor Beginn der Aufzeichnung: ohne Zeit, ganz unten
+        if s.get("before"):
+            events.append({"kind": "out", "t": None, "before": True, "converted": 0, "ship_cards": s.get("cards") or 0,
+                           "ship_value": s.get("value") or 0, "players": s.get("players") or 0, "packs": None,
+                           "explain": [l for l in s.get("explain") or [] if l.get("icon") in ("✅", "❓")]})
+    return events
 
 
 def buy_url(row: Dict) -> str:
@@ -458,6 +464,15 @@ class BannerView:
             shipments = [{"t": epoch(r[0]), "cards": (r[2] or 0) - (r[1] or 0), "coins": (r[4] or 0) - (r[3] or 0),
                           "players": (r[6] or 0) - (r[5] or 0), "total_cards": r[2]}
                          for r in await cur.fetchall()]
+            # schon verschickt, bevor der Bot den Banner beobachtet hat (Stand vor dem ersten Eintrag)
+            cur = await conn.execute("SELECT old_cards, old_coins, old_players FROM shipment_history "
+                                     "WHERE banner_id = ? ORDER BY id LIMIT 1", (pack_id,))
+            first = await cur.fetchone()
+        site = json.loads(row['site_stats']) if row.get('site_stats') else {}
+        pre = first or (site.get("cards"), site.get("coins"), site.get("players"))
+        if (to_int(pre[0]) or 0) > 0:
+            shipments.append({"t": None, "before": True, "cards": to_int(pre[0]), "coins": to_int(pre[1]) or 0,
+                              "players": to_int(pre[2]) or 0, "total_cards": to_int(pre[0])})
         data["history"] = history
         data["shipments"] = await self._explain_shipments(row, data, shipments)
         async with aiosqlite.connect(self.db.db_path) as conn:
