@@ -142,6 +142,8 @@ for row in rows:
             if value <= card_pool.ORDER_MAX_VALUE and _order_class_options(p, classes, count, value):
                 kind = f"Aufträge · {name}"
                 break
+        if kind == "gar nicht" and card_pool._off_value_hit_options(pool, classes, count, value, VALUE_TOLERANCE):
+            kind = "Hit mit anderem Wert (Einzelkarte über allen normalen)"
         tiers[kind] += 1
         if kind == "gar nicht":
             unexplained.append(unexplained_line(row["pack_id"], pool, price, count, value, b[2]))

@@ -258,7 +258,10 @@ def test_explain_batch_kinds():
     assert group["kind"] == "hits" and len(group["groups"]) == 1
     assert explain_batch(pool, 1, 600, set())["kind"] == "normal"
     assert explain_batch(pool, 80, 999999, set())["kind"] == "too_big"
-    assert explain_batch(pool, 1, 12345, set())["kind"] == "unclear"
+    # einzelne Karte über allen normalen, passt zu keinem Wert: Hit mit anderem Wert der Seite (Spanne ×1,6)
+    odd = explain_batch(pool, 1, 12345, set())
+    assert odd["kind"] == "hits" and odd["certain"] == [keys["Pikachu"]] and odd["off_value"]
+    assert explain_batch(pool, 1, 5000, set())["kind"] == "unclear"
     # schon verschickter Hit zählt nicht noch einmal
     assert explain_batch(pool, 1, 16100, {keys["Pikachu"]})["kind"] == "unclear"
     # Hit mit gleichem Wert wie eine normale Karte: nur "vielleicht"
@@ -511,3 +514,17 @@ def test_medal_batch_with_more_hits():
     cheap = round((17000 + 700) / 1.1)
     res = match_shipment_history(pool, [[2, cheap, 1000]], deadlines={"3": 0}, price=1000)
     assert res["certain"] == ["3"] and res["value_mismatch"] == []
+
+
+def test_single_card_above_all_normals_is_hit_with_other_value():
+    """24082: Box 88.000 (Versand-Hit) zählt die Seite als 120.000 (×1,1 = 132.000) - höher als jede normale Karte."""
+    from utils.card_pool import explain_batch, match_shipment_history
+    pool = summarize_cards([card(1, 88000, copies=3, hit=True, name="Box"), card(2, 9000, hit=True, name="Klein"),
+                            card(3, 25100, copies=100, name="Coin")])
+    res = match_shipment_history(pool, [[1, 120000, 1000]])
+    names = {u["key"]: u["name"] for u in tracked_units(pool)}
+    assert [names[k] for k in res["certain"]] == ["Box"] and res["off_value"] == [0]
+    one = explain_batch(pool, 1, 120000, set())
+    assert one["kind"] == "hits" and [names[k] for k in one["certain"]] == ["Box"]
+    # unter der teuersten normalen Karte: keine Annahme
+    assert match_shipment_history(pool, [[1, 20000, 1000]])["certain"] == []
