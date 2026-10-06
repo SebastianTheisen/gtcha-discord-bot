@@ -22,6 +22,7 @@ from utils.hot_list import min_rank, needs_password, rank_entries
 
 BASE_URL = "https://gtchaxonline.com"
 PACK_HISTORY_LIMIT = 400
+EV_UNCERTAIN_REMAINING = 150   # bis hierhin kippt ein einzelner Hit die Ø Rückgabe
 
 
 def epoch(iso: Optional[str]) -> Optional[int]:
@@ -187,6 +188,7 @@ class BannerView:
             "status": self._status(row, thread, stats, pool, sure, winners),
             "ev": round(stats['ev']) if stats else None,
             "ev_pct": round(stats['ev_pct'], 1) if stats and stats.get('ev_pct') is not None else None,
+            "ev_uncertain": bool(stats and stats.get("ev_pct") is not None and 0 < (remaining or 0) <= EV_UNCERTAIN_REMAINING),
             "ev_from_site": bool(stats and stats.get('data_based')),
             "hits_open": (stats['hits_open'] if stats['tracked_hits'] else len(stats['open_tiers'])) if stats else None,
             "hits_total": (stats['hits_total'] if stats['tracked_hits'] else 3) if stats else None,

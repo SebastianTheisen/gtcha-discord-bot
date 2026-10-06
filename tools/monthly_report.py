@@ -98,6 +98,7 @@ per_factor = {}
 factor_diffs = []
 deadline_stats = Counter()
 detail_lines = []
+unexplained = []
 for row in rows:
     pool = json.loads(row["card_pool"])
     batches = json.loads(row["ship_batches"]) if row["ship_batches"] else rebuild_batches(row["pack_id"])
@@ -124,6 +125,8 @@ for row in rows:
                 kind = f"Aufträge · {name}"
                 break
         tiers[kind] += 1
+        if kind == "gar nicht":
+            unexplained.append(f"  {row['pack_id']}: {count} Karte(n), {value:,} Coins, {b[2] or 'Zeit unbekannt'}".replace(",", "."))
     # Medaillen mit Zeit (ohne Admin-Haken) für die Fristen
     keys = tier_keys(pool)
     if row["is_active"] == 2 or row["category"] == "Store":
@@ -161,6 +164,9 @@ for row in rows:
 total = sum(tiers.values())
 for kind, n in tiers.most_common():
     out(f"  {kind}: {n} ({n / total * 100:.0f} %)" if total else f"  {kind}: {n}")
+out("Nicht erklärte Schübe (Banner: Karten, Wert, Zeit):", detail=True)
+for line in unexplained:
+    out(line, detail=True)
 out("Sicher erkannte Hits je Packpreis-Faktor (aktuell 3): "
     + " · ".join(f"{f}×: {n}" for f, n in sorted(per_factor.items())))
 for line in factor_diffs:
