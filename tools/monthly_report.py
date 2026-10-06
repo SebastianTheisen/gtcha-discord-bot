@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, "/app")
 from utils import card_pool  # noqa: E402
+from utils.banner_info import berlin_time  # noqa: E402
 from utils.card_pool import (  # noqa: E402
     TAX_FACTOR, VALUE_TOLERANCE, _batch_options, _order_class_options, _valuable_pool, _value_classes,
     batch_deadlines, match_shipment_history, tier_keys, tracked_units,
@@ -57,10 +58,12 @@ def coins(v):
 
 def unexplained_line(pid, pool, price, count, value, when):
     """Ein nicht erklärter Schub mit den Pool-Karten, die vom Wert her am nächsten liegen."""
-    when = datetime.fromtimestamp(when).strftime("%d.%m. %H:%M") if when else "Zeit unbekannt"
+    when = berlin_time(int(when)).strftime("%d.%m. %H:%M") if when else "Zeit unbekannt"
     head = f"  {pid}: {count} Karte(n), {coins(value)} Coins, {when}"
-    if price and value < count * price * card_pool.SHIP_NORMAL_MIN_FACTOR:
-        return head + " · nur günstige Karten (für Hits egal)"
+    if price and value < count * price:
+        return head + " · unter Packpreis je Karte (für Hits egal)"
+    if price:
+        head += f" · Packpreis {coins(price)}"
     near = sorted(pool.get("cards") or [], key=lambda c: abs(c["value"] - value / count))[:3]
     return head + " · nächste Karten: " + ", ".join(
         f"{c['name'][:25]} {coins(c['value'])}{' (Hit)' if c.get('hit') else ''} ×{c['copies']}" for c in near)
