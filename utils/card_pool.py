@@ -545,15 +545,20 @@ def explain_batch(pool: Dict, count: int, value: int, pulled_keys: Set[str],
     possible = _ship_options(pool, classes, count, gross, tol, price, hits_needed=True)
     if possible is None:
         return {**base, "kind": "too_big"}
-    if not possible:
-        return base
     # Hits, deren Medaillen-Frist dieser Schub ist (batch_deadlines), müssen drin sein - wenn das aufgeht
     need = [sum(1 for k in required if k in cls["keys"]) for cls in classes]
     forced = [k for k in required if any(k in cls["keys"] for cls in classes)]
+    if not possible:
+        if forced and count >= len(forced):   # Medaille hat Vorrang vor dem Wert
+            return {**base, "kind": "hits", "certain": sorted(forced), "groups": [], "mismatch": sorted(forced)}
+        return base
     if forced:
         kept = [t for t in possible if all(x >= n for x, n in zip(t, need))]
         if kept:
             possible = kept
+        elif count >= len(forced):
+            # Medaille hat Vorrang vor dem Wert (siehe match_shipment_history)
+            return {**base, "kind": "hits", "certain": sorted(forced), "groups": [], "mismatch": sorted(forced)}
         else:
             forced = []
     if all(not any(t) for t in possible):
@@ -608,7 +613,8 @@ def match_shipment_history(pool: Dict, batches: List[List], tol: float = VALUE_T
     price (Packpreis): billige normale Karten nur, wenn es ohne sie nicht aufgeht (siehe _ship_options).
     Ergebnis wie match_shipped_hits, plus "used_batches".
     """
-    result = {"certain": [], "groups": [], "maybe": [], "used_batches": 0, "ignored_deadlines": []}
+    result = {"certain": [], "groups": [], "maybe": [], "used_batches": 0, "ignored_deadlines": [],
+              "value_mismatch": []}
     hits = [u for u in tracked_units(pool) if u["shipping_only"]]
     if not hits:
         return result
@@ -627,8 +633,35 @@ def match_shipment_history(pool: Dict, batches: List[List], tol: float = VALUE_T
             # Geht der Schub als Karten nicht auf: der Zähler zählt manchmal Versand-Aufträge (mehrere Karten
             # je Auftrag, Karten nachträglich zu einem Auftrag) - dann muss der Wert fast exakt aufgehen
             options = _ship_options(pool, classes, count, value, tol, price)
+        # Medaille hat Vorrang vor dem Wert: die Seite zählt manchmal einen anderen Wert als den Kartenwert
+        # (24188: Mewtwo 26.740, um 17:49 angefordert, im Schub 18:00 als 19.580 gezählt) - dann gehört der Hit
+        # trotzdem in diesen Schub, der Wert wird nicht weiter zerlegt
+        def forced_states():
+            opt = [0] * len(classes)
+            for k in now_due:
+                opt[class_of[k]] += 1
+            out = set()
+            for st in states:
+                cand = tuple(x + y for x, y in zip(st, opt))
+                if all(c <= sz for c, sz in zip(cand, sizes)):
+                    out.add(cand)
+            return out
+
+        def need(keys):
+            req = [0] * len(classes)
+            for k in keys:
+                req[class_of[k]] += 1
+            return req
+
+        can_force = bool(now_due) and count >= len(now_due) and value > 0
         if not options:
-            result["ignored_deadlines"] += now_due   # Frist-Schub nicht auswertbar: Frist nicht prüfbar
+            if can_force and forced_states():
+                states = forced_states()
+                enforced |= set(now_due)
+                result["value_mismatch"] += now_due
+                result["used_batches"] += 1
+            else:
+                result["ignored_deadlines"] += now_due   # Frist-Schub nicht auswertbar: Frist nicht prüfbar
             continue
         combined = set()
         for st in states:
@@ -638,22 +671,20 @@ def match_shipment_history(pool: Dict, batches: List[List], tol: float = VALUE_T
                     combined.add(cand)
             if len(combined) > 50000:
                 return result
-        if not combined:
-            result["ignored_deadlines"] += now_due
-            continue  # widerspricht den anderen Schüben: übergehen statt falsch zuordnen
         if now_due:
-            def need(keys):
-                req = [0] * len(classes)
-                for k in keys:
-                    req[class_of[k]] += 1
-                return req
             req = need(enforced | set(now_due))
             kept = {st for st in combined if all(x >= r for x, r in zip(st, req))}
             if kept:
                 combined = kept
                 enforced |= set(now_due)
+            elif can_force and forced_states():
+                combined = {st for st in forced_states() if all(x >= r for x, r in zip(st, req))} or forced_states()
+                enforced |= set(now_due)
+                result["value_mismatch"] += now_due
             else:
                 result["ignored_deadlines"] += now_due
+        if not combined:
+            continue  # widerspricht den anderen Schüben: übergehen statt falsch zuordnen
         states = combined
         result["used_batches"] += 1
     if not result["used_batches"]:

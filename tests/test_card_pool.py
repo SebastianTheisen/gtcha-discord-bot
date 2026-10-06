@@ -404,8 +404,11 @@ def test_medal_deadline_resolves_shipment():
     assert batch_deadlines(batches, {"3": 2000}) == {}
     # Schübe ohne Zeit (vor der Aufzeichnung) sind nie Frist-Schübe
     assert batch_deadlines([[1, 95800, None], [1, 95800, 1000]], {"3": 0}) == {"3": 1}
-    # Frist passt nicht (Schub enthält sicher keinen Hit): ignorieren statt falsch abhaken
+    # Wert passt nicht zur Medaillen-Karte: Medaille hat Vorrang (Seite zählt manchmal einen anderen Wert)
     res = match_shipment_history(pool, [[1, 300, 1000]], deadlines={"3": 0})
+    assert res["certain"] == ["3"] and res["value_mismatch"] == ["3"]
+    # ohne Karte im Frist-Schub (nur Wert geändert) gibt es nichts zu erzwingen
+    res = match_shipment_history(pool, [[0, 300, 1000]], deadlines={"3": 0})
     assert res["certain"] == [] and res["ignored_deadlines"] == ["3"]
     # Einzelansicht eines Schubs genauso
     one = explain_batch(pool, 1, 95800, set(), required={"3"})
@@ -446,3 +449,21 @@ def test_cheap_normal_cards_only_when_needed():
     # geht es nur mit billigen Karten, sind sie erlaubt
     res = match_shipment_history(pool, [[1, round(113000 / 1.1), 1000]], price=10000)   # H2 + 2 × 4.000
     assert res["certain"] == ["2"]
+
+
+def test_24188_medal_wins_over_counted_value():
+    # 24188: Mewtwo (T2, 26.740) um 17:49 gezogen + Medaille + Versand angefordert; der Schub um 18:00
+    # (+1 Karte, neuer Spieler) wurde als 19.580 gezählt. Um 23:00 kam nochmal 19.580 = Squirtle (T3).
+    from utils.card_pool import batch_deadlines, explain_batch, match_shipment_history, summarize_cards
+    pool = summarize_cards([
+        {"id": 1, "name": "Pikachu", "buy_point": 39380, "duplication": 1, "action_type": 2},
+        {"id": 2, "name": "Mewtwo", "buy_point": 26740, "duplication": 1, "action_type": 2},
+        {"id": 3, "name": "Squirtle", "buy_point": 19580, "duplication": 1, "action_type": 2},
+        {"id": 9, "name": "Normal", "buy_point": 550, "duplication": 497, "action_type": 0}])
+    batches = [[1, 17800, 1800], [1, 17800, 2300], [1, 35800, 2700]]
+    due = batch_deadlines(batches, {"2": 1749})
+    assert due == {"2": 0}
+    res = match_shipment_history(pool, batches, deadlines=due, price=1000)
+    assert sorted(res["certain"]) == ["1", "2", "3"] and res["value_mismatch"] == ["2"]
+    one = explain_batch(pool, 1, 17800, set(), required={"2"}, price=1000)
+    assert one["certain"] == ["2"] and one["mismatch"] == ["2"]
