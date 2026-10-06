@@ -68,3 +68,20 @@ def test_my_medals_lists_claimed_cards(tmp_path, monkeypatch):
         assert [(m["banner_id"], m["tier"], m["name"], m["value"]) for m in medals] == [(8, "T1", "Glurak", 36740)]
 
     asyncio.run(run())
+
+
+def test_pack_timeline_groups_moves_until_next_site_run():
+    from webapp.view import pack_timeline
+    m = 60
+    moves = [(1000, 394, 377), (1000 + 8 * m, 377, 347), (3000, 347, 336), (9000, 336, 330), (2500, 400, 410)]
+    converts = [(1800, 33440), (1810, 0), (3600, 19360)]
+    ships = [{"t": 1800, "cards": 1, "value": 19580, "players": 1,
+              "explain": [{"icon": "✅", "text": "Mewtwo"}, {"icon": "·", "text": "+ 0"}]}]
+    groups = pack_timeline(moves, converts, ships)
+    assert [g["sold"] for g in groups] == [6, 11, 47]                  # neueste zuerst, Anstieg ignoriert
+    first_run = groups[2]
+    assert first_run["packs_from"] == 394 and first_run["packs_to"] == 347
+    assert first_run["out"]["converted"] == 33440 and first_run["out"]["ship_cards"] == 1
+    assert [l["text"] for l in first_run["out"]["explain"]] == ["Mewtwo"]
+    assert groups[1]["out"]["converted"] == 19360
+    assert groups[0]["out"] is None                                     # nach dem letzten Lauf: noch offen

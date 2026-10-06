@@ -34,6 +34,45 @@ def epoch(iso: Optional[str]) -> Optional[int]:
         return None
 
 
+def pack_timeline(moves: List[tuple], converts: List[tuple], shipments: List[Dict], limit: int = 150) -> List[Dict]:
+    """Pack-Verlauf wie in Discord, gebündelt bis zum nächsten Sammellauf der Seite (alle 30 Minuten):
+    je Abschnitt die Pack-Updates und was danach raus war (umgewandelt, verschickt mit Hits).
+
+    moves: [(t, alt, neu)], converts: [(t, umgewandelt)], shipments: Versandschübe (mit t, cards, value, players,
+    explain) - Zeiten als Unix-Sekunden. Neueste Abschnitte zuerst."""
+    outs: List[Dict] = []
+    events = [(t, "conv", c) for t, c in converts if t and c > 0] + [(s["t"], "ship", s) for s in shipments if s.get("t")]
+    for t, kind, v in sorted(events, key=lambda e: e[0]):
+        if not outs or t - outs[-1]["t"] > 120:   # Umwandlung und Versand desselben Laufs zusammen
+            outs.append({"t": t, "converted": 0, "ship_cards": 0, "ship_value": 0, "players": 0, "explain": []})
+        o = outs[-1]
+        if kind == "conv":
+            o["converted"] += v
+        else:
+            o["ship_cards"] += v.get("cards") or 0
+            o["ship_value"] += v.get("value") or 0
+            o["players"] += v.get("players") or 0
+            o["explain"] += [l for l in v.get("explain") or [] if l.get("icon") in ("✅", "❓")]
+    groups: Dict[Optional[int], Dict] = {}
+    times = [o["t"] for o in outs]
+    for t, old, new in sorted(m for m in moves if m[0] and m[2] < m[1]):
+        i = next((n for n, ot in enumerate(times) if ot >= t), None)   # nächster Lauf nach dem Zug
+        g = groups.setdefault(i, {"moves": []})
+        g["moves"].append({"t": t, "old": old, "new": new})
+    for i, o in enumerate(outs):
+        groups.setdefault(i, {"moves": []})["out"] = o
+    result = []
+    for i, g in groups.items():
+        mv = g["moves"]
+        result.append({
+            "from": mv[0]["t"] if mv else None, "to": mv[-1]["t"] if mv else None,
+            "sold": sum(m["old"] - m["new"] for m in mv), "packs_from": mv[0]["old"] if mv else None,
+            "packs_to": mv[-1]["new"] if mv else None, "moves": list(reversed(mv)), "out": g.get("out"),
+            "sort": (g.get("out") or {}).get("t") or (mv[-1]["t"] if mv else 0) + (10 ** 10 if i is None else 0)})
+    result.sort(key=lambda g: g["sort"], reverse=True)
+    return result[:limit]
+
+
 def buy_url(row: Dict) -> str:
     return row.get('detail_page_url') or f"{BASE_URL}/pack-detail?packId={row['pack_id']}"
 
@@ -423,6 +462,14 @@ class BannerView:
                          for r in await cur.fetchall()]
         data["history"] = history
         data["shipments"] = await self._explain_shipments(row, data, shipments)
+        async with aiosqlite.connect(self.db.db_path) as conn:
+            cur = await conn.execute("SELECT changed_at, old_count, new_count FROM pack_history WHERE banner_id = ? "
+                                     "ORDER BY id DESC LIMIT 2000", (pack_id,))
+            moves = [(epoch(t), o, n) for t, o, n in await cur.fetchall()]
+            cur = await conn.execute("SELECT changed_at, old_coins, new_coins FROM convert_history WHERE banner_id = ? "
+                                     "ORDER BY id DESC LIMIT 500", (pack_id,))
+            converts = [(epoch(t), (n or 0) - (o or 0)) for t, o, n in await cur.fetchall()]
+        data["pack_timeline"] = pack_timeline(moves, converts, data["shipments"])
         odds, shipped = data.pop("_key_odds", {}), data.pop("_key_ship", {})
         medals = await self.db.medal_rows(data.get("medal_thread") or 0)
         for h in data.get("hits") or []:

@@ -63,7 +63,7 @@ Zugriff entziehen: dort die Freigabe wieder entfernen.
 
 ### Hits über die App melden (Medaillen)
 
-1. In Discord `/app-verknüpfen` eingeben – der Bot zeigt dir (nur für dich) einen Code, 10 Minuten gültig.
+1. In Discord `/tracker-verknüpfen` eingeben – der Bot zeigt dir (nur für dich) einen Code, 10 Minuten gültig.
 2. In der App unter **Push → Discord verknüpfen** den Code eingeben.
 3. Auf jeder Banner-Seite unter **„🏅 Gezogen melden“** auf „Ich hab's gezogen“ tippen. Der Bot prüft die
    Meldung wie ein „T1“ im Thread, postet sie im Discord-Thread (als dein Discord-Name) und aktualisiert

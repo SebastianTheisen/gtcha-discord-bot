@@ -65,8 +65,8 @@ class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, Hits
             callback=self.hotbanner_command
         ))
         self.tree.add_command(app_commands.Command(
-            name="app-verknüpfen",
-            description="Code, um die GTCHA-Tracker-App mit deinem Discord-Konto zu verknüpfen",
+            name="tracker-verknüpfen",   # in Discord nirgends "App"
+            description="Code, um den GTCHA Tracker mit deinem Discord-Konto zu verknüpfen",
             callback=self.app_link_command
         ))
 

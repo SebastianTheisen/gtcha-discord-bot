@@ -1,7 +1,7 @@
 """Brücke zwischen Web-App und Bot (data/webapp.db): Discord-Verknüpfung und Medaillen-Meldungen.
 
 Ablauf:
-  1. In Discord /app-verknüpfen -> der Bot legt einen Code an (10 Minuten gültig, einmal benutzbar).
+  1. In Discord /tracker-verknüpfen -> der Bot legt einen Code an (10 Minuten gültig, einmal benutzbar).
   2. In der App den Code eingeben -> die App legt ein Gerät an und gibt ihm ein geheimes Token.
   3. Medaille in der App melden -> die App legt eine Meldung an; der Bot holt sie ab, prüft sie wie
      eine Medaille in Discord, postet im Thread und trägt das Ergebnis ein (ok / abgelehnt + Grund).

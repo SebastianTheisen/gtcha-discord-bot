@@ -1,4 +1,4 @@
-"""Web-App: Discord-Verknüpfung (/app-verknüpfen) und Medaillen, die in der App gemeldet werden."""
+"""Web-App: Discord-Verknüpfung (/tracker-verknüpfen) und Medaillen, die in der App gemeldet werden."""
 
 import os
 import time
@@ -23,13 +23,13 @@ class AppLinkMixin:
         await self.app_bridge.init()
         name = interaction.user.display_name
         if await self.app_bridge.is_blocked(interaction.user.id):
-            await interaction.response.send_message("⛔ Du bist für die App gesperrt.", ephemeral=True)
+            await interaction.response.send_message("⛔ Du bist für den GTCHA Tracker gesperrt.", ephemeral=True)
             return
         code = await self.app_bridge.create_code(interaction.user.id, name)
         await interaction.response.send_message(
-            f"🔗 Dein Code für die GTCHA-Tracker-App: **`{code}`**\n"
-            f"In der App unter **Push → Discord verknüpfen** eingeben. Gültig {CODE_MINUTES} Minuten, "
-            f"nur einmal benutzbar. Danach kannst du in der App Hits melden – sie erscheinen hier als {name}.",
+            f"🔗 Dein Code für den GTCHA Tracker: **`{code}`**\n"
+            f"Im Tracker unter **Ich → Discord verknüpfen** eingeben. Gültig {CODE_MINUTES} Minuten, "
+            f"nur einmal benutzbar. Danach kannst du im Tracker Hits melden – sie erscheinen hier als {name}.",
             ephemeral=True)
         logger.info(f"App-Code erstellt für {name}")
 
@@ -114,7 +114,7 @@ class AppLinkMixin:
                 return False, f"{tier} hat jemand anderes gemeldet"
             await self.db.delete_medal(thread_id, tier)
             await self._post_app_medal(thread, thread_data, pack_id, emoji, add=False, silent=True,
-                                       text=f"↩️ {tier} von <@{user_id}> zurückgenommen *(über die App)*")
+                                       text=f"↩️ {tier} von <@{user_id}> zurückgenommen")
             logger.info(f"App-Medaille zurückgenommen: {tier} von {req['discord_name']} bei {pack_id}")
         else:
             problem = await self._invalid_medal_reason(pack_id, tier)
@@ -124,7 +124,7 @@ class AppLinkMixin:
                 return False, f"{tier} ist schon vergeben"
             await self.db.save_medal(thread_id, tier, user_id, source="app")
             await self._post_app_medal(thread, thread_data, pack_id, emoji, add=True, silent=False,
-                                       text=f"{emoji} {tier} geht an <@{user_id}>! *(über die App)*")
+                                       text=f"{emoji} {tier} geht an <@{user_id}>!")
             logger.info(f"App-Medaille: {tier} an {req['discord_name']} bei {pack_id}")
 
         await self._update_probability_message(thread_id, pack_id)
