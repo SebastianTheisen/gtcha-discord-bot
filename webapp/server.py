@@ -609,6 +609,7 @@ class App:
             "blocked": len([u for u in users if u.get("blocked")]),
             "push_devices": await self.push.count(),
             "learn_cases": learn.get("cases", 0), "learn_observations": learn.get("n", 0),
+            "hidden_rate": (json.loads(meta.get("hidden_hit_rate") or "{}") or {}).get("rate"),
         })
 
     async def api_admin_medal(self, request):

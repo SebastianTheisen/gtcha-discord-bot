@@ -179,6 +179,12 @@ learn = json.loads(meta[0]) if meta and meta[0] else {}
 out(f"Fälle {learn.get('cases', 0)} · Beobachtungen {learn.get('n', 0)} · Klassen (0-1h, 1-6h, 6-24h, 1-3T, 3-7T, "
     f"7-14T, 14T+): {learn.get('counts', [])}")
 
+out("\n== 4b. Unsichtbar gezogene Hits (für die Ø Rückgabe)")
+hm = db.execute("SELECT value FROM bot_meta WHERE key = 'hidden_hit_rate'").fetchone()
+hr = json.loads(hm[0]) if hm and hm[0] else {}
+out(f"Quote {hr.get('rate')} · {hr.get('hidden', 0)} von {hr.get('hits', 0)} Versand-Hits in {hr.get('banners', 0)} "
+    f"ausverkauften Bannern bis zum Ende weder als Versand erkannt noch per Medaille gemeldet")
+
 # 5. Treffsicherheit
 out("\n== 5. Treffsicherheit der Ø Rückgabe (Ergebnis 24 Std. später)")
 if os.path.exists(APP_DB):

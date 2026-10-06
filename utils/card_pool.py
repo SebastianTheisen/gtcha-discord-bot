@@ -217,14 +217,30 @@ def out_of_banner_value(pool: Dict, converted: Optional[int], shipped_counted: O
     return converted + shipped + extra
 
 
+def hit_still_in(remaining_share: float, hidden_rate: Optional[float]) -> float:
+    """Wahrscheinlichkeit, dass ein nicht erkannter Versand-Hit noch im Banner ist.
+
+    Ein gezogener Versand-Hit bleibt mit Wahrscheinlichkeit hidden_rate unsichtbar (nicht verschickt, keine
+    Medaille - gelernt aus ausverkauften Bannern). Ohne Erkennung ist er also entweder noch drin (Anteil der
+    übrigen Packs r) oder gezogen und unsichtbar: r / (r + (1 - r) * q)."""
+    if hidden_rate is None:
+        return 1.0
+    r = max(0.0, min(1.0, remaining_share))
+    q = max(0.0, min(1.0, hidden_rate))
+    return r / (r + (1 - r) * q) if r + (1 - r) * q > 0 else 1.0
+
+
 def estimate(pool: Dict, remaining: Optional[int], total_packs: Optional[int],
-             pulled_keys: Set[str], price: Optional[int], out_value: Optional[int] = None) -> Optional[Dict]:
+             pulled_keys: Set[str], price: Optional[int], out_value: Optional[int] = None,
+             hidden_rate: Optional[float] = None) -> Optional[Dict]:
     """Ø-Rückgabe pro Zug und Hit-Chance für die verbleibenden Packs.
 
     Mit out_value (Kartenwert, der laut Seite schon umgewandelt/verschickt ist, siehe
     out_of_banner_value) wird die Ø-Rückgabe aus echten Zahlen berechnet: (Poolwert - raus) / Restpacks.
     Ohne diese Zahlen Schätzung: verfolgte Einheiten gelten als noch drin, solange sie nicht als
     gezogen bekannt sind; alle übrigen Züge zählen als Durchschnittszüge aus dem Rest.
+    hidden_rate (gelernt, siehe hit_still_in): nicht erkannte Versand-Hits zählen nur mit ihrer Wahrscheinlichkeit,
+    noch drin zu sein - ein gezogener, aber nicht verschickter Hit ist sonst unsichtbar und bläht die Ø Rückgabe auf.
     """
     n_pool = pool.get("total_count") or 0
     if n_pool <= 0:
@@ -244,11 +260,15 @@ def estimate(pool: Dict, remaining: Optional[int], total_packs: Optional[int],
     unknown_pulls = max(0, min(pulled - known_pulled, rest_count))
     rest_left_share = (rest_count - unknown_pulls) / rest_count if rest_count > 0 else 0.0
 
-    value_left = sum(u["value"] for u in open_units) + rest_value * rest_left_share
+    # nicht erkannte Versand-Hits: nur mit der Wahrscheinlichkeit, noch drin zu sein
+    p_in = hit_still_in(remaining / n_pool, hidden_rate) if pool.get("hits") else 1.0
+    weight = lambda u: p_in if u.get("shipping_only") else 1.0
+    hidden_value = sum(u["value"] * (1 - weight(u)) for u in open_units)
+    value_left = sum(u["value"] * weight(u) for u in open_units) + rest_value * rest_left_share
     relevant = [u for u in units if is_relevant_hit(u, price)]
     relevant_open = [u for u in open_units if is_relevant_hit(u, price)]
     if pool.get("hits"):
-        hits_total, hits_left = len(relevant), float(len(relevant_open))
+        hits_total, hits_left = len(relevant), sum(weight(u) for u in relevant_open)
     else:
         hits_total = pool.get("hits_total", 0)
         rest_hits = hits_total - sum(1 for u in units if u.get("hit", u["shipping_only"]))
@@ -257,16 +277,18 @@ def estimate(pool: Dict, remaining: Optional[int], total_packs: Optional[int],
     # Echte Zahlen der Seite, wenn plausibel (mehr raus als im Pool deutet auf einen neuen Pool hin)
     data_based = out_value is not None and out_value <= pool["total_value"] * 1.02
     if data_based:
-        value_left = max(0, pool["total_value"] - out_value)
+        # Seitenzahlen kennen gezogene, aber nicht verschickte Hits nicht (Versand-Hits lassen sich nicht umwandeln)
+        value_left = max(0, pool["total_value"] - out_value - hidden_value)
     ev = value_left / remaining
     keys = tier_keys(pool)
-    hits_open_now = len(relevant_open) if pool.get("hits") else hits_left
+    hits_open_now = hits_left
     return {
         # Erwartete Züge bis zum ersten Hit (ohne Zurücklegen): (N + 1) / (h + 1)
         "cost_to_hit": price * (remaining + 1) / (hits_open_now + 1) if price and hits_open_now >= 1 else None,
         "ev": ev,
         "ev_pct": ev / price * 100 if price else None,
         "estimated": pulled > 0,
+        "hit_still_in": round(p_in, 3),
         "data_based": data_based,
         "hits_total": hits_total,
         "hits_open": len(relevant_open) if pool.get("hits") else sum(

@@ -148,6 +148,10 @@ class BannerView:
             self._ship_delays = json.loads(await self.db.get_meta("ship_delay_counts") or "{}").get("counts")
         except (ValueError, aiosqlite.OperationalError):
             self._ship_delays = None
+        try:   # gelernt: wie oft ein gezogener Versand-Hit unsichtbar bleibt (für die Ø Rückgabe)
+            self._hidden_rate = json.loads(await self.db.get_meta("hidden_hit_rate") or "{}").get("rate", 0.4)
+        except (ValueError, aiosqlite.OperationalError):
+            self._hidden_rate = 0.4
 
     async def summary(self, row: Dict, with_pool: bool = False) -> Dict:
         pid = row['pack_id']
@@ -168,7 +172,7 @@ class BannerView:
             shipped_keys = set((await self.db.get_pull_tracking(pid))["pulled"])
             held = set(winners) - shipped_keys
             stats = estimate(pool, row.get('current_packs'), row.get('total_packs'), pulled, price or None,
-                             self._out_value(row, pool, held, shipped_keys))
+                             self._out_value(row, pool, held, shipped_keys), getattr(self, "_hidden_rate", 0.4))
         else:
             pool = None
         low = pool_minimum(pool) if pool else None
