@@ -79,6 +79,7 @@ rows = db.execute("SELECT pack_id, is_active, category, price_coins, card_pool, 
                   "WHERE card_pool IS NOT NULL AND ship_batches IS NOT NULL").fetchall()
 tiers = Counter()
 per_factor = {}
+factor_diffs = []
 deadline_stats = Counter()
 detail_lines = []
 for row in rows:
@@ -120,10 +121,12 @@ for row in rows:
             if m["tier"] in keys and (m["source"] or "") != "admin" and ts(m["created_at"]):
                 medal_t[keys[m["tier"]]] = ts(m["created_at"])
     deadlines = batch_deadlines(batches, medal_t)
+    certain_by = {}
     for factor in (2, 3, 4):
         card_pool.SHIP_NORMAL_MIN_FACTOR = factor
         res = match_shipment_history(pool, batches, VALUE_TOLERANCE, deadlines, price)
         per_factor[factor] = per_factor.get(factor, 0) + len(res["certain"])
+        certain_by[factor] = set(res["certain"])
         if factor == 3:
             deadline_stats["Fristen gesamt"] += len(deadlines)
             deadline_stats["Fristen ignoriert"] += len(res["ignored_deadlines"])
@@ -133,11 +136,19 @@ for row in rows:
                                 + (f", Frist ignoriert {res['ignored_deadlines']}" if res["ignored_deadlines"] else "")
                                 + (f", Medaille vor Wert {res['value_mismatch']}" if res.get("value_mismatch") else ""))
     card_pool.SHIP_NORMAL_MIN_FACTOR = 3
+    names = {u["key"]: f"{t} {u['name'][:30]}" for t, k in keys.items() for u in hits if u["key"] == k}
+    for f in (2, 4):
+        diff = certain_by[f] ^ certain_by[3]
+        if diff:
+            factor_diffs.append(f"  {row['pack_id']} bei {f}×: " + ", ".join(
+                ("+" if k in certain_by[f] else "−") + names.get(k, k) for k in sorted(diff)))
 total = sum(tiers.values())
 for kind, n in tiers.most_common():
     out(f"  {kind}: {n} ({n / total * 100:.0f} %)" if total else f"  {kind}: {n}")
 out("Sicher erkannte Hits je Packpreis-Faktor (aktuell 3): "
     + " · ".join(f"{f}×: {n}" for f, n in sorted(per_factor.items())))
+for line in factor_diffs:
+    out(line)
 out("\n== 3. Medaillen-Fristen")
 out(f"{deadline_stats['Fristen gesamt']} Fristen · Medaille vor Wert (Seite zählt anderen Wert): "
     f"{deadline_stats['Medaille vor Wert']} · nicht anwendbar: {deadline_stats['Fristen ignoriert']}")
@@ -166,6 +177,8 @@ if os.path.exists(APP_DB):
         acc = evaluate(by)
         out(f"{acc['count']} Banner · Ø Abweichung {acc['mean_abs']} %-Punkte · Richtung {acc['bias']} "
             f"(+ = Vorhersage zu hoch)")
+        out(f"Gesamt nach Packs gewichtet: vorhergesagt {acc.get('weighted_predicted')} % · tatsächlich "
+            f"{acc.get('weighted_realized')} % · {acc.get('sold')} Packs")
         for i in acc["items"]:
             out(f"  {i['id']}: vorhergesagt {i['predicted']} % · tatsächlich {i['realized']} % · {i['sold']} Packs",
                 detail=True)
