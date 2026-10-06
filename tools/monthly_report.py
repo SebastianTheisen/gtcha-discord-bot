@@ -127,9 +127,11 @@ for row in rows:
         if factor == 3:
             deadline_stats["Fristen gesamt"] += len(deadlines)
             deadline_stats["Fristen ignoriert"] += len(res["ignored_deadlines"])
+            deadline_stats["Medaille vor Wert"] += len(res.get("value_mismatch") or [])
             detail_lines.append(f"  {row['pack_id']}: sicher {len(res['certain'])}, ❓ {sum(g['pulled'] for g in res['groups'])}, "
                                 f"Schübe genutzt {res['used_batches']}/{len(batches)}"
-                                + (f", Frist ignoriert {res['ignored_deadlines']}" if res["ignored_deadlines"] else ""))
+                                + (f", Frist ignoriert {res['ignored_deadlines']}" if res["ignored_deadlines"] else "")
+                                + (f", Medaille vor Wert {res['value_mismatch']}" if res.get("value_mismatch") else ""))
     card_pool.SHIP_NORMAL_MIN_FACTOR = 3
 total = sum(tiers.values())
 for kind, n in tiers.most_common():
@@ -137,7 +139,8 @@ for kind, n in tiers.most_common():
 out("Sicher erkannte Hits je Packpreis-Faktor (aktuell 3): "
     + " · ".join(f"{f}×: {n}" for f, n in sorted(per_factor.items())))
 out("\n== 3. Medaillen-Fristen")
-out(f"{deadline_stats['Fristen gesamt']} Fristen · passen nicht zu den Schüben: {deadline_stats['Fristen ignoriert']}")
+out(f"{deadline_stats['Fristen gesamt']} Fristen · Medaille vor Wert (Seite zählt anderen Wert): "
+    f"{deadline_stats['Medaille vor Wert']} · nicht anwendbar: {deadline_stats['Fristen ignoriert']}")
 out("Je Banner:", detail=True)
 for line in detail_lines:
     out(line, detail=True)
