@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 88;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 89;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -601,6 +601,31 @@ function archiveSummary(b) {
   return parts.length ? `<div class="glance-until">${parts.join(" · ")}</div>` : "";
 }
 
+// Pack-Verlauf wie in Discord: Abschnitte bis zum nächsten Sammellauf der Seite, aufklappbar
+const hhmm = (t) => new Date(t * 1000).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+function packTimeline(groups) {
+  if (!groups.length) return `<div class="rows"><div class="line muted">Noch keine Pack-Bewegungen</div></div>`;
+  return `<div class="ptl">${groups.map((g) => {
+    const o = g.out;
+    const outParts = o ? [o.converted ? `🪙 ${num(o.converted)} umgewandelt` : "",
+      o.ship_cards ? `📦 ${num(o.ship_cards)} ${o.ship_cards === 1 ? "Karte" : "Karten"} · ${num(o.ship_value)}` : ""]
+      .filter(Boolean) : [];
+    const head = g.from ? `${time(g.from)}${g.to && g.to !== g.from ? `–${hhmm(g.to)}` : ""}` : (o ? time(o.t) : "");
+    const packs = g.sold ? `<b>−${num(g.sold)}</b> Packs <span class="muted">(${num(g.packs_from)} → ${num(g.packs_to)})</span>` : "";
+    const out = o ? `→ ${hhmm(o.t)}: ${outParts.join(" · ") || "nichts"}${o.players ? ` · +${num(o.players)} Spieler` : ""}`
+      : "→ noch kein Lauf der Seite";
+    const hits = o && o.explain.length ? `<div class="explain">${o.explain.map((l) =>
+      `<div><span class="ico">${esc(l.icon)}</span>${esc(l.text)}</div>`).join("")}</div>` : "";
+    return `<details class="ptl-item ${o && o.explain.some((l) => l.icon === "✅") ? "has-hit" : ""}">
+      <summary><span class="ptl-time">${esc(head)}</span><span>${packs}</span>
+        <span class="ptl-out">${esc(out)}</span></summary>
+      ${hits}
+      ${g.moves.length ? `<div class="ptl-moves">${g.moves.map((m) => `<div><span class="muted">${hhmm(m.t)}</span>
+        📉 ${num(m.old)} → ${num(m.new)} <b>(−${num(m.old - m.new)})</b></div>`).join("")}</div>` : ""}
+    </details>`;
+  }).join("")}</div>`;
+}
+
 const DETAIL_TABS = { overview: "Übersicht", cards: "Karten", history: "Verlauf" };
 
 async function showBanner(id) {
@@ -657,8 +682,8 @@ async function showBanner(id) {
     </section>
 
     <section class="pane" data-pane="history" ${tab === "history" ? "" : "hidden"}>
-      <h2>📉 Pack-Verlauf</h2>
-      ${chart(b.history)}
+      <h2>📉 Pack-Verlauf <small>je Abschnitt: was danach raus war</small></h2>
+      ${packTimeline(b.pack_timeline || [])}
       <h2>💰 Ø Rückgabe im Verlauf <small>gestrichelt = 100 %</small></h2>
       ${evChart(b.ev_history)}
       <h2>📦 Versandschübe <small>Kartenwert = gezählter Wert × 1,1 (Steuer)</small></h2>
@@ -1131,7 +1156,7 @@ function linkPanel(user, devices = []) {
            <span class="muted">zuletzt ${when(d.last_seen)}</span></span>
            ${d.current ? "" : `<button class="icon-btn" data-device="${esc(d.id)}" aria-label="Gerät abmelden">✕</button>`}</div>`).join("")}</div>
 ` : ""}`
-    : `<div class="hint">In Discord <b>/app-verknüpfen</b>, Code hier eingeben.</div>
+    : `<div class="hint">In Discord <b>/tracker-verknüpfen</b>, Code hier eingeben.</div>
        <div class="add-watch"><input id="link-code" class="code-input" maxlength="8" autocomplete="one-time-code"
          autocapitalize="characters" placeholder="Code, z. B. K7M2QX">
        <button class="btn primary" id="link-btn">Verknüpfen</button></div>

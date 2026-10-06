@@ -56,7 +56,7 @@ class MonitoringMixin:
             ok = False
         if ok:
             if self._webapp_fails >= WEBAPP_ALERT_AFTER:
-                await notify_critical_error("✅ Die Web-App (GTCHA Tracker) ist wieder erreichbar.")
+                await notify_critical_error("✅ Der GTCHA Tracker ist wieder erreichbar.")
             self._webapp_seen, self._webapp_fails = True, 0
             return
         if not self._webapp_seen:
@@ -64,7 +64,7 @@ class MonitoringMixin:
         self._webapp_fails += 1
         if self._webapp_fails == WEBAPP_ALERT_AFTER:
             await notify_critical_error(
-                f"Die Web-App (GTCHA Tracker) antwortet seit {WEBAPP_ALERT_AFTER * 5} Minuten nicht.\n"
+                f"Der GTCHA Tracker antwortet seit {WEBAPP_ALERT_AFTER * 5} Minuten nicht.\n"
                 f"Prüfen: `docker logs --tail 50 gtcha-app` und `docker compose up -d gtcha-app`")
 
     async def _report_scrape_problem(self, reason: str):
