@@ -24,6 +24,8 @@ NEAR_WINDOW = timedelta(seconds=150)  # schneller Abfrager alle 15 s; Seite zeig
 OPEN_NOTES = ("öffnen", "open")
 CONVERT_NOTES = ("umwandeln", "convert")
 HEADER = re.compile(r"^(Liste der versendeten Artikel|Anfragedatum|Sendungsnummer|Börsenhistorie)", re.I)
+# Seite in anderer Sprache (Englisch/Japanisch): Sendungsnummer erkennen, jede kurze Zeile mit Datum ist Kopfzeile
+TRACKING = re.compile(r"^(Sendungsnummer|Tracking|追跡|お問い合わせ|伝票)", re.I)
 
 
 def _unique(pages: List[Dict]) -> List[Dict]:
@@ -98,13 +100,13 @@ def parse_cards(pages: List[Dict]) -> List[Dict]:
             line = raw.strip()
             if line.startswith("Xero Place"):
                 break
-            header = HEADER.match(line)
+            header = HEADER.match(line) or TRACKING.match(line) or (DATE.search(line) and len(line) <= 60)
             if header:
                 started = True
                 close()
                 block = None
-                if line.lower().startswith("sendungsnummer"):
-                    tracking = line.split(":", 1)[-1].strip()
+                if TRACKING.match(line):
+                    tracking = re.split(r"[:：]", line, 1)[-1].strip()
                 elif DATE.search(line):
                     y, mo, d = DATE.search(line).groups()
                     date = f"{int(y) + 2000 if len(y) == 2 else int(y)}-{mo}-{d}"
