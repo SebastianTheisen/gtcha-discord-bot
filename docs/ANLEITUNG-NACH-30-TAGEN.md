@@ -2,8 +2,8 @@
 
 Seit dem 03.10.2026 läuft die Hit-Erkennung mit diesen Regeln:
 
-1. **Medaille = Versand angefordert**: Ein Hit mit Medaille (Discord, App, Lesezeichen) steckt spätestens im
-   ersten Versand-Schub nach der Medaille. Admin-Haken („durch Admin abgehakt“) zählen dafür nicht.
+1. **Medaillen erzwingen nichts**: GTCHA zählt eine Versand-Anforderung nicht sofort (24188: Mewtwo um 17:49
+   angefordert, bis zum Ende nie gezählt). Medaillen erhöhen nur die ❓-Wahrscheinlichkeit.
 2. **Große Schübe zuerst nur aus Versand-Hits**: Geht ein Schub allein aus Versand-Hits auf, zählen nur diese
    Erklärungen.
 3. **Billige Karten zuletzt**: Karten unter 3× Packpreis werden fast immer umgewandelt. Sie zählen nur, wenn es
@@ -17,8 +17,6 @@ Seit dem 03.10.2026 läuft die Hit-Erkennung mit diesen Regeln:
   - Stimmt etwas nicht, tippst du auf **„❌ war falsch“**. Der Haken verschwindet sofort, und der Bot hakt diesen
     Hit bei diesem Banner nicht mehr automatisch ab. Mit „↩️ zulassen“ machst du das rückgängig.
 - **Ihr wisst, dass ein Hit raus ist**, die Erkennung aber nicht: Karte antippen → **„🛠️ abhaken (ohne Person)“**.
-- **Medaille falsch gesetzt** (Karte nicht zum Versand angefordert): bitte entfernen. Sonst legt die Frist-Regel
-  den falschen Versand fest.
 - **Einzelfall prüfen**:
   ```
   docker exec -i gtcha-discord-bot python - <Banner-ID> <Tn> < tools/why_not_pulled.py

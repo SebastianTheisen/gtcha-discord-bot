@@ -175,15 +175,11 @@ class HitsMixin:
                     if not changed:
                         await self.db.set_pull_tracking(pid, value, ships[0], ships[1], pulled, unsure)
                         continue
-                    # im Hintergrund-Thread: die Auftrags-Rechnung kann bei großen Werten etwas dauern
-                    # Regel der Gruppe: Medaille gesetzt = Versand angefordert -> der Hit steckt spätestens im
-                    # ersten Schub nach der Medaille
-                    keys = tier_keys(pool)
-                    medal_t = {keys[t]: m["at"] for t, m in (await self.db.medal_rows(medal_thread)).items()
-                               if t in keys and m.get("at") and m["source"] != "admin"}   # Admin: nur "raus", kein Versand
-                    deadlines = batch_deadlines(batches, medal_t)
+                    # im Hintergrund-Thread: die Auftrags-Rechnung kann bei großen Werten etwas dauern.
+                    # Keine Medaillen-Fristen mehr: GTCHA zählt eine Versand-Anforderung nicht sofort (24188: Mewtwo
+                    # um 17:49 angefordert, bis Banner-Ende nie im Zähler) - Medaillen wirken nur auf die ❓-Prozente
                     price = _int((await self.db.get_banner(pid) or {}).get('price_coins')) or None
-                    joint = await asyncio.to_thread(match_shipment_history, pool, batches, VALUE_TOLERANCE, deadlines,
+                    joint = await asyncio.to_thread(match_shipment_history, pool, batches, VALUE_TOLERANCE, None,
                                                     price)
                     if joint.get("ignored_deadlines"):
                         logger.info(f"[HIT] {pid}: Medaillen-Frist passt nicht zu den Schüben, ignoriert: "
