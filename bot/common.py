@@ -28,7 +28,7 @@ from config import (
 )
 from scraper.gtcha_scraper import GTCHAScraper
 from scraper.models import ScrapedBanner
-from database.db import ARCHIVE_DAYS, SOLD_OUT_MAX_LEFT, Database
+from database.db import ARCHIVE_DAYS, SOLD_OUT_MAX_LEFT, Database, store_thread_id
 from utils.notifications import (
     set_bot_client, notify_scrape_error,
     notify_all_retries_failed, notify_critical_error,

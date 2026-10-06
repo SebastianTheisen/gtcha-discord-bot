@@ -105,3 +105,32 @@ def test_ended_banner_with_last_zero_from_site_is_set_to_zero(tmp_path):
         assert (await db.get_banner(24155))["current_packs"] == 2
 
     asyncio.run(run())
+
+
+def test_ended_banner_is_reevaluated_after_new_version(tmp_path, monkeypatch):
+    monkeypatch.setenv("DISCORD_TOKEN", "x")
+    monkeypatch.setenv("GUILD_ID", "1")
+
+    async def run():
+        import json as _json
+        from bot.learning import LearningMixin
+        db = Database(str(tmp_path / "b.db"))
+        await db.init()
+        await db.save_banner(ScrapedBanner(pack_id=500, category="MIX", price_coins=1000, current_packs=0,
+                                           total_packs=100))
+        await db.save_card_pool(500, summarize_cards(CARDS))
+        await db.update_site_stats(500, {"cards": 0, "coins": 0, "players": 0})
+        await db.update_site_stats(500, {"cards": 1, "coins": round(90000 / 1.1), "players": 1})   # Lugia verschickt
+        await db.mark_banner_inactive(500)
+        assert (await db.get_pull_tracking(500))["batches"] is None      # nach neuer Version leer
+
+        class Bot(LearningMixin):
+            def __init__(self):
+                self.db = db
+
+        assert await Bot()._reevaluate_ended(await db.get_ended_banners()) == 1
+        state = await db.get_pull_tracking(500)
+        assert state["pulled"] == ["1"] and state["batches"]
+        assert await Bot()._reevaluate_ended(await db.get_ended_banners()) == 0   # nur einmal
+
+    asyncio.run(run())

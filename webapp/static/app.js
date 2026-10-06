@@ -1601,8 +1601,8 @@ function accuracySection(a) {
   const dir = a.bias > 1 ? "eher zu optimistisch" : a.bias < -1 ? "eher zu vorsichtig" : "ohne klare Richtung";
   return head + `<div class="stats hist-stats">
       ${stat("Ø Abweichung", `${a.mean_abs.toLocaleString("de-DE")} %-Punkte`, dir + " · Ergebnis 24 Std. später gemessen")}
-      ${a.weighted_predicted != null ? stat("Gesamt (nach Packs gewichtet)", `${pct(a.weighted_predicted)} → ${pct(a.weighted_realized)}`,
-        `vorhergesagt → tatsächlich · ${num(a.sold)} Packs`) : ""}
+      ${a.weighted_predicted != null ? stat("Gesamt (nach Einsatz gewichtet)", `${pct(a.weighted_predicted)} → ${pct(a.weighted_realized)}`,
+        `vorhergesagt → tatsächlich · ${num(a.spent)} Coins Einsatz`) : ""}
     </div>
     <div class="rows">${a.items.map((i) => `
       <a class="line" href="#/banner/${i.id}"><span><b>${esc(i.title || "Banner " + i.id)}</b><br>
