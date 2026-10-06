@@ -467,3 +467,29 @@ def test_24188_medal_wins_over_counted_value():
     assert sorted(res["certain"]) == ["1", "2", "3"] and res["value_mismatch"] == ["2"]
     one = explain_batch(pool, 1, 17800, set(), required={"2"}, price=1000)
     assert one["certain"] == ["2"] and one["mismatch"] == ["2"]
+
+
+def test_medal_batch_with_more_hits():
+    # Medaille auf T3 (17.000): im ersten Schub danach werden weitere passende Hits mit erkannt
+    from utils.card_pool import explain_batch, match_shipment_history, summarize_cards
+    pool = summarize_cards([
+        {"id": 1, "name": "Gross", "buy_point": 100000, "duplication": 1, "action_type": 2},
+        {"id": 2, "name": "Mittel", "buy_point": 50000, "duplication": 1, "action_type": 2},
+        {"id": 3, "name": "Medaille", "buy_point": 17000, "duplication": 1, "action_type": 2},
+        {"id": 9, "name": "Normal", "buy_point": 700, "duplication": 500, "action_type": 0}])
+    # Schub deutlich höher als die Medaillen-Karte: der zweite Hit (T1) wird mit gefunden
+    batches = [[2, round(117000 / 1.1), 1000]]
+    res = match_shipment_history(pool, batches, deadlines={"3": 0}, price=1000)
+    assert sorted(res["certain"]) == ["1", "3"] and res["value_mismatch"] == []
+    one = explain_batch(pool, 2, round(117000 / 1.1), set(), required={"3"}, price=1000)
+    assert sorted(one["certain"]) == ["1", "3"]
+    # dritter Hit: 3 Karten · Medaille + T1 + T2
+    res = match_shipment_history(pool, [[3, round(167000 / 1.1), 1000]], deadlines={"3": 0}, price=1000)
+    assert sorted(res["certain"]) == ["1", "2", "3"]
+    # passt gar nicht zur Medaillen-Karte (Seite zählt anderen Wert): Medaille trotzdem, Rest weiter ausgewertet
+    res = match_shipment_history(pool, [[1, round(50000 / 1.1), 1000]], deadlines={"3": 0}, price=1000)
+    assert res["certain"] == ["3"] and res["value_mismatch"] == ["3"]
+    # Erklärung mit Medaillen-Karte erst in der Stufe "alle Karten": wird gefunden, keine Ausnahme nötig
+    cheap = round((17000 + 700) / 1.1)
+    res = match_shipment_history(pool, [[2, cheap, 1000]], deadlines={"3": 0}, price=1000)
+    assert res["certain"] == ["3"] and res["value_mismatch"] == []
