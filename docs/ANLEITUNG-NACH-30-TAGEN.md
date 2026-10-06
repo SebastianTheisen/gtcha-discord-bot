@@ -2,8 +2,10 @@
 
 Seit dem 03.10.2026 läuft die Hit-Erkennung mit diesen Regeln:
 
-1. **Medaillen erzwingen nichts**: GTCHA zählt eine Versand-Anforderung nicht sofort (24188: Mewtwo um 17:49
-   angefordert, bis zum Ende nie gezählt). Medaillen erhöhen nur die ❓-Wahrscheinlichkeit.
+1. **Medaille = Versand angefordert**: Ein Hit mit Medaille (Discord, App, Lesezeichen) steckt im ersten
+   Versand-Schub nach der Medaille – auch wenn die Seite dafür einen anderen Wert zählt (24188: Mewtwo als
+   19.580 gezählt). Admin-Haken („durch Admin abgehakt“) zählen dafür nicht. Falsch gesetzte Medaillen bitte
+   entfernen, sonst wird der falsche Schub zugeordnet.
 2. **Große Schübe zuerst nur aus Versand-Hits**: Geht ein Schub allein aus Versand-Hits auf, zählen nur diese
    Erklärungen.
 3. **Billige Karten zuletzt**: Karten unter 3× Packpreis werden fast immer umgewandelt. Sie zählen nur, wenn es
