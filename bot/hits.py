@@ -186,6 +186,9 @@ class HitsMixin:
                     price = _int((await self.db.get_banner(pid) or {}).get('price_coins')) or None
                     joint = await asyncio.to_thread(match_shipment_history, pool, batches, VALUE_TOLERANCE, deadlines,
                                                     price)
+                    if joint.get("off_value"):
+                        logger.info(f"[HIT] {pid}: Einzelkarte über allen normalen Karten in Schub {joint['off_value']} "
+                                    f"als Hit mit anderem Wert gezählt")
                     if joint.get("value_mismatch"):
                         logger.info(f"[HIT] {pid}: Medaille vor Wert - Seite zählt für {joint['value_mismatch']} "
                                     f"einen anderen Wert als den Kartenwert")

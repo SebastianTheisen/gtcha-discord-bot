@@ -411,6 +411,25 @@ def _ship_options(pool: Dict, classes: List[Dict], count: int, value: int, tol: 
     return options(pool)
 
 
+# Einzelne Karte über jeder normalen Karte, die zu keinem Wert passt: das kann nur ein Versand-Hit sein, für den die
+# Seite einen anderen Wert zählt (24082: Box 88.000 als 132.000). In Frage kommen Hits in dieser Wertspanne.
+OFF_VALUE_RANGE = 1.6   # 24082: ×1,5 · 24188 (Medaille): Mewtwo ×0,73
+
+
+def _off_value_hit_options(pool: Dict, classes: List[Dict], count: int, value: int, tol: float) -> List[tuple]:
+    """Für einen sonst unerklärten Schub aus genau einer Karte: je passender Hit-Klasse eine Aufteilung mit einem Hit."""
+    if count != 1 or not classes:
+        return []
+    top_normal = max((int(v) for v, n in (pool.get("normal_values") or {}).items() if n > 0), default=0)
+    if value <= top_normal * (1 + tol):
+        return []
+    out = []
+    for i, cls in enumerate(classes):
+        if cls["max"] * OFF_VALUE_RANGE >= value and cls["min"] <= value * OFF_VALUE_RANGE:
+            out.append(tuple(1 if j == i else 0 for j in range(len(classes))))
+    return out
+
+
 def _summarize_options(classes: List[Dict], possible: List[tuple], units: List[Dict]) -> Dict:
     """Was in jeder möglichen Aufteilung gilt: sichere Hits und ❓-Gruppen."""
     result = {"certain": [], "groups": [], "maybe": []}
@@ -599,7 +618,12 @@ def explain_batch(pool: Dict, count: int, value: int, pulled_keys: Set[str],
         else:
             forced = []
     if not possible:
-        return base
+        off = _off_value_hit_options(pool, classes, count, gross, tol)
+        if not off:
+            return base
+        match = _summarize_options(classes, off, open_hits)
+        return {**base, "kind": "hits", "certain": match["certain"], "groups": match["groups"],
+                "mismatch": match["certain"], "off_value": True}
     if all(not any(t) for t in possible):
         return {**base, "kind": "normal"}
     match = _summarize_options(classes, possible, open_hits)
@@ -653,7 +677,7 @@ def match_shipment_history(pool: Dict, batches: List[List], tol: float = VALUE_T
     Ergebnis wie match_shipped_hits, plus "used_batches".
     """
     result = {"certain": [], "groups": [], "maybe": [], "used_batches": 0, "ignored_deadlines": [],
-              "value_mismatch": []}
+              "value_mismatch": [], "off_value": []}
     hits = [u for u in tracked_units(pool) if u["shipping_only"]]
     if not hits:
         return result
@@ -673,6 +697,10 @@ def match_shipment_history(pool: Dict, batches: List[List], tol: float = VALUE_T
             # Geht der Schub als Karten nicht auf: der Zähler zählt manchmal Versand-Aufträge (mehrere Karten
             # je Auftrag, Karten nachträglich zu einem Auftrag) - dann muss der Wert fast exakt aufgehen
             options = _ship_options(pool, classes, count, value, tol, price)
+            if options == [] and not now_due:
+                options = _off_value_hit_options(pool, classes, count, value, tol)
+                if options:
+                    result["off_value"].append(i)
 
         def combine(opts):
             out = set()

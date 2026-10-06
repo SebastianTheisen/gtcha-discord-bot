@@ -531,8 +531,8 @@ class BannerView:
                                 price=to_int(row.get('price_coins')) or None)
             sent |= set(res["certain"])
             s["value"], s["kind"] = res["value"], res["kind"]
-            lines = [{"icon": "✅", "text": label(k) + (" – Medaille, Seite zählt anderen Wert"
-                                                        if k in (res.get("mismatch") or []) else "")}
+            note = " – Seite zählt anderen Wert" if res.get("off_value") else " – Medaille, Seite zählt anderen Wert"
+            lines = [{"icon": "✅", "text": label(k) + (note if k in (res.get("mismatch") or []) else "")}
                      for k in res["certain"]]
             for k in res["certain"] + [k for g in res["groups"] for k in g["keys"]]:
                 if s.get("t"):
