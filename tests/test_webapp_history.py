@@ -89,6 +89,29 @@ def test_plan_claims_only_when_unique_and_free():
     assert len({p["key"] for p in planned}) == 2
     # schon erledigt -> nicht noch einmal
     assert plan_claims(cards, banners, targets, "42", done={p["key"] for p in planned}) == []
+    # Zeit: nur wenn die Person Banner 1 laut eigenem Münzverlauf kurz vor der Anfrage geöffnet hat
+    assert len(plan_claims(cards, banners, targets, "42", set(), opens={1: ["2026-09-27"]})) == 2
+    assert plan_claims(cards, banners, targets, "42", set(), opens={1: ["2026-09-01"]}) == []    # zu lange her
+    assert plan_claims(cards, banners, targets, "42", set(), opens={1: ["2026-09-29"]}) == []    # erst danach
+    assert plan_claims(cards, banners, targets, "42", set(), opens={}) == []                     # nie geöffnet
+
+
+def test_history_per_gtcha_account_does_not_overwrite(tmp_path):
+    async def run():
+        bridge = AppBridge(str(tmp_path / "w.db"))
+        await bridge.init()
+        await bridge.set_history("7", {"shipped": {"items": [{"date": "2026-09-22", "name": "Alt"}], "gap": False}})
+        await bridge.adopt_default_history("7", "id:1")            # erstes Übertragen mit Kennung: übernehmen
+        assert (await bridge.get_account_history("7", "id:1"))["shipped"]["items"][0]["name"] == "Alt"
+        # Konto 2 überträgt vollständig - Konto 1 bleibt erhalten
+        await bridge.set_history("7", {"shipped": {"items": [{"date": "2026-10-04", "name": "Neu"}], "gap": False}},
+                                 "id:2")
+        await bridge.adopt_default_history("7", "id:2")            # ändert nichts mehr
+        merged = await bridge.get_history("7")
+        assert [c["name"] for c in merged["shipped"]["items"]] == ["Neu", "Alt"]   # beide, neueste zuerst
+        assert (await bridge.get_account_history("7", "id:2"))["shipped"]["items"][0]["name"] == "Neu"
+
+    asyncio.run(run())
 
 
 def test_bridge_latest_sync_and_auto_claims(tmp_path):

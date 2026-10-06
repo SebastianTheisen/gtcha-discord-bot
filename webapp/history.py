@@ -459,12 +459,26 @@ def build_from_stored(stored: Dict[str, Dict], banners: Dict[int, Dict], moves: 
     }
 
 
+CLAIM_OPEN_DAYS = 14   # Anfrage höchstens so viele Tage nach der Öffnung des Banners
+
+
+def opens_by_banner(events: List[Dict]) -> Dict[int, List[str]]:
+    """Banner -> Tage (JST, "YYYY-MM-DD") mit eigenen Öffnungen (nach attribute_opens)."""
+    out: Dict[int, List[str]] = defaultdict(list)
+    for e in events:
+        if e.get("kind") == "open" and e.get("banner"):
+            out[e["banner"]].append(e["t"].strftime("%Y-%m-%d"))
+    return dict(out)
+
+
 def plan_claims(cards: List[Dict], banners: Dict[int, Dict], targets: Dict[int, Dict], user_id: str,
-                done: set) -> List[Dict]:
+                done: set, opens: Optional[Dict[int, List[str]]] = None) -> List[Dict]:
     """Automatische Medaillen für angeforderte Karten: nur wenn die Karte in genau einem Banner vorkommt,
     das beim Ziehen schon lief (Anfragedatum ≥ erster Tag des Banners), dieses Banner noch aktiv ist,
     die Karte dort meldbar ist (ab Packpreis) und noch ein Platz dieser Karte frei ist.
     Hat die Person dort schon eine Medaille auf dieser Karte, wird nichts gemeldet.
+    opens (opens_by_banner): zusätzlich muss die Person den Banner in den CLAIM_OPEN_DAYS Tagen vor der Anfrage
+    selbst geöffnet haben.
 
     targets: pack_id -> {units (claimable_units), medals {tier: user_id}}; done: schon erledigte Schlüssel.
     Rückgabe: [{key, pack_id, tier, card}]
@@ -481,6 +495,12 @@ def plan_claims(cards: List[Dict], banners: Dict[int, Dict], targets: Dict[int, 
         if len(seen) != 1 or seen[0] not in targets:
             continue
         pid = seen[0]
+        # Zeit prüfen: die Person muss diesen Banner laut eigenem Münzverlauf kurz vor der Anfrage geöffnet haben
+        # (sonst wurden alte Karten in neuen Bannern mit derselben Karte abgehakt)
+        if opens is not None:
+            lo = (datetime.strptime(date, "%Y-%m-%d") - timedelta(days=CLAIM_OPEN_DAYS)).strftime("%Y-%m-%d")
+            if not any(lo <= d <= date for d in opens.get(pid, [])):
+                continue
         units = [u for u in targets[pid]["units"] if str(u["key"]).split("#")[0] == cid]
         medals = targets[pid]["medals"]
         if not units or any(str(medals.get(u["tier"])) == str(user_id) for u in units):
