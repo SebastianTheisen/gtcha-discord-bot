@@ -41,6 +41,13 @@ def test_parse_cards_blocks_and_images():
     shipped = parse_cards([{"text": SHIPPED, "images": [IMG.format(i) for i in (7, 8, 9)]}])
     assert len(shipped) == 3 and shipped[0]["tracking"] == "111" and shipped[0]["rarity"] == "SAR"
     assert shipped[1]["name"].startswith("Overall Lorcana") and shipped[1]["card_id"] == "8"
+    # Seite auf Englisch/Japanisch: Kopfzeilen mit Datum und Sendungsnummer werden genauso erkannt
+    en = HEAD + ("Request date: 2026/10/04\n\nMewtwo ex\nSAR\nSV2a-205\n" + FOOT)
+    ja = HEAD + ("申請日：2026/10/05\n\nピカチュウex\nSAR\nM1-001\n" + FOOT)
+    assert [(c["name"], c["date"]) for c in parse_cards([{"text": en}])] == [("Mewtwo ex", "2026-10-04")]
+    assert [(c["name"], c["date"]) for c in parse_cards([{"text": ja}])] == [("ピカチュウex", "2026-10-05")]
+    ship = HEAD + ("Shipped: 2026/10/01\nTracking number: 333\n\nCharizard\nSAR\nX-1\n" + FOOT)
+    assert parse_cards([{"text": ship}])[0]["tracking"] == "333"
     # Anzahl Bilder passt nicht -> keine falsche Zuordnung
     assert "image" not in parse_cards([{"text": SHIPPED, "images": [IMG.format(7)]}])[0]
 
