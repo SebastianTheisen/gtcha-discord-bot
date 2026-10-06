@@ -13,7 +13,7 @@ import aiosqlite
 from database.db import STORE, Database, store_thread_id
 from utils.banner_info import RANK_ORDER, format_conditions, format_shipping, sale_end_timestamp, to_int
 from utils.card_pool import (
-    batch_deadlines, card_value, estimate, explain_batch, out_of_banner_value, fmt_coins, pool_minimum, relevant_units, resolve_pulled, tier_keys,
+    card_value, estimate, explain_batch, out_of_banner_value, fmt_coins, pool_minimum, relevant_units, resolve_pulled, tier_keys,
     tracked_units, claimable_units, medal_units,
 )
 from utils import ship_odds
@@ -464,9 +464,8 @@ class BannerView:
         sent: set = set()
         # Medaille gesetzt = Versand angefordert: Hit steckt spätestens im ersten Schub danach
         ordered = list(reversed(shipments))
-        due = batch_deadlines([[s["cards"], s["coins"], s.get("t")] for s in ordered], medal_t)
         for i, s in enumerate(ordered):
-            required = {k for k, j in due.items() if j == i and k not in sent}
+            required: set = set()   # keine Medaillen-Fristen (wie der Bot, siehe bot/hits.py)
             res = explain_batch(pool, s["cards"], s["coins"], sent, required=required,
                                 price=to_int(row.get('price_coins')) or None)
             sent |= set(res["certain"])
