@@ -1,5 +1,5 @@
 // Service-Worker der Beta: App-Gerüst offline verfügbar, Daten immer frisch vom Server (bei Ausfall: letzter Stand)
-const CACHE = "gtcha-beta-v1";
+const CACHE = "gtcha-beta-v3";
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(["./", "manifest.webmanifest", "icon-180.png"])).then(() => self.skipWaiting()));
@@ -13,12 +13,18 @@ self.addEventListener("activate", (e) => {
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== "GET" || url.origin !== location.origin || url.pathname.endsWith("/api/stream")) return;
+  // Bilder nie über den Service-Worker (wie in der Live-App): iOS lädt sie sonst langsam oder gar nicht -
+  // sie kommen direkt vom VPS und bleiben im Browser-Cache
+  if (/\/img$/.test(url.pathname)) return;
   const isData = /\/api\//.test(url.pathname);
-  const isAsset = /\/assets\//.test(url.pathname) || /\/img$/.test(url.pathname);
+  const isAsset = /\/assets\//.test(url.pathname);
   if (isAsset) {
     // gebaute Dateien haben einen Hash im Namen, Bilder ändern sich nicht: Cache zuerst
     e.respondWith(caches.match(e.request).then((hit) => hit || fetch(e.request).then((res) => {
-      if (res.ok) caches.open(CACHE).then((c) => c.put(e.request, res.clone()));
+      if (res.ok) {
+        const copy = res.clone();   // sofort kopieren - die Seite liest den Inhalt gleich
+        caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {});
+      }
       return res;
     })));
     return;

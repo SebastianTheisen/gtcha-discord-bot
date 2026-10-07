@@ -45,7 +45,7 @@ function App() {
         <span class="spacer" />
         <span class={`live ${state === "live" ? "on" : state === "offline" ? "off" : ""}`}
           title={updated.value ? `Stand ${relative(updated.value)}` : ""}>
-          <i />{state === "live" ? "Live" : state === "offline" ? "Offline" : "Verbinde…"}
+          <i />{locked.value ? "Gesperrt" : state === "live" ? "Live" : state === "offline" ? "Offline" : "Verbinde…"}
         </span>
       </header>
       <main class="main">
