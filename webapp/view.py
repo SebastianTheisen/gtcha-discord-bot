@@ -54,7 +54,7 @@ def pack_timeline(moves: List[tuple], converts: List[tuple], shipments: List[Dic
             o["ship_cards"] += v.get("cards") or 0
             o["ship_value"] += v.get("value") or 0
             o["players"] += v.get("players") or 0
-            o["explain"] += [l for l in v.get("explain") or [] if l.get("icon") in ("✅", "❓")]
+            o["explain"] += [l for l in v.get("explain") or [] if l.get("icon") in ("✅", "❓", "📮")]
     packs = [{"kind": "pack", "t": t, "old": old, "new": new} for t, old, new in moves if t and new < old]
     timeline = sorted(packs + outs, key=lambda e: (e["t"], e["kind"] == "out"))
     current = None
@@ -68,7 +68,7 @@ def pack_timeline(moves: List[tuple], converts: List[tuple], shipments: List[Dic
         if s.get("before"):
             events.append({"kind": "out", "t": None, "before": True, "converted": 0, "ship_cards": s.get("cards") or 0,
                            "ship_value": s.get("value") or 0, "players": s.get("players") or 0, "packs": None,
-                           "explain": [l for l in s.get("explain") or [] if l.get("icon") in ("✅", "❓")]})
+                           "explain": [l for l in s.get("explain") or [] if l.get("icon") in ("✅", "❓", "📮")]})
     return events
 
 
@@ -549,6 +549,10 @@ class BannerView:
                 names = " / ".join(dict.fromkeys(units[k]["name"] for k in g["keys"] if k in units))
                 lines.append({"icon": "❓", "text": f"vielleicht {names} – oder nur normale Karten"})
             hits = len(res["certain"]) + sum(g["pulled"] for g in res["groups"])
+            if res["kind"] == "hits" and hits > s["cards"]:
+                # mehr Hits als "Karten": der Zähler der Seite zählt hier Versandaufträge, nicht Karten
+                n = s["cards"]
+                lines.append({"icon": "📮", "text": f"Seite zählt {n} Versandauftrag{'' if n == 1 else 'e'} – darin mehrere Karten"})
             if res["kind"] == "hits" and s["cards"] > hits:
                 rest = s['cards'] - hits
                 lines.append({"icon": "·", "text": f"+ {rest} normale Karte" + ("" if rest == 1 else "n")})
