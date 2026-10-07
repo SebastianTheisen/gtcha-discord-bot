@@ -16,7 +16,7 @@ export function Top() {
       <p class="muted small" style={{ marginTop: "-4px" }}>Ziehbare Banner ohne Bonus, Gratis und Passwort · Ø = erwartete Rückgabe pro Zug</p>
       {hot == null
         ? <div class="grid">{[1, 2, 3].map(() => <BannerSkeleton />)}</div>
-        : hot.length ? <div class="grid">{hot.map((b, i) => <BannerCard key={b.id} b={b} rank={i + 1} />)}</div>
+        : hot.length ? <div class="grid">{hot.map((b, i) => <BannerCard key={b.id} b={b} rank={i + 1} eager={i < 4} />)}</div>
           : <div class="empty">Gerade kein ziehbarer Banner</div>}
     </div>
   );

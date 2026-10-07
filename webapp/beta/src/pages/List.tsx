@@ -130,8 +130,8 @@ export function List() {
         ? <div class="grid">{[1, 2, 3, 4].map(() => <BannerSkeleton />)}</div>
         : shown.length
           ? listView.value === "compact"
-            ? <div class="clist">{shown.map((b) => <CompactRow key={b.id} b={b} />)}</div>
-            : <div class="grid">{shown.map((b) => <BannerCard key={b.id} b={b} />)}</div>
+            ? <div class="clist">{shown.map((b, i) => <CompactRow key={b.id} b={b} eager={i < 12} />)}</div>
+            : <div class="grid">{shown.map((b, i) => <BannerCard key={b.id} b={b} eager={i < 4} />)}</div>
           : <div class="empty">{empty}</div>}
     </div>
   );

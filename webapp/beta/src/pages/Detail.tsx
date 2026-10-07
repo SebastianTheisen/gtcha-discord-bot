@@ -1,6 +1,6 @@
 import type { ComponentChildren } from "preact";
 import { useEffect, useMemo, useState } from "preact/hooks";
-import { api, LockedError } from "../api";
+import { LockedError } from "../api";
 import { Flags, hitsText, STATUS, verdict } from "../components/BannerCard";
 import { CardSheet, type CardInfo } from "../components/CardSheet";
 import { AreaChart } from "../components/Chart";
@@ -9,7 +9,7 @@ import { Lock } from "../components/Lock";
 import { compact, countdown, dateTime, day, evTone, hhmm, num, pct, shortTime, untilText } from "../format";
 import { buyHref, canBuy, whyNot } from "../local";
 import { pushState, toggleWatch, watchIds } from "../push";
-import { me, pref, refreshTick } from "../store";
+import { changedIds, detailCache, fetchDetail, me, pref } from "../store";
 import type { BannerDetail, Card, Hit, Shipment, TimelineEvent } from "../types";
 import { ask } from "../ui";
 
@@ -22,22 +22,25 @@ const unitsOf = (b: BannerDetail, card: Card) =>
   (b.hits || []).filter((h) => h.key === card.id || h.key.startsWith(card.id + "#")).sort((x, y) => x.rank - y.rank);
 
 export function Detail({ id }: { id: string }) {
-  const [b, setB] = useState<BannerDetail | null>(null);
+  const [b, setB] = useState<BannerDetail | null>(detailCache.get(id) || null);
   const [error, setError] = useState<string | null>(null);
   const [lockInfo, setLock] = useState<LockedError["info"] | null>(null);
   const [sheet, setSheet] = useState<{ card: CardInfo; units: Hit[] } | null>(null);
   const [reload, setReload] = useState(0);
 
+  // nur neu laden, wenn sich dieser Banner geändert hat (Live-Update) oder nach dem Melden
+  const changed = changedIds.value.has(Number(id));
   useEffect(() => {
     let alive = true;
-    api<BannerDetail>(`api/banner/${id}`)
+    if (reload) detailCache.delete(id);
+    fetchDetail(id)
       .then((d) => alive && (setB(d), setError(null)))
       .catch((e) => alive && (e instanceof LockedError ? setLock(e.info)
         : setError(String(e.message) === "404" ? "Banner nicht gefunden" : `Daten nicht erreichbar (${e.message})`)));
     return () => {
       alive = false;
     };
-  }, [id, refreshTick.value, reload]);
+  }, [id, changed, reload]);
 
   useEffect(() => {
     pushState().catch(() => {});   // beobachtete Banner für den Knopf

@@ -1,4 +1,3 @@
-import "@fontsource-variable/inter";
 import "./styles.css";
 import { render } from "preact";
 import { useEffect } from "preact/hooks";

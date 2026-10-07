@@ -2,7 +2,7 @@
 import { signal } from "@preact/signals";
 import { api, authApi, getToken, LockedError, type LockInfo } from "./api";
 import { applyProfile, wishList, type Profile } from "./local";
-import type { Banner, Me } from "./types";
+import type { Banner, BannerDetail, Me } from "./types";
 
 export const banners = signal<Banner[] | null>(null);
 export const updated = signal(0);
@@ -23,8 +23,29 @@ addEventListener("hashchange", () => {
 });
 
 let lastSnapshot = new Map<number, string>();
+let lastLoad = 0;
+
+// Banner-Seiten: zuletzt geladene Daten sofort zeigen, im Hintergrund auffrischen; beim Antippen vorladen
+export const detailCache = new Map<string, BannerDetail>();
+const inflight = new Map<string, Promise<BannerDetail>>();
+export function fetchDetail(id: string | number): Promise<BannerDetail> {
+  const key = String(id);
+  const running = inflight.get(key);
+  if (running) return running;
+  const p = api<BannerDetail>(`api/banner/${key}`).then((d) => {
+    detailCache.set(key, d);
+    if (detailCache.size > 30) detailCache.delete(detailCache.keys().next().value as string);
+    return d;
+  }).finally(() => inflight.delete(key));
+  inflight.set(key, p);
+  return p;
+}
+export function prefetchDetail(id: number) {
+  if (!detailCache.has(String(id))) fetchDetail(id).catch(() => {});
+}
 
 export async function loadBanners() {
+  lastLoad = Date.now();
   try {
     const data = await api<{ banners: Banner[]; updated: number }>("api/banners");
     const snapshot = new Map(data.banners.map((b) => [b.id, `${b.remaining}|${b.status}|${b.ev_pct}|${b.ship_cards}`]));
@@ -34,6 +55,7 @@ export async function loadBanners() {
         if (lastSnapshot.get(id) !== v) changed.add(id);
       });
       if (changed.size) {
+        changed.forEach((id) => detailCache.delete(String(id)));
         changedIds.value = changed;
         setTimeout(() => (changedIds.value = new Set()), 2500);
       }
@@ -116,7 +138,7 @@ export function connectLive() {
   source = new EventSource(`api/stream?t=${encodeURIComponent(getToken())}`);
   source.addEventListener("hello", () => {
     live.value = "live";
-    scheduleLoad(false);
+    if (Date.now() - lastLoad > 5000) scheduleLoad(false);   // gerade erst geladen: nicht doppelt
   });
   source.addEventListener("update", () => {
     live.value = "live";
