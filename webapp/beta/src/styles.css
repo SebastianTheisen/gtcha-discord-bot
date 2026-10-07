@@ -377,3 +377,8 @@ ol.guide { margin: 4px 0 10px; padding-left: 20px; font-size: 13px; line-height:
 .card.maybe .copies { bottom: 30px; }
 .hit.unsure, .hit.maybe { border-left: 4px solid var(--ok); }
 .hit.unsure img, .hit.maybe img { opacity: calc(1 - var(--maybe, 0.3)); }
+
+/* iOS zoomt in Eingabefelder mit Schrift unter 16 px - darum alle Eingaben mindestens 16 px */
+input, select, textarea { font-size: 16px !important; }
+textarea.field.code { font-size: 16px !important; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
