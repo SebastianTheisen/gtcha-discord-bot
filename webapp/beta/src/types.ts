@@ -10,9 +10,12 @@ export interface Banner {
   price: number;
   remaining: number;
   total: number;
+  per_day?: number | null;
   image?: string;
   buy_url?: string;
+  end?: string | null;
   end_ts?: number | null;
+  ended_at?: number | null;
   status: Status;
   ev?: number | null;
   ev_pct?: number | null;
@@ -27,15 +30,24 @@ export interface Banner {
   all_packs_cost?: number | null;
   min_value?: number | null;
   rank?: string | null;
+  ranks?: string[];
+  min_charge?: number | null;
   password?: boolean;
   ship_cards?: number | null;
   ship_value?: number | null;
+  ship_counted?: number | null;
   ship_players?: number | null;
+  converted?: number | null;
+  converted_max_cards?: number | null;
+  out_total?: number | null;
   left_value?: number | null;
+  left_per_pack?: number | null;
+  undecided?: number | null;
   archived?: boolean;
   store?: boolean;
   out?: { name: string; value: number; via: string }[];
-  conditions?: string[] | string | null;
+  out_unsure?: number;
+  conditions?: string | null;
 }
 
 export interface Hit {
@@ -48,7 +60,8 @@ export interface Hit {
   state: "open" | "pulled" | "unsure" | "maybe";
   note?: string | null;
   odds?: number;
-  origin?: { via: string; name?: string | null; at?: string; shipped_at?: number; pulled_on?: string };
+  medal_user?: string | null;
+  origin?: { via: string; user?: string; name?: string | null; at?: number; shipped_at?: number; pulled_on?: string };
 }
 
 export interface Card {
@@ -58,6 +71,9 @@ export interface Card {
   copies: number;
   image?: string;
   hit?: boolean;
+  pulled: number;
+  unsure?: string | null;
+  share: number;
 }
 
 export interface TimelineEvent {
@@ -74,12 +90,23 @@ export interface TimelineEvent {
   explain: { icon: string; text: string }[];
 }
 
+export interface Shipment {
+  t: number | null;
+  cards: number;
+  value: number;
+  players?: number;
+  kind?: string;
+  explain: { icon: string; text: string }[];
+}
+
 export interface BannerDetail extends Banner {
   hits: Hit[];
   cards: Card[];
+  share_above_price?: number | null;
   history: { t: number; packs: number }[];
   ev_history: { t: number; ev: number }[];
   pack_timeline: TimelineEvent[];
+  shipments: Shipment[];
 }
 
 export interface Me {

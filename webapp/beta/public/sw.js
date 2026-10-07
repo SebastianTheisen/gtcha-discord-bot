@@ -1,5 +1,5 @@
 // Service-Worker der Beta: App-Gerüst offline verfügbar, Daten immer frisch vom Server (bei Ausfall: letzter Stand)
-const CACHE = "gtcha-beta-v3";
+const CACHE = "gtcha-beta-v4";
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(["./", "manifest.webmanifest", "icon-180.png"])).then(() => self.skipWaiting()));
@@ -37,4 +37,31 @@ self.addEventListener("fetch", (e) => {
     }
     return res;
   }).catch(() => caches.match(e.request).then((hit) => hit || Response.error())));
+});
+
+// Pushes: gleiche Daten wie in der Live-App; Antippen öffnet die Beta (Server-Adressen "/#/…" -> "<beta>/#/…")
+self.addEventListener("push", (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch (e) { data = { title: "GTCHA Tracker", body: event.data && event.data.text() }; }
+  const badge = data.unread && self.navigator.setAppBadge ? self.navigator.setAppBadge(data.unread).catch(() => {}) : null;
+  const tell = self.clients.matchAll({ type: "window", includeUncontrolled: true })
+    .then((list) => list.forEach((c) => c.postMessage({ type: "push", unread: data.unread })));
+  event.waitUntil(Promise.all([badge, tell, self.registration.showNotification(data.title || "GTCHA Tracker", {
+    body: data.body || "",
+    icon: "icon-512.png",
+    badge: "icon-180.png",
+    data: { url: data.url || "/" },
+  })]));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const raw = event.notification.data && event.notification.data.url || "/";
+  const target = raw.startsWith("/#") || raw === "/" ? self.registration.scope + raw.slice(1) : raw;
+  event.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
+    for (const client of list) {
+      if (client.url.startsWith(self.registration.scope) && "focus" in client) { client.navigate(target); return client.focus(); }
+    }
+    return self.clients.openWindow(target);
+  }));
 });

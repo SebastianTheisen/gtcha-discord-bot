@@ -1,6 +1,7 @@
 // Gemeinsamer Zustand (Preact Signals) und Live-Verbindung zum Server.
-import { signal, computed } from "@preact/signals";
-import { api, getToken, LockedError, type LockInfo } from "./api";
+import { signal } from "@preact/signals";
+import { api, authApi, getToken, LockedError, type LockInfo } from "./api";
+import { applyProfile, wishList, type Profile } from "./local";
 import type { Banner, Me } from "./types";
 
 export const banners = signal<Banner[] | null>(null);
@@ -11,15 +12,15 @@ export const live = signal<"connecting" | "live" | "offline">("connecting");
 export const me = signal<Me | null | undefined>(undefined);
 // Banner, deren Daten sich beim letzten Live-Update geändert haben (kurz hervorheben)
 export const changedIds = signal<Set<number>>(new Set());
+// Banner mit noch nicht gezogenen Wunschkarten: ID -> Kartennamen
+export const wishBanners = signal<Map<number, string[]>>(new Map());
+// Zähler: erhöht sich bei jedem Live-Update oder "Ziehen zum Aktualisieren" - Seiten laden dann ihre Daten neu
+export const refreshTick = signal(0);
 export const route = signal(location.hash.slice(1) || "/");
 
 addEventListener("hashchange", () => {
   route.value = location.hash.slice(1) || "/";
 });
-
-export const navigate = (path: string) => {
-  location.hash = path;
-};
 
 let lastSnapshot = new Map<number, string>();
 
@@ -48,49 +49,89 @@ export async function loadBanners() {
   }
 }
 
-export async function loadMe() {
+// Banner mit Wunschkarten (noch nicht gezogen) für die Kategorie "⭐ Wunschkarten"
+export async function loadWishBanners() {
+  const wish = wishList.value;
+  if (!wish.length) {
+    wishBanners.value = new Map();
+    return;
+  }
   try {
-    me.value = await api<Me>("api/me");
+    const res = await api<{ cards: { name: string; banners: { id: number; out?: boolean }[] }[] }>(
+      `api/cards?ids=${wish.map((w) => w.id).join(",")}`);
+    const map = new Map<number, string[]>();
+    for (const c of res.cards) for (const wb of c.banners) if (!wb.out) map.set(wb.id, [...(map.get(wb.id) || []), c.name]);
+    wishBanners.value = map;
   } catch {
-    me.value = null;
+    /* ohne Zugang keine Wunsch-Banner */
   }
 }
 
+export async function loadMe() {
+  if (!getToken()) {
+    me.value = null;
+    return;
+  }
+  try {
+    me.value = await api<Me>("api/me");
+  } catch (e) {
+    me.value = null;
+    if (String((e as Error).message) === "401") {
+      try {
+        localStorage.setItem("deviceToken", "");
+      } catch {
+        /* egal */
+      }
+    }
+  }
+  // Rang/Aufladung aus dem letzten Übertragen übernehmen
+  if (me.value) authApi<Profile>("api/me/profile").then(applyProfile).catch(() => {});
+}
+
+export function refreshAll() {
+  refreshTick.value++;
+  return loadBanners();
+}
+
 // Live: Server-Sent Events melden jede Änderung der Banner-Daten. Fällt die Verbindung weg (z. B. App im
-// Hintergrund), fragt die App jede Minute nach und verbindet sich neu, sobald sie wieder sichtbar ist.
+// Hintergrund), fragt die App alle 30 s nach und verbindet sich neu, sobald sie wieder sichtbar ist.
 let source: EventSource | null = null;
 let poll: number | undefined;
 let pending: number | undefined;
+let retry: number | undefined;
 
-function scheduleLoad() {
+function scheduleLoad(tick: boolean) {
   clearTimeout(pending);
-  pending = window.setTimeout(loadBanners, 300);
+  pending = window.setTimeout(() => {
+    if (tick) refreshTick.value++;
+    loadBanners();
+  }, 300);
 }
 
 export function connectLive() {
   source?.close();
+  clearTimeout(retry);
   if (document.hidden) return;
   live.value = "connecting";
   source = new EventSource(`api/stream?t=${encodeURIComponent(getToken())}`);
   source.addEventListener("hello", () => {
     live.value = "live";
-    scheduleLoad();
+    scheduleLoad(false);
   });
   source.addEventListener("update", () => {
     live.value = "live";
-    scheduleLoad();
-    window.dispatchEvent(new Event("gtcha:update"));
+    scheduleLoad(true);
   });
   source.onerror = () => {
     live.value = "offline";
     source?.close();
     source = null;
-    setTimeout(connectLive, 15000);
+    retry = window.setTimeout(connectLive, 15000);
   };
   clearInterval(poll);
   poll = window.setInterval(() => {
-    if (live.value !== "live") loadBanners();
-  }, 60000);
+    if (live.value !== "live" && !document.hidden) loadBanners();
+  }, 30000);
 }
 
 document.addEventListener("visibilitychange", () => {
@@ -98,12 +139,12 @@ document.addEventListener("visibilitychange", () => {
     source?.close();
     source = null;
   } else {
-    loadBanners();
+    refreshAll();
     connectLive();
   }
 });
 
-// Einstellungen pro Gerät
+// Einstellungen pro Gerät (nur Beta)
 export function pref<T extends string>(key: string, fallback: T) {
   let initial = fallback;
   try {
@@ -125,6 +166,5 @@ export function pref<T extends string>(key: string, fallback: T) {
 export const theme = pref<"auto" | "dark" | "light">("theme", "auto");
 export const category = pref<string>("category", "Alle");
 export const sort = pref<string>("sort", "ev");
+export const listView = pref<string>("listView", "big");
 export const search = signal("");
-
-export const visibleCount = computed(() => banners.value?.length ?? 0);

@@ -1,23 +1,23 @@
 import { useEffect, useState } from "preact/hooks";
 import { api } from "../api";
 import { BannerCard, BannerSkeleton } from "../components/BannerCard";
-import { updated } from "../store";
+import { refreshTick } from "../store";
 import type { Banner } from "../types";
 
-// Top 10: die lohnendsten Banner gerade (Server-Rangliste wie in der Live-App)
+// Top 10: ziehbare Banner ohne Bonus, Gratis und Passwort nach Ø Rückgabe (Server-Rangliste wie in der Live-App)
 export function Top() {
   const [hot, setHot] = useState<Banner[] | null>(null);
   useEffect(() => {
     api<{ hot: Banner[] }>("api/hot").then((d) => setHot(d.hot)).catch(() => setHot([]));
-  }, [updated.value]);
+  }, [refreshTick.value]);
   return (
     <div>
-      <div class="section-title" style={{ marginTop: "4px" }}><h2>🔥 Top 10 gerade</h2>
-        <span class="muted small">nach Ø Rückgabe, nur kaufbare</span></div>
+      <div class="section-title" style={{ marginTop: "4px" }}><h2>🔥 Top 10 nach Ø Rückgabe</h2></div>
+      <p class="muted small" style={{ marginTop: "-4px" }}>Ziehbare Banner ohne Bonus, Gratis und Passwort · Ø = erwartete Rückgabe pro Zug</p>
       {hot == null
         ? <div class="grid">{[1, 2, 3].map(() => <BannerSkeleton />)}</div>
-        : hot.length ? <div class="grid">{hot.map((b) => <BannerCard key={b.id} b={b} />)}</div>
-          : <div class="empty">Gerade nichts in der Rangliste</div>}
+        : hot.length ? <div class="grid">{hot.map((b, i) => <BannerCard key={b.id} b={b} rank={i + 1} />)}</div>
+          : <div class="empty">Gerade kein ziehbarer Banner</div>}
     </div>
   );
 }
