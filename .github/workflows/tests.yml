@@ -28,3 +28,21 @@ jobs:
         run: python -m pytest -q tests
       - name: Syntax aller Module prüfen
         run: python -m compileall -q bot database scraper utils tools webapp main.py config.py
+
+  beta-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: webapp/beta
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: webapp/beta/package-lock.json
+      - name: Abhängigkeiten
+        run: npm ci --no-audit --no-fund
+      - name: Typprüfung und Build der Beta-Oberfläche
+        run: npm run build

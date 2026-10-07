@@ -1,0 +1,20 @@
+# GTCHA Tracker Beta - neue Oberfläche (Vite + Preact + TypeScript) neben der Live-App.
+# Stufe 1 baut die Oberfläche mit Node, Stufe 2 ist derselbe Server wie live (WEBAPP_ROLE=beta).
+FROM node:22-alpine AS ui
+WORKDIR /ui
+COPY webapp/beta/package.json webapp/beta/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY webapp/beta/ ./
+RUN npm run build
+
+FROM python:3.11-slim-bookworm
+ENV PYTHONUNBUFFERED=1
+WORKDIR /app
+COPY requirements-webapp.txt .
+RUN pip install --no-cache-dir -r requirements-webapp.txt
+COPY config.py ./
+COPY database ./database
+COPY utils ./utils
+COPY webapp ./webapp
+COPY --from=ui /ui/dist ./webapp/beta/dist
+CMD ["python", "-m", "webapp.server"]

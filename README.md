@@ -27,6 +27,19 @@ tailscale serve status        # zeigt die Adresse, z.B. https://vmd170353.tailXX
 Falls `tailscale serve` nach HTTPS-Zertifikaten fragt: in der Tailscale-Admin-Konsole unter
 **DNS** „MagicDNS“ und „HTTPS Certificates“ einschalten.
 
+### Beta (neue Oberfläche, parallel zur Live-App)
+
+Läuft als eigener Container `gtcha-app-beta` mit denselben Daten und derselben Verknüpfung, aber ohne Pushes und
+andere Hintergrundaufgaben – die Live-App bleibt unberührt.
+
+```bash
+cd ~/gtcha-discord-bot && ./update.sh beta                      # bauen und starten
+tailscale serve --bg --set-path /beta http://127.0.0.1:8081     # einmalig: unter /beta erreichbar machen
+```
+
+Danach im Browser: App-Adresse + `/beta/` (z. B. `https://vmd170353.tailXXXX.ts.net/beta/`). Ein normales
+`./update.sh` aktualisiert die Beta automatisch mit, solange sie läuft. Beenden: `docker stop gtcha-app-beta`.
+
 ### Auf dem iPhone
 
 1. App **Tailscale** aus dem App Store laden, mit demselben Konto anmelden, VPN einschalten.
