@@ -37,6 +37,7 @@ from utils.notifications import (
 from utils.rate_limiter import discord_rate_limiter
 from utils.memory_monitor import memory_monitor
 from utils.cache import banner_cache
+from utils.coin_history import coin_intervals, match_coin_history
 from utils.maintenance import backup_database, new_tor_identity, start_watchdog, touch_heartbeat
 from utils.banner_info import (
     banner_conditions, category_for, chance_at_least_one, format_conditions, format_shipping,

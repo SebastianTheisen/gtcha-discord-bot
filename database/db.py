@@ -6,7 +6,7 @@ import json
 
 import aiosqlite
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime, timedelta, timezone
 
 from loguru import logger
@@ -552,6 +552,17 @@ class Database:
                     (pack_id, row[0], coins, datetime.now().isoformat()))
             await db.commit()
         return coins - (row[0] or 0)
+
+    async def coin_history(self, pack_id: int) -> Tuple[List[tuple], List[tuple]]:
+        """Umwandlungen (Zeit, alt, neu) und Pack-Bewegungen (Zeit, alt, neu) eines Banners, älteste zuerst."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT changed_at, old_coins, new_coins FROM convert_history WHERE banner_id = ? "
+                                   "ORDER BY id", (pack_id,))
+            conversions = await cur.fetchall()
+            cur = await db.execute("SELECT changed_at, old_count, new_count FROM pack_history WHERE banner_id = ? "
+                                   "ORDER BY id", (pack_id,))
+            moves = await cur.fetchall()
+        return list(conversions), list(moves)
 
     async def update_conditions(self, pack_id: int, conditions: Dict) -> bool:
         """Speichert die Kaufbedingungen; True, wenn sie sich geändert haben."""

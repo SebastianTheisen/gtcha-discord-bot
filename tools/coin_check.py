@@ -16,6 +16,7 @@ sys.path.insert(0, "/app")
 from utils.card_pool import (  # noqa: E402
     fmt_coins, is_coin_mixed_pool, is_coin_pool, match_coin_conversions, tier_keys, tracked_units,
 )
+from utils.coin_history import coin_intervals, match_coin_history  # noqa: E402
 
 PENDING_MINUTES = 10   # wie COIN_PENDING_MINUTES im Bot
 db = sqlite3.connect("file:/app/data/gtcha_bot.db?mode=ro", uri=True)
@@ -52,6 +53,19 @@ for r in rows:
         groups = [f"{g['pulled']} von {'/'.join(tiers.get(k, k) for k in g['keys'])}" for g in res["groups"]]
         print(f"   Rechnung jetzt: sicher {[tiers.get(k, k) for k in res['certain']] or '-'}"
               + (f" · ❓ {groups}" if groups else ""))
+    conv = db.execute("SELECT changed_at, old_coins, new_coins FROM convert_history WHERE banner_id = ? ORDER BY id",
+                      (r["pack_id"],)).fetchall()
+    moves = db.execute("SELECT changed_at, old_count, new_count FROM pack_history WHERE banner_id = ? ORDER BY id",
+                       (r["pack_id"],)).fetchall()
+    iv = coin_intervals([tuple(x) for x in conv], [tuple(x) for x in moves], r["total_packs"] or 0, r["current_packs"] or 0)
+    if iv:
+        hist = match_coin_history(pool, iv, ship_units)
+        last = ", ".join(f"{i['drawn']} Packs/{fmt_coins(i['coins'])}" for i in iv[-4:])
+        print(f"   Schübe: {len(iv)} (letzte: {last})")
+        if hist:
+            hgroups = [f"{g['pulled']} von {'/'.join(tiers.get(k, k) for k in g['keys'])}" for g in hist["groups"]]
+            print(f"   Schub für Schub: sicher {[tiers.get(k, k) for k in hist['certain']] or '-'}"
+                  + (f" · ❓ {hgroups}" if hgroups else "") + f" · {hist['used']} genutzt, {hist['skipped']} übergangen")
     print(f"   gespeichert: gezogen {[tiers.get(k, k) for k in stored] or '-'}"
           + (f" · ❓ {len(unsure)} Gruppe(n)" if unsure else ""))
 if not found:

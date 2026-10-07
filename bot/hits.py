@@ -315,6 +315,24 @@ class HitsMixin:
         n_max = max(0, drawn - shipped)
         n_min = max(0, drawn - shipping_units - pending)
         res = await asyncio.to_thread(match_coin_conversions, pool, converted, n_min, n_max, medal_keys)
+        # genauer: Schub für Schub (Packs im Fenster zwischen zwei Läufen der Seite gegen die Umwandlung im Lauf)
+        conversions, moves = await self.db.coin_history(pid)
+        intervals = coin_intervals(conversions, moves, total, left)
+        hist = await asyncio.to_thread(match_coin_history, pool, intervals, shipping_units, medal_keys) \
+            if intervals else None
+        if hist is not None:
+            # beide Rechnungen sind für sich richtig: sicher ist, was eine von beiden sicher findet
+            sure = list(dict.fromkeys(hist["certain"] + (res["certain"] if res else [])))
+            groups = []
+            for g in hist["groups"]:
+                rest = [k for k in g["keys"] if k not in sure]
+                pulled = g["pulled"] - (len(g["keys"]) - len(rest))
+                if pulled > 0 and rest:
+                    groups.append({**g, "keys": rest, "pulled": min(pulled, len(rest))})
+            res = {"certain": sure, "groups": groups, "maybe": [],
+                   "reason": (f"{len(intervals)} Umwandlungs-Schübe ausgewertet ({hist['used']} genutzt, "
+                              f"{hist['skipped']} übergangen), {fmt_coins(converted)} Coins bei {drawn} Packs")}
+            return res
         if res is None:
             logger.info(f"[HIT] {pid}: Umwandlung {fmt_coins(converted)} Coins bei {n_min}-{n_max} umgewandelten "
                         f"Karten passt zu keiner Aufteilung - übergangen")
