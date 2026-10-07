@@ -237,7 +237,8 @@ function Hits({ b, open }: { b: BannerDetail; open: (h: Hit) => void }) {
       <p class="muted small">{left} von {b.hits.length} noch drin · {b.archived ? "beendet" : "antippen = melden"}</p>
       <div class="hits">
         {b.hits.map((h) => (
-          <button class={`hit ${h.state}`} onClick={() => open(h)}>
+          <button class={`hit ${h.state}`} onClick={() => open(h)}
+            style={h.state === "unsure" || h.state === "maybe" ? { "--maybe": String(Math.min(0.75, 0.15 + (h.odds ?? 30) / 100 * 0.7)) } : undefined}>
             {h.image ? <Img url={h.image} w={320} alt="" /> : <div class="ph" />}
             <div>
               <div class="tier">{h.tier} · {num(h.value)} Coins</div>
@@ -281,11 +282,18 @@ function Cards({ b, open }: { b: BannerDetail; open: (c: Card) => void }) {
             const gone = c.pulled >= c.copies;
             const tiers = units.length ? (units.length === 1 ? units[0].tier : `${units[0].tier}–${units[units.length - 1].tier}`) : "";
             const mine = meId && units.some((u) => u.medal_user === String(meId));
+            // vielleicht raus: ❓-Gruppe oder Wahrscheinlichkeit aus dem zeitlichen Ablauf
+            const maybe = !gone && (!!c.unsure || units.some((u) => u.state === "unsure" || u.state === "maybe"));
+            const unitOdds = units.map((u) => u.odds).filter((o): o is number => o != null);
+            const parsed = c.unsure?.match(/~(\d+) %/);
+            const odds = unitOdds.length ? Math.max(...unitOdds) : parsed ? Number(parsed[1]) : null;
             const share = c.share.toLocaleString("de-DE", { maximumFractionDigits: c.share < 0.1 ? 3 : c.share < 1 ? 2 : 1 }) + " %";
             return (
-              <button class={`card ${c.hit ? "hit-card" : ""} ${gone ? "gone" : ""} ${b.price && c.value >= b.price ? "above" : ""}`} onClick={() => open(c)}>
+              <button class={`card ${c.hit ? "hit-card" : ""} ${gone ? "gone" : ""} ${maybe ? "maybe" : ""} ${b.price && c.value >= b.price ? "above" : ""}`}
+                style={maybe ? { "--maybe": String(Math.min(0.75, 0.15 + (odds ?? 30) / 100 * 0.7)) } : undefined} onClick={() => open(c)}>
                 <div class="img">
                   <Img url={c.image} w={320} alt="" />
+                  {maybe && <span class="maybe-badge">❓{odds != null ? ` ~${odds} %` : " vielleicht raus"}</span>}
                   {tiers && <span class="tier-badge">{tiers}</span>}
                   {c.copies > 1 && <span class="copies">×{c.copies}</span>}
                   {c.hit && <span class="ship-tag">✈</span>}
