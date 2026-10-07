@@ -956,6 +956,16 @@ async def security_headers(request, handler):
     return response
 
 
+@web.middleware
+async def compress_api(request, handler):
+    """Beta: Daten gepackt senden (Banner-Liste und -Details sind groß, über Tailscale/Mobilfunk spürbar schneller)."""
+    response = await handler(request)
+    if (request.path.startswith(("/api/", "/beta/api/")) and not request.path.endswith("/stream")
+            and isinstance(response, web.Response) and response.body is not None and len(response.body) > 1024):
+        response.enable_compression()
+    return response
+
+
 def _beta_file(name: str):
     async def handler(_):
         return web.FileResponse(BETA_DIST / name)
@@ -963,7 +973,8 @@ def _beta_file(name: str):
 
 
 def make_app(app: App) -> web.Application:
-    web_app = web.Application(middlewares=[security_headers], client_max_size=MAX_IMPORT_BYTES + 1024)
+    middlewares = [security_headers, compress_api] if app.beta else [security_headers]
+    web_app = web.Application(middlewares=middlewares, client_max_size=MAX_IMPORT_BYTES + 1024)
     routes = [
         web.get("/", app.index),
         web.get("/sw.js", app.service_worker),

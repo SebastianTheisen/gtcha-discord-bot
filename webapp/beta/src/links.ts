@@ -21,11 +21,16 @@ export function guessGame(name: string, category?: string): Game {
   return null;
 }
 
-// "[Parallel] Gogeta: GT (Included in OP16)" -> "Gogeta GT" - Zusätze in Klammern stören die Suche
+// "[Parallel] Gogeta: GT (Included in OP16)" -> "Gogeta GT", "Mew LV.23" -> "Mew": Cardmarket findet nur, wenn
+// alle Wörter im Produktnamen stehen - Level-Zahlen, Kartennummern, Seltenheiten und Klammerzusätze stehen dort nicht.
+// Teil des Namens bleiben z. B. "LV.X", "ex", "GX", "V", "VMAX", "VSTAR".
 export function searchName(name: string): string {
   return name
     .replace(/[\[【(（][^\]】)）]*[\]】)）]/g, " ")
-    .replace(/[★☆:：・/]/g, " ")
+    .replace(/\bLV\.?\s*\d+\b/gi, " ")
+    .replace(/\b\d{1,3}\s*\/\s*\d{1,3}\b/g, " ")
+    .replace(/\b(SAR|SR|AR|UR|HR|CHR|CSR|SSR|RRR|RR|PSA\s*\d+|BGS\s*[\d.]+|Promo)\b/gi, " ")
+    .replace(/[★☆:：・/#]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -44,10 +49,16 @@ export function marketLinks(name: string, category?: string): MarketLink[] {
   if (game) {
     links.push({
       label: "Cardmarket",
-      hint: "Angebote in Europa",
+      hint: q === name.trim() ? "Angebote in Europa" : `Suche „${q}“`,
       url: `https://www.cardmarket.com/de/${game}/Products/Search?searchString=${enc}`,
     });
   }
+  // Voller Name über Google, nur auf Cardmarket: trifft oft die genaue Version (Level, Set, Promo)
+  links.push({
+    label: "Cardmarket (Google)",
+    hint: "genaue Version suchen",
+    url: `https://www.google.com/search?q=${encodeURIComponent(`site:cardmarket.com ${name.replace(/[\[\]【】]/g, " ").trim()}`)}`,
+  });
   links.push(
     { label: "PriceCharting", hint: "Preisverlauf & Grading", url: `https://www.pricecharting.com/search-products?q=${enc}&type=prices` },
     { label: "eBay verkauft", hint: "echte Verkaufspreise", url: `https://www.ebay.de/sch/i.html?_nkw=${enc}&LH_Sold=1&LH_Complete=1` },

@@ -22,7 +22,7 @@
   --gap: 12px;
   --header-h: 56px;
   --nav-h: 64px;
-  --font: "Inter Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font: -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", Roboto, sans-serif;   /* Systemschrift: sofort da, kein Download */
   color-scheme: dark;
 }
 
@@ -96,8 +96,7 @@ img { display: block; max-width: 100%; }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--good) 60%, transparent); } 70% { box-shadow: 0 0 0 8px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
 
 .main { max-width: 1100px; margin: 0 auto; padding: 14px 16px; }
-.page { animation: enter 0.22s ease; }
-@keyframes enter { from { opacity: 0; transform: translateY(6px); } }
+
 
 .nav {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: flex; justify-content: space-around;
@@ -138,7 +137,7 @@ select.select { flex: none; max-width: 128px; height: 40px; border-radius: 12px;
 .grid { display: grid; gap: var(--gap); grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); }
 .bcard {
   position: relative; display: block; overflow: hidden; border-radius: var(--radius); background: var(--surface);
-  border: 1px solid var(--line); box-shadow: var(--shadow); transition: transform 0.15s ease, border-color 0.3s;
+  border: 1px solid var(--line); transition: transform 0.15s ease, border-color 0.3s;
 }
 .bcard:active { transform: scale(0.985); }
 .bcard.flash { border-color: var(--accent); animation: flash 1.2s ease; }
@@ -147,7 +146,7 @@ select.select { flex: none; max-width: 128px; height: 40px; border-radius: 12px;
 .bcard .media img { width: 100%; height: 100%; object-fit: cover; }
 .bcard .media::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, transparent 45%, rgba(0, 0, 0, 0.72)); }
 .bcard .badges { position: absolute; top: 10px; left: 10px; right: 10px; z-index: 1; display: flex; gap: 6px; justify-content: space-between; }
-.glass { backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); background: rgba(10, 14, 25, 0.55); color: #fff; }
+.glass { background: rgba(10, 14, 25, 0.72); color: #fff; }
 .bcard .over { position: absolute; left: 12px; right: 12px; bottom: 10px; z-index: 1; color: #fff; }
 .bcard .over .title { font-weight: 800; font-size: 16px; line-height: 1.2; text-shadow: 0 1px 8px rgba(0, 0, 0, 0.5); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .bcard .over .sub { font-size: 12px; opacity: 0.85; }
@@ -188,7 +187,7 @@ select.select { flex: none; max-width: 128px; height: 40px; border-radius: 12px;
 .stat .l { font-size: 12px; color: var(--muted); }
 .stat .v { font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums; }
 .stat .s { font-size: 12px; color: var(--muted); }
-.tabs { position: sticky; top: calc(var(--header-h) + env(safe-area-inset-top)); z-index: 10; display: flex; gap: 4px; margin: 18px -16px 0; padding: 8px 16px; background: color-mix(in srgb, var(--bg) 85%, transparent); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+.tabs { position: sticky; top: calc(var(--header-h) + env(safe-area-inset-top)); z-index: 10; display: flex; gap: 4px; margin: 18px -16px 0; padding: 8px 16px; background: var(--bg); }
 .tabs button { flex: 1; height: 36px; border-radius: 10px; font-weight: 700; font-size: 14px; color: var(--muted); }
 .tabs button.active { background: var(--surface-2); color: var(--text); }
 
@@ -203,7 +202,7 @@ select.select { flex: none; max-width: 128px; height: 40px; border-radius: 12px;
 
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 10px; }
 .card { text-align: left; }
-.card .img { aspect-ratio: 63 / 88; border-radius: 8px; overflow: hidden; background: var(--surface-2); box-shadow: var(--shadow); }
+.card .img { aspect-ratio: 63 / 88; border-radius: 8px; overflow: hidden; background: var(--surface-2); }
 .card .img img { width: 100%; height: 100%; object-fit: cover; }
 .card .n { font-size: 12px; margin-top: 6px; line-height: 1.2; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .card .v { font-size: 12px; font-weight: 800; color: var(--accent); }
@@ -255,7 +254,7 @@ input.field { width: 100%; height: 46px; border-radius: 12px; border: 1px solid 
 .neg, .ev.bad { color: var(--bad); }
 .ev.ok { color: var(--ok); }
 .ev { font-weight: 800; font-variant-numeric: tabular-nums; }
-.pill.solid { background: color-mix(in srgb, var(--bg) 70%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+.pill.solid { background: rgba(10, 14, 25, 0.78); }
 .pill.solid.good { color: var(--good); } .pill.solid.ok { color: var(--ok); } .pill.solid.bad { color: var(--bad); }
 .rank-no { color: var(--accent); margin-right: 2px; }
 
@@ -357,8 +356,13 @@ ol.guide { margin: 4px 0 10px; padding-left: 20px; font-size: 13px; line-height:
 .ptr.ready { color: var(--accent); }
 .ptr.spinning { transform: translate(-50%, 50px); animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: translate(-50%, 50px) rotate(360deg); } }
-.page { transition: transform 0.1s; }
+
 
 .chart.tall { height: 180px; }
 .chart .axis { fill: var(--muted); font-size: 12px; }
 .nav a { font-size: 10.5px; }
+
+/* Lange Listen: Karten außerhalb des Bildschirms nicht zeichnen (schnelleres Scrollen) */
+.grid > .entry, .clist > .crow, .cards > .card { content-visibility: auto; contain-intrinsic-size: auto 320px; }
+.clist > .crow { contain-intrinsic-size: auto 84px; }
+.cards > .card { contain-intrinsic-size: auto 240px; }

@@ -1,5 +1,5 @@
 // Service-Worker der Beta: App-Gerüst offline verfügbar, Daten immer frisch vom Server (bei Ausfall: letzter Stand)
-const CACHE = "gtcha-beta-v4";
+const CACHE = "gtcha-beta-v5";
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(["./", "manifest.webmanifest", "icon-180.png"])).then(() => self.skipWaiting()));
@@ -29,7 +29,18 @@ self.addEventListener("fetch", (e) => {
     })));
     return;
   }
-  // Seite und Daten: Netz zuerst, bei Ausfall der letzte Stand
+  // App-Seite: sofort aus dem Speicher (die Dateien darin haben feste Namen), im Hintergrund auffrischen -
+  // eine neue Version gilt beim nächsten Öffnen. Spart beim Start eine Runde über Tailscale.
+  if (e.request.mode === "navigate") {
+    const fresh = fetch(e.request).then((res) => {
+      if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put("./", copy)); }
+      return res;
+    });
+    e.respondWith(caches.match("./").then((hit) => hit || fresh).catch(() => fresh));
+    e.waitUntil(fresh.catch(() => {}));
+    return;
+  }
+  // Daten: Netz zuerst, bei Ausfall der letzte Stand
   e.respondWith(fetch(e.request).then((res) => {
     if (res.ok && (isData || e.request.mode === "navigate")) {
       const copy = res.clone();
