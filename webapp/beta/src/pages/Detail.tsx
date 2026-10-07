@@ -6,7 +6,7 @@ import { CardSheet, type CardInfo } from "../components/CardSheet";
 import { AreaChart } from "../components/Chart";
 import { Img } from "../components/Img";
 import { Lock } from "../components/Lock";
-import { compact, countdown, dateTime, day, evTone, hhmm, num, pct, shortTime, untilText } from "../format";
+import { cardName, compact, countdown, dateTime, day, evTone, hhmm, num, pct, shortTime, untilText } from "../format";
 import { cardCode } from "../links";
 import { buyHref, canBuy, whyNot } from "../local";
 import { pushState, toggleWatch, watchIds } from "../push";
@@ -242,7 +242,7 @@ function Hits({ b, open }: { b: BannerDetail; open: (h: Hit) => void }) {
             {h.image ? <Img url={h.image} w={320} alt="" /> : <div class="ph" />}
             <div>
               <div class="tier">{h.tier} · {num(h.value)} Coins</div>
-              <div class="name">{h.name}</div>
+              <div class="name">{cardName(h.name)}</div>
               {h.note && <div class="muted small">{h.note}</div>}
               {originLines([h], meId).map((l) => <div class="muted small">{l}</div>)}
             </div>
@@ -299,7 +299,7 @@ function Cards({ b, open }: { b: BannerDetail; open: (c: Card) => void }) {
                   {c.hit && <span class="ship-tag">✈</span>}
                 </div>
                 <div class="v tnum">{num(c.value)}</div>
-                <div class="n">{c.name}</div>
+                <div class="n">{cardName(c.name)}</div>
                 {(c.model || c.rarity) && <div class="m">{[cardCode(c.model)?.text, c.rarity].filter(Boolean).join(" · ")}</div>}
                 <div class="m">{share}{c.pulled && !gone ? ` · ${c.pulled}/${c.copies} gezogen` : ""}{mine ? " · von dir" : ""}</div>
                 {c.unsure && !gone && !units.some((u) => u.odds != null) && <div class="m">❓ {c.unsure}</div>}

@@ -31,7 +31,7 @@ export function searchName(name: string): string {
     .replace(/\b\d{1,3}\s*\/\s*\d{1,3}\b/g, " ")
     .replace(/\b(SAR|SR|AR|UR|HR|CHR|CSR|SSR|RRR|RR|PSA\s*\d+|BGS\s*[\d.]+|Promo)\b/gi, " ")
     .replace(/\b([XY])ex\b/g, "$1 ex")   // GTCHA schreibt "Mega Charizard Xex", Cardmarket "Mega Charizard X ex"
-    .replace(/[★☆:：・/#]/g, " ")
+    .replace(/[★☆:：・/#\[\]【】()（）]/g, " ")   // auch einzelne Klammern ohne Gegenstück
     .replace(/\s+/g, " ")
     .trim();
 }
