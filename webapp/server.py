@@ -32,6 +32,11 @@ from webapp.push import DEFAULTS, EVENTS, WATCH_EVENTS, PushService, build_event
 from webapp.view import BannerView, banner_label
 
 STATIC = Path(__file__).parent / "static"
+BETA_DIST = Path(__file__).parent / "beta" / "dist"   # neue Oberfläche (Vite-Build), nur im Beta-Container
+# live: alles wie bisher · beta: zweiter Container mit neuer Oberfläche unter /beta, gleiche Daten, aber ohne
+# Hintergrundaufgaben (Pushes, Treffsicherheit, Bilder-Abgleich) - die erledigt nur der Live-Container
+ROLE = os.getenv("WEBAPP_ROLE", "live")
+STREAM_HEARTBEAT = 25
 REFRESH_SECONDS = 20
 BOOKMARKLET_VERSION = 6   # = SYNC_VERSION in app.js; ältere Lesezeichen bekommen einen Hinweis
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
@@ -148,7 +153,7 @@ SYNC_REQUIRED_DAYS = 7   # ohne Übertragen in dieser Zeit sind Banner & Co. ges
 
 
 class App:
-    def __init__(self, db_path: str, data_dir: str, contact: str):
+    def __init__(self, db_path: str, data_dir: str, contact: str, role: Optional[str] = None):
         self.view = BannerView(Database(db_path))
         self.push = PushService(data_dir, contact)
         self.images = ImageCache(data_dir)
@@ -159,6 +164,9 @@ class App:
         self._updated = 0
         self._lock = asyncio.Lock()
         self._syncing = False
+        self._digest = ""                       # Fingerabdruck der Banner-Daten: ändert er sich, gibt es ein Live-Update
+        self._changed = asyncio.Event()
+        self.beta = (role or ROLE) == "beta"
 
     async def _compute(self, only_if_missing: bool = False) -> list:
         async with self._lock:
@@ -167,10 +175,18 @@ class App:
             started = time.monotonic()
             self._data = await self.view.all_banners(with_pool=True)
             self._updated = int(time.time())
-            try:
-                await self.accuracy.record(self._data)
-            except Exception as e:
-                logger.debug(f"Treffsicherheit nicht gespeichert: {e}")
+            digest = hashlib.sha1(json.dumps(
+                [(b.get("id"), b.get("remaining"), b.get("status"), b.get("ev_pct"), b.get("ship_cards"),
+                  b.get("hits_open")) for b in self._data], default=str).encode()).hexdigest()
+            if digest != self._digest:
+                self._digest = digest
+                self._changed.set()
+                self._changed = asyncio.Event()
+            if not self.beta:
+                try:
+                    await self.accuracy.record(self._data)
+                except Exception as e:
+                    logger.debug(f"Treffsicherheit nicht gespeichert: {e}")
             logger.debug(f"Daten neu berechnet in {time.monotonic() - started:.2f}s")
             return self._data
 
@@ -199,6 +215,9 @@ class App:
         while True:
             try:
                 await self._compute()
+                if self.beta:   # Beta: nur Daten frisch halten, alles andere macht der Live-Container
+                    await asyncio.sleep(REFRESH_SECONDS)
+                    continue
                 # Treffsicherheit: beendete Banner noch mitschreiben (Ergebnis wird 24 Std. später gemessen)
                 if time.monotonic() - getattr(self, "_archive_recorded", -1e9) > 1800:
                     self._archive_recorded = time.monotonic()
@@ -271,6 +290,28 @@ class App:
             if a and a["user_id"] == o["user"]:
                 o["via"], o["pulled_on"] = "lesezeichen", a["pulled_on"]
         return web.json_response(data)
+
+    async def api_stream(self, request):
+        """Live-Updates (Server-Sent Events): meldet, sobald sich Banner-Daten ändern - die App lädt dann neu."""
+        # EventSource kann keine eigenen Kopfzeilen senden: Geräte-Token hier als ?t=…
+        user = await self.bridge.device(request.headers.get("X-Device-Token") or request.query.get("t"))
+        if not (await self._sync_info(user))["ok"]:
+            raise web.HTTPForbidden()
+        resp = web.StreamResponse(headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache",
+                                           "X-Accel-Buffering": "no"})
+        await resp.prepare(request)
+        try:
+            await resp.write(f"event: hello\ndata: {json.dumps({'updated': self._updated})}\n\n".encode())
+            while True:
+                waiter = self._changed
+                try:
+                    await asyncio.wait_for(waiter.wait(), STREAM_HEARTBEAT)
+                    await resp.write(f"event: update\ndata: {json.dumps({'updated': self._updated})}\n\n".encode())
+                except asyncio.TimeoutError:
+                    await resp.write(b": ping\n\n")
+        except (ConnectionResetError, asyncio.CancelledError):
+            pass
+        return resp
 
     async def image(self, request):
         """Bild aus dem Zwischenspeicher auf dem VPS (beim ersten Mal von GTCHA geladen)."""
@@ -831,15 +872,18 @@ class App:
 
     # --- Seiten ---
     async def index(self, request):
+        if self.beta and (BETA_DIST / "index.html").exists():
+            return web.FileResponse(BETA_DIST / "index.html", headers={"Cache-Control": "no-cache"})
         return web.FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})
 
     async def service_worker(self, request):
-        return web.FileResponse(STATIC / "sw.js", headers={"Cache-Control": "no-cache",
-                                                          "Content-Type": "application/javascript"})
+        path = BETA_DIST / "sw.js" if self.beta and (BETA_DIST / "sw.js").exists() else STATIC / "sw.js"
+        return web.FileResponse(path, headers={"Cache-Control": "no-cache", "Content-Type": "application/javascript"})
 
     async def manifest(self, request):
-        return web.FileResponse(STATIC / "manifest.webmanifest",
-                                headers={"Content-Type": "application/manifest+json"})
+        path = (BETA_DIST / "manifest.webmanifest" if self.beta and (BETA_DIST / "manifest.webmanifest").exists()
+                else STATIC / "manifest.webmanifest")
+        return web.FileResponse(path, headers={"Content-Type": "application/manifest+json"})
 
     # --- Eigene Pushes: Ergebnis automatischer Medaillen, Erinnerung ans Übertragen ---
     async def personal_pushes(self, now: float = None):
@@ -912,9 +956,15 @@ async def security_headers(request, handler):
     return response
 
 
+def _beta_file(name: str):
+    async def handler(_):
+        return web.FileResponse(BETA_DIST / name)
+    return handler
+
+
 def make_app(app: App) -> web.Application:
     web_app = web.Application(middlewares=[security_headers], client_max_size=MAX_IMPORT_BYTES + 1024)
-    web_app.add_routes([
+    routes = [
         web.get("/", app.index),
         web.get("/sw.js", app.service_worker),
         web.get("/manifest.webmanifest", app.manifest),
@@ -944,6 +994,7 @@ def make_app(app: App) -> web.Application:
         web.post("/api/admin/push", app.api_admin_push),
         web.post("/api/me/devices/remove", app.api_remove_device),
         web.get("/api/health", app.api_health),
+        web.get("/api/stream", app.api_stream),
         web.get("/api/accuracy", app.api_accuracy),
         web.post("/api/import-form", app.api_import_form),
         web.post("/api/medal", app.api_medal),
@@ -955,20 +1006,36 @@ def make_app(app: App) -> web.Application:
         web.post("/api/push/test", app.api_push_test),
         web.post("/api/push/inbox", app.api_push_inbox),
         web.post("/api/push/read", app.api_push_read),
-    ])
-    web_app.router.add_static("/static", STATIC)
+    ]
+    # Beta läuft unter https://…/beta (tailscale serve --set-path /beta) - gleicher Ursprung wie die Live-App, also
+    # gleiche Verknüpfung (Geräte-Token). Je nach Weiterleitung kommt der Pfad mit oder ohne /beta an: beides bedienen.
+    prefixes = ["", "/beta"] if app.beta else [""]
+    for prefix in prefixes:
+        web_app.add_routes([web.RouteDef(r.method, prefix + r.path if r.path != "/" or not prefix else prefix + "/",
+                                         r.handler, r.kwargs) for r in routes])
+        web_app.router.add_static(prefix + "/static", STATIC)
+        if app.beta and (BETA_DIST / "assets").is_dir():
+            web_app.router.add_static(prefix + "/assets", BETA_DIST / "assets")
+            for name in ("icon-180.png", "icon-512.png"):
+                web_app.router.add_get(prefix + "/" + name, _beta_file(name))
+    if app.beta:
+        async def to_slash(_):
+            raise web.HTTPFound("/beta/")
+        web_app.router.add_get("/beta", to_slash)
 
     async def start_background(_):
         await app.push.init()
         await app.bridge.init()
-        await app.migrate_raw_imports()
         await app.accuracy.init()
         web_app["refresh_task"] = asyncio.create_task(app.refresh_loop())
-        web_app["push_task"] = asyncio.create_task(app.push_loop())
+        if not app.beta:
+            await app.migrate_raw_imports()
+            web_app["push_task"] = asyncio.create_task(app.push_loop())
 
     async def stop_background(_):
-        web_app["refresh_task"].cancel()
-        web_app["push_task"].cancel()
+        for key in ("refresh_task", "push_task"):
+            if key in web_app:
+                web_app[key].cancel()
         await app.images.close()
 
     web_app.on_startup.append(start_background)
@@ -985,7 +1052,7 @@ def main():
     app = App(os.getenv("DATABASE_PATH", os.path.join(data_dir, "gtcha_bot.db")), data_dir,
               os.getenv("WEBAPP_CONTACT", "https://github.com"))
     host, port = os.getenv("WEBAPP_HOST", "127.0.0.1"), int(os.getenv("WEBAPP_PORT", "8080"))
-    logger.info(f"GTCHA Tracker läuft auf http://{host}:{port}")
+    logger.info(f"GTCHA Tracker ({ROLE}) läuft auf http://{host}:{port}")
     web.run_app(make_app(app), host=host, port=port, print=None, access_log=None)
 
 

@@ -1,0 +1,6 @@
+.git
+data
+screenshots
+**/__pycache__
+webapp/beta/node_modules
+webapp/beta/dist

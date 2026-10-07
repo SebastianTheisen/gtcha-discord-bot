@@ -1,6 +1,7 @@
 #!/bin/bash
 # Holt die neue Version von GitHub (main), baut nur, was sich geändert hat, und prüft danach, ob alles läuft.
 # Aufruf auf dem VPS:  cd ~/gtcha-discord-bot && ./update.sh        (./update.sh --alles baut alles neu)
+#                      ./update.sh beta   startet/aktualisiert die Beta der Web-App (neue Oberfläche, Port 8081)
 set -e
 cd "$(dirname "$0")"
 
@@ -29,6 +30,24 @@ if ! timeout 60 git pull --ff-only origin main; then
 fi
 new=$(git rev-parse HEAD)
 
+if [ "$1" = "beta" ]; then
+  # Beta: immer neu bauen (eigener Container, live bleibt unberührt)
+  echo "Baue Beta (neue Oberfläche) …"
+  docker compose --profile beta up -d --build gtcha-app-beta
+  port=$(grep -E '^WEBAPP_BETA_PORT=' .env 2>/dev/null | cut -d= -f2)
+  for i in $(seq 1 30); do
+    if curl -fs "http://127.0.0.1:${port:-8081}/api/health" > /dev/null; then
+      echo "✅ Beta läuft auf Port ${port:-8081}"
+      echo "   Einmalig für Tailscale:  tailscale serve --bg --set-path /beta http://127.0.0.1:${port:-8081}"
+      echo "   Dann im Browser: deine App-Adresse + /beta/"
+      exit 0
+    fi
+    sleep 3
+  done
+  echo "❌ Beta antwortet nicht – docker logs --tail 50 gtcha-app-beta"
+  exit 1
+fi
+
 if [ "$old" = "$new" ] && [ "$1" != "--alles" ]; then
   echo "✅ Schon aktuell ($(git log -1 --format='%h %s'))"
   exit 0
@@ -42,11 +61,19 @@ services=""
 if [ "$1" = "--alles" ] || echo "$changed" | grep -qE '^(bot|scraper|database|utils|services|tor)/|^(main|config)\.py$|^requirements\.txt$|^Dockerfile$|^docker-compose\.yml$'; then
   services="$services gtcha-bot"
 fi
-if [ "$1" = "--alles" ] || echo "$changed" | grep -qE '^(webapp|utils|database)/|^requirements-webapp\.txt$|^Dockerfile\.webapp$|^docker-compose\.yml$'; then
+if [ "$1" = "--alles" ] || echo "$changed" | grep -v '^webapp/beta/' | grep -qE '^(webapp|utils|database)/|^requirements-webapp\.txt$|^Dockerfile\.webapp$|^docker-compose\.yml$'; then
   services="$services gtcha-app"
 fi
 if [ "$1" = "--alles" ] || echo "$changed" | grep -qE '^tor/'; then
   services="$services tor"
+fi
+
+# Läuft die Beta schon: bei Änderungen an Web-App/Daten-Code gleich mit aktualisieren (live bleibt davon unberührt)
+if docker inspect gtcha-app-beta > /dev/null 2>&1 && \
+   echo "$changed" | grep -qE '^(webapp|utils|database)/|^requirements-webapp\.txt$|^Dockerfile\.beta$|^docker-compose\.yml$'; then
+  echo "Aktualisiere die Beta …"
+  docker compose --profile beta up -d --build gtcha-app-beta && echo "✅ Beta aktualisiert" \
+    || echo "⚠️ Beta nicht aktualisiert – ./update.sh beta"
 fi
 
 if [ -z "$services" ]; then

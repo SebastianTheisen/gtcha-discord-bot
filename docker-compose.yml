@@ -64,3 +64,28 @@ services:
       options:
         max-size: "10m"
         max-file: "2"
+
+  # Beta der Web-App (neue Oberfläche): nur mit ./update.sh beta gestartet, live bleibt unberührt.
+  # Gleiche Daten und gleiche Verknüpfung wie live, aber keine Hintergrundaufgaben (Pushes usw. macht nur live).
+  # Erreichbar über Tailscale unter /beta:  tailscale serve --bg --set-path /beta http://127.0.0.1:8081
+  gtcha-app-beta:
+    build:
+      context: .
+      dockerfile: Dockerfile.beta
+    container_name: gtcha-app-beta
+    profiles: ["beta"]
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - .env
+    environment:
+      - WEBAPP_HOST=127.0.0.1
+      - WEBAPP_PORT=${WEBAPP_BETA_PORT:-8081}
+      - WEBAPP_ROLE=beta
+    volumes:
+      - ./data:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
