@@ -175,7 +175,10 @@ class HitsMixin:
                                   f"Coins Kartenwert verschickt")
                     # Gemischt aus Coins und Versand-Hits: die Umwandlung kommt nur von Coins - teurere Coins erkennbar
                     coin_mixed = is_coin_mixed_pool(pool)
-                    coin_changed = coin_mixed and value is not None and value != state["decided_value"]
+                    # neu rechnen, wenn sich die Umwandlung geändert hat - und einmal nach jedem Start des Bots
+                    coin_seen = self.__dict__.setdefault("_coin_seen", {})
+                    coin_changed = coin_mixed and value is not None and (
+                        value != state["decided_value"] or coin_seen.get(pid) != value)
                     if not changed and not coin_changed:
                         await self.db.set_pull_tracking(pid, value, ships[0], ships[1], pulled, unsure)
                         continue
@@ -211,6 +214,7 @@ class HitsMixin:
                     if coin_mixed:
                         coin = await self._coin_conversions(pid, pool, item, medal_thread, ships[0] or 0,
                                                             shipping_units=len(ship_keys))
+                        coin_seen[pid] = value
                         if coin:
                             coin_certain = [k for k in coin["certain"] if k not in rejected]
                             coin_groups = coin["groups"]
@@ -228,9 +232,11 @@ class HitsMixin:
                 elif is_coin_pool(pool):
                     # Nur Coin-Karten: jede gezogene Karte wird umgewandelt. Aus umgewandelter Summe und gezogenen
                     # Packs folgt, welche teureren Coins raus sind (Gesamtergebnis, wie beim Versand)
-                    if value is None or value == state["decided_value"]:
+                    coin_seen = self.__dict__.setdefault("_coin_seen", {})
+                    if value is None or (value == state["decided_value"] and coin_seen.get(pid) == value):
                         await self.db.set_pull_tracking(pid, value, ships[0], ships[1], pulled, unsure)
                         continue
+                    coin_seen[pid] = value
                     # erste Auswertung nach dieser Regel: nur speichern, nicht als neue Hits posten (Altbestand)
                     first_look = state["decided_value"] is None or state["batches"] is None
                     joint = await self._coin_conversions(pid, pool, item, medal_thread, 0, shipping_units=0)
