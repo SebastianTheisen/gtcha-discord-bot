@@ -64,9 +64,20 @@ export function marketLinks(name: string, category?: string, model?: string | nu
   const encNum = encodeURIComponent(withNumber);
   const game = guessGame(name, category);
   const links: MarketLink[] = [];
-  if (game) {
+  // Cardmarket findet Karten über Set-Kürzel + Kartennummer in einem Wort ("sv8a217") - steht so in der
+  // Kartennummer der Seite ("SV8a217-187", Teil vor dem Bindestrich)
+  const code = cardCode(model);
+  const cmCode = code?.set && code.number ? (model || "").trim().replace(/-\d{2,3}$/, "").replace(/\s+/g, "").toLowerCase() : null;
+  if (game && cmCode) {
     links.push({
       label: "Cardmarket",
+      hint: `Karte ${cmCode}`,
+      url: `https://www.cardmarket.com/de/${game}/Products/Search?searchString=${encodeURIComponent(cmCode)}`,
+    });
+  }
+  if (game) {
+    links.push({
+      label: cmCode ? "Cardmarket (Name)" : "Cardmarket",
       hint: q === name.trim() ? "Angebote in Europa" : `Suche „${q}“`,
       url: `https://www.cardmarket.com/de/${game}/Products/Search?searchString=${enc}`,
     });
