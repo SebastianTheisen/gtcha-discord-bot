@@ -30,9 +30,23 @@ export function searchName(name: string): string {
     .replace(/\bLV\.?\s*\d+\b/gi, " ")
     .replace(/\b\d{1,3}\s*\/\s*\d{1,3}\b/g, " ")
     .replace(/\b(SAR|SR|AR|UR|HR|CHR|CSR|SSR|RRR|RR|PSA\s*\d+|BGS\s*[\d.]+|Promo)\b/gi, " ")
+    .replace(/\b([XY])ex\b/g, "$1 ex")   // GTCHA schreibt "Mega Charizard Xex", Cardmarket "Mega Charizard X ex"
     .replace(/[★☆:：・/#]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+// "M2110-080" -> Set "M2", Nummer "110/080" (japanische Kartennummer: Nummer/Setgröße); "Old Back" = alte Karte ohne Nummer
+export function cardCode(model?: string | null): { set?: string; number?: string; text: string } | null {
+  const m = (model || "").trim();
+  if (!m) return null;
+  const parts = m.match(/^(.*?)(\d{2,3})-(\d{2,3})$/);
+  if (parts) {
+    const set = parts[1].replace(/[-\s]+$/, "") || undefined;
+    const number = `${parts[2]}/${parts[3]}`;
+    return { set, number, text: [set, number].filter(Boolean).join(" · ") };
+  }
+  return { text: m };
 }
 
 export interface MarketLink {
@@ -41,9 +55,13 @@ export interface MarketLink {
   url: string;
 }
 
-export function marketLinks(name: string, category?: string): MarketLink[] {
+export function marketLinks(name: string, category?: string, model?: string | null): MarketLink[] {
   const q = searchName(name) || name;
   const enc = encodeURIComponent(q);
+  // mit Kartennummer (neuere Karten) trifft die Suche die genaue Version
+  const number = cardCode(model)?.number;
+  const withNumber = number ? `${q} ${number}` : q;
+  const encNum = encodeURIComponent(withNumber);
   const game = guessGame(name, category);
   const links: MarketLink[] = [];
   if (game) {
@@ -56,12 +74,12 @@ export function marketLinks(name: string, category?: string): MarketLink[] {
   // Voller Name über Google, nur auf Cardmarket: trifft oft die genaue Version (Level, Set, Promo)
   links.push({
     label: "Cardmarket (Google)",
-    hint: "genaue Version suchen",
-    url: `https://www.google.com/search?q=${encodeURIComponent(`site:cardmarket.com ${name.replace(/[\[\]【】]/g, " ").trim()}`)}`,
+    hint: number ? `Suche „${withNumber}“` : "genaue Version suchen",
+    url: `https://www.google.com/search?q=${encodeURIComponent(`site:cardmarket.com ${number ? withNumber : name.replace(/[\[\]【】]/g, " ").trim()}`)}`,
   });
   links.push(
-    { label: "PriceCharting", hint: "Preisverlauf & Grading", url: `https://www.pricecharting.com/search-products?q=${enc}&type=prices` },
-    { label: "eBay verkauft", hint: "echte Verkaufspreise", url: `https://www.ebay.de/sch/i.html?_nkw=${enc}&LH_Sold=1&LH_Complete=1` },
+    { label: "PriceCharting", hint: "Preisverlauf & Grading", url: `https://www.pricecharting.com/search-products?q=${number ? encNum : enc}&type=prices` },
+    { label: "eBay verkauft", hint: "echte Verkaufspreise", url: `https://www.ebay.de/sch/i.html?_nkw=${number ? encNum : enc}&LH_Sold=1&LH_Complete=1` },
   );
   return links;
 }

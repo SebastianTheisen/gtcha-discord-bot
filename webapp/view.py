@@ -585,6 +585,7 @@ class BannerView:
                 unsure += f" · ~{round(chance * 100)} %"
             cards.append({"id": cid, "name": c["name"], "value": c["value"], "copies": c["copies"], "image": c.get("image"),
                           "hit": bool(c.get("hit")), "pulled": min(gone, c["copies"]), "unsure": unsure,
+                          "model": c.get("model") or None, "rarity": c.get("rarity") or None,
                           "share": round(c["copies"] / total * 100, 3)})
         above = sum(c["copies"] for c in pool['cards'] if price and c["value"] >= price)
         return {"cards": cards, "share_above_price": round(above / total * 100, 1) if price else None}

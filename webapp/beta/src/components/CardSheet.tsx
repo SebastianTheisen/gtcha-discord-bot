@@ -2,7 +2,7 @@ import { useState } from "preact/hooks";
 import { authApi } from "../api";
 import { num, pct } from "../format";
 import { isWish } from "../local";
-import { marketLinks } from "../links";
+import { cardCode, marketLinks } from "../links";
 import { toggleWish } from "../push";
 import { me } from "../store";
 import type { Hit } from "../types";
@@ -19,6 +19,8 @@ export interface CardInfo {
   note?: string | null;
   copies?: number;
   hit?: boolean;
+  model?: string | null;
+  rarity?: string | null;
 }
 
 // Der Bot arbeitet Meldungen alle paar Sekunden ab - so lange auf das Ergebnis warten
@@ -87,6 +89,7 @@ export function CardSheet({ card, price, category, packId, units = [], archived,
             <div class="pill" style={{ color: "var(--accent)" }}>{units.length ? units.map((u) => u.tier).join(" · ") : card.tier}</div>
           )}
           <h3 style={{ margin: "6px 0" }}>{card.name}</h3>
+          {(card.model || card.rarity) && <div class="muted small">{[cardCode(card.model)?.text, card.rarity].filter(Boolean).join(" · ")}</div>}
           <div style={{ fontSize: "22px", fontWeight: 800 }} class="tnum">{num(card.value)} Coins</div>
           {price ? <div class="muted small">{pct((card.value / price) * 100, 0)} vom Packpreis</div> : null}
           {card.copies && card.copies > 1 ? <div class="muted small">{card.copies}× im Banner</div> : null}
@@ -136,7 +139,7 @@ export function CardSheet({ card, price, category, packId, units = [], archived,
       </div>
 
       <div class="links">
-        {marketLinks(card.name, category).map((l) => (
+        {marketLinks(card.name, category, card.model).map((l) => (
           <a href={l.url} target="_blank" rel="noopener noreferrer">
             <span>{l.label} <span class="muted small" style={{ fontWeight: 400 }}>· {l.hint}</span></span>
             <span>↗</span>
