@@ -62,3 +62,16 @@ export const ddmmhhmm = (s?: string | null) => (s ? `${s.slice(8, 10)}.${s.slice
 
 export type Tone = "good" | "ok" | "bad" | "muted";
 export const evTone = (p: number | null | undefined): Tone => (p == null ? "muted" : p >= 100 ? "good" : p >= 90 ? "ok" : "bad");
+
+// Kartennamen der Seite haben teils eine offene Klammer ohne Gegenstück ("[Lugia V") - für die Anzeige weglassen
+export function cardName(name: string): string {
+  let out = name.trim();
+  const pairs: [string, string][] = [["[", "]"], ["【", "】"], ["(", ")"], ["（", "）"]];
+  for (const [open, close] of pairs) {
+    const opens = out.split(open).length - 1;
+    const closes = out.split(close).length - 1;
+    if (opens > closes && out.startsWith(open)) out = out.slice(1).trim();
+    else if (closes > opens && out.endsWith(close)) out = out.slice(0, -1).trim();
+  }
+  return out;
+}

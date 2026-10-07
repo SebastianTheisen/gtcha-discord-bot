@@ -1,6 +1,6 @@
 import { useState } from "preact/hooks";
 import { authApi } from "../api";
-import { num, pct } from "../format";
+import { cardName, num, pct } from "../format";
 import { isWish } from "../local";
 import { cardCode, marketLinks } from "../links";
 import { toggleWish } from "../push";
@@ -88,7 +88,7 @@ export function CardSheet({ card, price, category, packId, units = [], archived,
           {(units.length ? units.map((u) => u.tier).join(" · ") : card.tier) && (
             <div class="pill" style={{ color: "var(--accent)" }}>{units.length ? units.map((u) => u.tier).join(" · ") : card.tier}</div>
           )}
-          <h3 style={{ margin: "6px 0" }}>{card.name}</h3>
+          <h3 style={{ margin: "6px 0" }}>{cardName(card.name)}</h3>
           {(card.model || card.rarity) && <div class="muted small">{[cardCode(card.model)?.text, card.rarity].filter(Boolean).join(" · ")}</div>}
           <div style={{ fontSize: "22px", fontWeight: 800 }} class="tnum">{num(card.value)} Coins</div>
           {price ? <div class="muted small">{pct((card.value / price) * 100, 0)} vom Packpreis</div> : null}
