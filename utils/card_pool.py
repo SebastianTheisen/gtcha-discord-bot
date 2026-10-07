@@ -868,6 +868,28 @@ def match_coin_conversions(pool: Dict, converted: int, n_min: int, n_max: int,
     return _summarize_options(classes, with_required or list(possible), hits)
 
 
+def coin_base_drawn(pool: Dict, converted: Optional[int], pulled_keys: Set[str],
+                    groups: List[Dict] = ()) -> Optional[Dict]:
+    """Wie viele der günstigsten Coins (z. B. 1.500) schon raus sind - für die Anzeige.
+
+    Umgewandelt = günstigste Coins × Wert + teurere Coins; die als gezogen erkannten teureren Coins werden abgezogen,
+    bei ❓-Gruppen vorsichtig der teuerste Kandidat (eher eine zu wenig als zu viel). {"id", "count", "unsure"}."""
+    coins = _coin_cards(pool)
+    if not coins or not converted:
+        return None
+    base = min(int(c["value"]) for c in coins)
+    base_cards = [c for c in coins if int(c["value"]) == base]
+    if len(base_cards) != 1:
+        return None   # mehrere verschiedene Karten zum günstigsten Wert: nicht zuzuordnen
+    value_of = {u["key"]: u["value"] for u in medal_units(pool) if not u["shipping_only"]}
+    other = sum(value_of[k] for k in pulled_keys if k in value_of and value_of[k] > base)
+    coin_groups = [g for g in groups or [] if all(k in value_of for k in g["keys"])]
+    other += sum(g["pulled"] * max(value_of[k] for k in g["keys"]) for g in coin_groups)
+    count = max(0, (int(converted) - other) // base)
+    return {"id": str(base_cards[0].get("id")), "count": min(count, int(base_cards[0]["copies"])),
+            "unsure": bool(coin_groups)}
+
+
 def detect_jump_pulls(pool: Dict, jump: int, pulled_keys: Set[str]) -> List[str]:
     """Rückfall für Banner ohne Versand-Hits: T1-T3 an einem Sprung des entschiedenen Werts.
 
