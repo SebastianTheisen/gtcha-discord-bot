@@ -72,7 +72,7 @@ def summarize_cards(cards: List[Dict]) -> Optional[Dict]:
         # nur Coin-Karten (Bonus-Banner): jede gezogene Karte wird umgewandelt - Hits an der Umwandlung erkennbar
         "coin_only": bool(parsed) and all(c["kind"] == 1 for c in parsed if c["copies"] > 0),
         # komplette Kartenliste (für die Web-App), wertvollste zuerst
-        "cards": [{k: c[k] for k in ("id", "name", "value", "copies", "image", "hit", "model", "rarity")
+        "cards": [{k: c[k] for k in ("id", "name", "value", "copies", "image", "hit", "model", "rarity", "kind")
                    if k not in ("model", "rarity") or c[k]} for c in parsed if c["copies"] > 0],
     }
 
@@ -803,58 +803,64 @@ def decided_value(item: Dict) -> Optional[int]:
 COIN_NAME = re.compile(r"^\s*coins?\s*$", re.I)
 
 
+def _coin_cards(pool: Dict) -> List[Dict]:
+    """Coin-Karten des Pools ("nur Coins"; ältere Pools ohne Kennzeichen: Name "Coin"/"Coins")."""
+    return [c for c in pool.get("cards") or [] if not c.get("hit") and int(c.get("copies") or 0) > 0
+            and (c.get("kind") == 1 or ("kind" not in c and COIN_NAME.match(str(c.get("name") or ""))))]
+
+
 def is_coin_pool(pool: Optional[Dict]) -> bool:
-    """Banner nur aus Coin-Karten (z. B. Bonus mit 1.500/2.000/5.000 … Coins): die Karten lassen sich nur umwandeln.
-    Ältere Pools ohne "coin_only": alle Karten heißen "Coin"/"Coins"."""
+    """Banner nur aus Coin-Karten (z. B. Bonus mit 1.500/2.000/5.000 … Coins): die Karten lassen sich nur umwandeln."""
     if not pool or pool.get("hits"):
         return False
     if "coin_only" in pool:
         return bool(pool["coin_only"])
-    cards = pool.get("cards") or []
-    return bool(cards) and all(COIN_NAME.match(str(c.get("name") or "")) for c in cards)
+    cards = [c for c in pool.get("cards") or [] if int(c.get("copies") or 0) > 0]
+    return bool(cards) and len(_coin_cards(pool)) == len(cards)
 
 
-def match_coin_conversions(pool: Dict, converted: int, drawn: int, pending_max: int,
+def is_coin_mixed_pool(pool: Optional[Dict]) -> bool:
+    """Banner aus Coin-Karten und Versand-Hits, ohne normale Karten: die Umwandlung kommt nur von den Coins."""
+    if not pool or not pool.get("hits"):
+        return False
+    normal = [c for c in pool.get("cards") or [] if not c.get("hit") and int(c.get("copies") or 0) > 0]
+    return bool(normal) and len(_coin_cards(pool)) == len(normal)
+
+
+def match_coin_conversions(pool: Dict, converted: int, n_min: int, n_max: int,
                            required: Set[str] = frozenset()) -> Optional[Dict]:
-    """Hits eines reinen Coin-Banners aus der umgewandelten Summe und der Zahl gezogener Packs.
+    """Teurere Coins aus der umgewandelten Summe, bei n_min bis n_max umgewandelten Coin-Karten.
 
-    Jede gezogene Karte wird umgewandelt; die günstigste Karte (z. B. 1.500) ist der Normalfall. Was über
-    "umgewandelte Karten × günstigster Wert" hinausgeht, sind die Aufschläge der teureren Karten - daraus
-    folgt, welche Hits raus sind. Bis zu pending_max zuletzt gezogene Karten können noch nicht umgewandelt
-    sein (die Seite zählt nur alle 30 Minuten); alle Möglichkeiten werden zusammen ausgewertet.
-    required: Hits mit Medaille (sicher gezogen) - wenn es damit aufgeht, nur solche Aufteilungen.
-    Ergebnis wie match_shipped_hits (certain, groups), None = passt zu keiner Aufteilung."""
-    units = medal_units(pool)
-    if not units or converted is None or drawn is None or drawn < 0:
+    Der günstigste Coin (z. B. 1.500) ist der Normalfall; was über "umgewandelte Karten × günstigster Wert"
+    hinausgeht, sind die Aufschläge der teureren Coins. Jede passende Aufteilung wird berücksichtigt -
+    was in allen steckt, ist sicher raus, der Rest ❓. required: Coins mit Medaille (sicher gezogen) -
+    wenn es damit aufgeht, nur solche Aufteilungen. Ergebnis wie match_shipped_hits, None = passt zu nichts."""
+    coins = _coin_cards(pool)
+    if not coins or converted is None or n_max is None or n_max < 0:
         return None
-    base = min(u["value"] for u in units)
-    hits = [u for u in units if u["value"] > base]
+    base = min(int(c["value"]) for c in coins)
+    coin_ids = {str(c.get("id")) for c in coins}
+    hits = [u for u in medal_units(pool) if not u["shipping_only"] and u["value"] > base
+            and str(u["key"]).split("#")[0] in coin_ids]
     if not hits:
         return {"certain": [], "groups": [], "maybe": []}
     classes = _value_classes(hits, 0)
     extras = [c["min"] - base for c in classes]
     possible = set()
-    for pending in range(0, max(0, pending_max) + 1):
-        n = drawn - pending
-        if n < 0:
-            break
-        target = converted - base * n
-        if target < 0:
-            continue
 
-        def walk(i, taken, rest, count):
-            if len(possible) > 20000:
-                return
-            if i == len(classes):
-                if rest == 0:
-                    possible.add(tuple(taken))
-                return
-            for m in range(0, min(len(classes[i]["keys"]), n - count) + 1):
-                if m * extras[i] > rest:
-                    break
-                walk(i + 1, taken + [m], rest - m * extras[i], count + m)
+    def walk(i, taken, extra, count):
+        if len(possible) > 20000 or count > n_max or extra > converted:
+            return
+        if i == len(classes):
+            # converted - Aufschläge = Anzahl Karten × günstigster Wert (die teureren zählen darin mit)
+            rest = converted - extra
+            if rest % base == 0 and max(n_min, count) <= rest // base <= n_max:
+                possible.add(tuple(taken))
+            return
+        for m in range(0, len(classes[i]["keys"]) + 1):
+            walk(i + 1, taken + [m], extra + m * extras[i], count + m)
 
-        walk(0, [], target, 0)
+    walk(0, [], 0, 0)
     if not possible:
         return None
     need = [sum(1 for k in required if k in c["keys"]) for c in classes]

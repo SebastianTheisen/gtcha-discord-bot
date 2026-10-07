@@ -173,59 +173,68 @@ class HitsMixin:
                         changed = True
                         reason = (f"{count - prev_count} Karte(n) / {fmt_coins(card_value(ship_value - prev_value))} "
                                   f"Coins Kartenwert verschickt")
-                    if not changed:
+                    # Gemischt aus Coins und Versand-Hits: die Umwandlung kommt nur von Coins - teurere Coins erkennbar
+                    coin_mixed = is_coin_mixed_pool(pool)
+                    coin_changed = coin_mixed and value is not None and value != state["decided_value"]
+                    if not changed and not coin_changed:
                         await self.db.set_pull_tracking(pid, value, ships[0], ships[1], pulled, unsure)
                         continue
-                    # im Hintergrund-Thread: die Auftrags-Rechnung kann bei großen Werten etwas dauern.
-                    # Regel der Gruppe: Medaille gesetzt = Versand angefordert -> der Hit steckt im ersten Schub nach
-                    # der Medaille, auch wenn die Seite dafür einen anderen Wert zählt (24188: Mewtwo als 19.580)
-                    keys = tier_keys(pool)
-                    medal_t = {keys[t]: m["at"] for t, m in (await self.db.medal_rows(medal_thread)).items()
-                               if t in keys and m.get("at") and m["source"] != "admin"}   # Admin: nur "raus", kein Versand
-                    deadlines = batch_deadlines(batches, medal_t)
-                    price = _int((await self.db.get_banner(pid) or {}).get('price_coins')) or None
-                    joint = await asyncio.to_thread(match_shipment_history, pool, batches, VALUE_TOLERANCE, deadlines,
-                                                    price)
-                    if joint.get("off_value"):
-                        logger.info(f"[HIT] {pid}: Einzelkarte über allen normalen Karten in Schub {joint['off_value']} "
-                                    f"als Hit mit anderem Wert gezählt")
-                    if joint.get("value_mismatch"):
-                        logger.info(f"[HIT] {pid}: Medaille vor Wert - Seite zählt für {joint['value_mismatch']} "
-                                    f"einen anderen Wert als den Kartenwert")
-                    if joint.get("ignored_deadlines"):
-                        logger.info(f"[HIT] {pid}: Medaillen-Frist passt nicht zu den Schüben, ignoriert: "
-                                    f"{joint['ignored_deadlines']}")
                     rejected = await self.db.get_rejects(pid)   # vom Admin als falsch markiert
-                    if rejected:
-                        joint["certain"] = [k for k in joint["certain"] if k not in rejected]
+                    ship_keys = {u["key"] for u in tracked_units(pool)}
+                    if changed:
+                        # im Hintergrund-Thread: die Auftrags-Rechnung kann bei großen Werten etwas dauern.
+                        # Regel der Gruppe: Medaille gesetzt = Versand angefordert -> der Hit steckt im ersten Schub
+                        # nach der Medaille, auch wenn die Seite dafür einen anderen Wert zählt (24188: Mewtwo als 19.580)
+                        keys = tier_keys(pool)
+                        medal_t = {keys[t]: m["at"] for t, m in (await self.db.medal_rows(medal_thread)).items()
+                                   if t in keys and m.get("at") and m["source"] != "admin"}   # Admin: nur "raus"
+                        deadlines = batch_deadlines(batches, medal_t)
+                        price = _int((await self.db.get_banner(pid) or {}).get('price_coins')) or None
+                        joint = await asyncio.to_thread(match_shipment_history, pool, batches, VALUE_TOLERANCE,
+                                                        deadlines, price)
+                        if joint.get("off_value"):
+                            logger.info(f"[HIT] {pid}: Einzelkarte über allen normalen Karten in Schub "
+                                        f"{joint['off_value']} als Hit mit anderem Wert gezählt")
+                        if joint.get("value_mismatch"):
+                            logger.info(f"[HIT] {pid}: Medaille vor Wert - Seite zählt für {joint['value_mismatch']} "
+                                        f"einen anderen Wert als den Kartenwert")
+                        if joint.get("ignored_deadlines"):
+                            logger.info(f"[HIT] {pid}: Medaillen-Frist passt nicht zu den Schüben, ignoriert: "
+                                        f"{joint['ignored_deadlines']}")
+                        ship_certain = [k for k in joint["certain"] if k not in rejected]
+                        ship_groups = joint["groups"]
+                    else:   # Versand unverändert: bisheriges Ergebnis behalten
+                        ship_certain = [k for k in pulled if k in ship_keys]
+                        ship_groups = [g for g in unsure if set(g["keys"]) <= ship_keys]
+                    coin_certain = [k for k in pulled if k not in ship_keys]
+                    coin_groups = [g for g in unsure if not set(g["keys"]) <= ship_keys]
+                    if coin_mixed:
+                        coin = await self._coin_conversions(pid, pool, item, medal_thread, ships[0] or 0,
+                                                            shipping_units=len(ship_keys))
+                        if coin:
+                            coin_certain = [k for k in coin["certain"] if k not in rejected]
+                            coin_groups = coin["groups"]
+                            if coin_changed and not changed:
+                                reason = coin["reason"]
+                    certain = ship_certain + coin_certain
+                    groups = ship_groups + coin_groups
                     old_groups = {(frozenset(g["keys"]), g["pulled"]) for g in unsure}
                     match = {
-                        "certain": [k for k in joint["certain"] if k not in set(pulled)],
-                        "groups": [g for g in joint["groups"] if (frozenset(g["keys"]), g["pulled"]) not in old_groups],
+                        "certain": [k for k in certain if k not in set(pulled)],
+                        "groups": [g for g in groups if (frozenset(g["keys"]), g["pulled"]) not in old_groups],
                         "maybe": [],
                     }
-                    await self.db.set_pull_tracking(pid, value, ships[0], ships[1],
-                                                    joint["certain"], joint["groups"], batches)
+                    await self.db.set_pull_tracking(pid, value, ships[0], ships[1], certain, groups, batches)
                 elif is_coin_pool(pool):
                     # Nur Coin-Karten: jede gezogene Karte wird umgewandelt. Aus umgewandelter Summe und gezogenen
                     # Packs folgt, welche teureren Coins raus sind (Gesamtergebnis, wie beim Versand)
                     if value is None or value == state["decided_value"]:
                         await self.db.set_pull_tracking(pid, value, ships[0], ships[1], pulled, unsure)
                         continue
-                    row = await self.db.get_banner(pid) or {}
-                    total, left = _int(row.get('total_packs')), _int(row.get('current_packs'))
-                    if total is None or left is None:
-                        continue
-                    # zuletzt gezogene Karten sind evtl. noch nicht umgewandelt (die Seite zählt alle 30 Minuten)
-                    pending, _ = await self.db.get_sales_since(pid, datetime.now() - timedelta(minutes=COIN_PENDING_MINUTES))
-                    keys = tier_keys(pool)
-                    medal_keys = {keys[t] for t in await self.db.get_medals(medal_thread) if t in keys}
-                    joint = await asyncio.to_thread(match_coin_conversions, pool, value, total - left, pending, medal_keys)
                     # erste Auswertung nach dieser Regel: nur speichern, nicht als neue Hits posten (Altbestand)
                     first_look = state["decided_value"] is None or state["batches"] is None
+                    joint = await self._coin_conversions(pid, pool, item, medal_thread, 0, shipping_units=0)
                     if joint is None:
-                        logger.info(f"[HIT] {pid}: Umwandlung {fmt_coins(value)} Coins bei {total - left} Packs passt zu "
-                                    f"keiner Aufteilung - übergangen")
                         await self.db.set_pull_tracking(pid, value, ships[0], ships[1], pulled, unsure)
                         continue
                     rejected = await self.db.get_rejects(pid)   # vom Admin als falsch markiert
@@ -236,8 +245,7 @@ class HitsMixin:
                         "groups": [g for g in joint["groups"] if (frozenset(g["keys"]), g["pulled"]) not in old_groups],
                         "maybe": [],
                     }
-                    reason = (f"{fmt_coins(value)} Coins umgewandelt bei {total - left} gezogenen Packs "
-                              f"(bis {pending} noch offen)")
+                    reason = joint["reason"]
                     await self.db.set_pull_tracking(pid, value, ships[0], ships[1], certain, joint["groups"], [])
                 else:
                     known, _, _ = resolve_pulled(pulled, unsure, set())
@@ -250,7 +258,7 @@ class HitsMixin:
                     continue
                 # Kontrolle für den Admin: was wurde automatisch abgehakt?
                 tiers = {k: t for t, k in tier_keys(pool).items()}
-                units = {u["key"]: u for u in tracked_units(pool)}
+                units = {u["key"]: u for u in medal_units(pool)} | {u["key"]: u for u in tracked_units(pool)}
                 await self.db.log_auto_ticks(pid, [{"key": k, "tier": tiers.get(k), "name": units.get(k, {}).get("name"),
                                                     "value": units.get(k, {}).get("value")}
                                                    for k in match["certain"]], first_look)
@@ -278,6 +286,36 @@ class HitsMixin:
                 await self._update_probability_message(thread_id, pid)
             except Exception as e:
                 logger.warning(f"[HIT] Fehler bei Banner {pid}: {e}")
+
+    async def _coin_conversions(self, pid: int, pool: dict, item: dict, medal_thread: int, shipped: int,
+                                shipping_units: int) -> Optional[dict]:
+        """Teurere Coins aus der umgewandelten Summe (total_kangen) und den gezogenen Packs (match_coin_conversions).
+
+        Wie viele Coins umgewandelt wurden, steht nicht fest - nur eine Spanne: höchstens gezogene Packs minus
+        verschickte Karten, mindestens gezogene Packs minus alle Versand-Hits (gezogen, evtl. nicht verschickt) minus
+        die zuletzt gezogenen Karten (die Seite zählt Umwandlungen nur alle 30 Minuten)."""
+        try:
+            converted = int(float(item.get("total_kangen") or 0))
+        except (TypeError, ValueError):
+            return None
+        row = await self.db.get_banner(pid) or {}
+        total, left = _int(row.get('total_packs')), _int(row.get('current_packs'))
+        if total is None or left is None:
+            return None
+        drawn = total - left
+        pending, _ = await self.db.get_sales_since(pid, datetime.now() - timedelta(minutes=COIN_PENDING_MINUTES))
+        keys = tier_keys(pool)
+        medal_keys = {keys[t] for t in await self.db.get_medals(medal_thread) if t in keys}
+        n_max = max(0, drawn - shipped)
+        n_min = max(0, drawn - shipping_units - pending)
+        res = await asyncio.to_thread(match_coin_conversions, pool, converted, n_min, n_max, medal_keys)
+        if res is None:
+            logger.info(f"[HIT] {pid}: Umwandlung {fmt_coins(converted)} Coins bei {n_min}-{n_max} umgewandelten "
+                        f"Karten passt zu keiner Aufteilung - übergangen")
+            return None
+        res["reason"] = (f"{fmt_coins(converted)} Coins umgewandelt bei {drawn} gezogenen Packs "
+                         f"({n_min}-{n_max} Coin-Karten)")
+        return res
 
     def _detected_hits_text(self, pool: dict, certain: list, groups: list = (), maybe: list = ()) -> str:
         """Text der "Hit gezogen"-Meldung (wird sofort oder zeitversetzt gepostet)."""

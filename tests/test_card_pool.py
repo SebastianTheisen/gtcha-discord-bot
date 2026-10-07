@@ -1,5 +1,5 @@
 from utils.card_pool import (
-    detect_jump_pulls, estimate, hit_still_in, match_shipped_hits, summarize_cards, tier_keys, tracked_units,
+    detect_jump_pulls, estimate, hit_still_in, match_shipped_hits, medal_units, summarize_cards, tier_keys, tracked_units,
 )
 
 
@@ -559,16 +559,16 @@ def test_coin_banner_hits_from_conversions():
     tiers = {k: t for t, k in tier_keys(pool).items()}
     assert is_coin_pool(pool) and not is_coin_pool(hit_pool())
     # 5 Packs, 7.500 umgewandelt: nur normale Coins
-    assert match_coin_conversions(pool, 7500, 5, 0)["certain"] == []
+    assert match_coin_conversions(pool, 7500, 5, 5)["certain"] == []
     # 4 Packs, 38.000: 30.000 + 5.000 + 2 × 1.500 -> T1 und T4 sicher, auch wenn eine Karte noch offen sein könnte
-    for pending in (0, 1):
-        assert sorted(tiers[k] for k in match_coin_conversions(pool, 38000, 4, pending)["certain"]) == ["T1", "T4"]
+    for n_min in (4, 3):   # auch wenn eine Karte noch nicht umgewandelt sein könnte
+        assert sorted(tiers[k] for k in match_coin_conversions(pool, 38000, n_min, 4)["certain"]) == ["T1", "T4"]
     # 10 Packs, 15.500: T5 - mit mehreren noch offenen Karten nur noch ❓ (T4 oder T5)
-    assert [tiers[k] for k in match_coin_conversions(pool, 15500, 10, 0)["certain"]] == ["T5"]
-    unsure = match_coin_conversions(pool, 15500, 10, 3)
+    assert [tiers[k] for k in match_coin_conversions(pool, 15500, 10, 10)["certain"]] == ["T5"]
+    unsure = match_coin_conversions(pool, 15500, 7, 10)
     assert unsure["certain"] == [] and len(unsure["groups"]) == 1
     # passt zu nichts (z. B. Karte zurückbehalten oder Fehlwert): None statt falscher Haken
-    assert match_coin_conversions(pool, 1000, 5, 0) is None
+    assert match_coin_conversions(pool, 1000, 5, 5) is None
 
 
 def test_old_coin_pool_recognized_by_names():
@@ -576,3 +576,19 @@ def test_old_coin_pool_recognized_by_names():
     pool = _coin_pool()
     del pool["coin_only"]
     assert is_coin_pool(pool)
+
+
+
+def test_mixed_coin_and_shipping_banner():
+    """Coins + Versand-Hits ohne normale Karten: Umwandlung kommt nur von Coins, Versand-Hits stören nicht."""
+    from utils.card_pool import is_coin_mixed_pool, match_coin_conversions
+    pool = summarize_cards(
+        [{"id": 1, "name": "Glurak", "buy_point": 90000, "duplication": 1, "action_type": 2},
+         {"id": 2, "name": "Pikachu", "buy_point": 40000, "duplication": 1, "action_type": 2}]
+        + [{"id": i, "name": "Coin", "buy_point": v, "duplication": c, "action_type": 1}
+           for i, v, c in ((3, 10000, 1), (4, 3000, 2), (5, 1000, 96))])
+    keys = {u["name"] + str(u["value"]): u["key"] for u in medal_units(pool)}
+    assert is_coin_mixed_pool(pool) and not is_coin_mixed_pool(hit_pool())
+    # 12 Packs gezogen, 0 verschickt, 2 Versand-Hits evtl. gezogen: 10-12 Coin-Karten; 21.000 = 10.000 + 11 × 1.000
+    res = match_coin_conversions(pool, 21000, 10, 12)
+    assert res["certain"] == [keys["Coin10000"]]
