@@ -50,6 +50,7 @@ export function Search() {
         <label class="search"><span>🔎</span>
           <input type="search" autoComplete="off" placeholder="Kartenname, z. B. Glurak" value={q}
             onInput={(e) => setQ((e.target as HTMLInputElement).value)} />
+          {q && <button type="button" class="clear" aria-label="Suche löschen" onClick={() => setQ("")}>✕</button>}
         </label>
       </form>
       {wishMode && <div class="section-title"><h2>⭐ Meine Wunschliste <small class="muted">{wishList.value.length}</small></h2></div>}

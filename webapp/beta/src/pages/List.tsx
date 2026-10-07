@@ -103,6 +103,7 @@ export function List() {
           <span>🔎</span>
           <input type="search" inputMode="search" autoComplete="off" placeholder="Banner-ID oder Name" value={search.value}
             onInput={(e) => (search.value = (e.target as HTMLInputElement).value)} />
+          {search.value && <button type="button" class="clear" aria-label="Suche löschen" onClick={() => (search.value = "")}>✕</button>}
         </label>
         <select class="select" value={sort.value} aria-label="Sortierung"
           onChange={(e) => (sort.value = (e.target as HTMLSelectElement).value)}>

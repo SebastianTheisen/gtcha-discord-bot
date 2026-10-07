@@ -69,3 +69,20 @@ def test_beta_bookmarklet_matches_live_app():
     assert body(live) == body(beta)
     for name in ("SYNC_PAGES", "SYNC_INCREMENTAL", "SYNC_PARALLEL", "SYNC_VERSION"):
         assert re.sub(r"\s+", "", const(live, name)) == re.sub(r"\s+", "", const(beta, name)), name
+
+
+def test_link_code_for_another_app(tmp_path):
+    """Verknüpftes Gerät holt einen Code, mit dem sich z. B. die installierte Beta verknüpft - ohne Discord."""
+    async def run():
+        app, client = await _client(tmp_path, "beta")
+        try:
+            assert (await client.post("/beta/api/me/link_code")).status == 401   # nur verknüpft
+            token = (await app.bridge.redeem_code(await app.bridge.create_code(42, "Basti")))["token"]
+            code = (await (await client.post("/beta/api/me/link_code", headers={"X-Device-Token": token})).json())["code"]
+            linked = await (await client.post("/beta/api/link", json={"code": code})).json()
+            assert linked["user_id"] == "42" and linked["token"] != token
+            assert (await client.post("/beta/api/link", json={"code": code})).status == 400   # einmalig
+        finally:
+            await client.close()
+
+    asyncio.run(run())

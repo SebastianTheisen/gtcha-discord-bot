@@ -13,6 +13,7 @@ import { Users } from "./pages/Users";
 import { markRead, setBell, unread, updateBell } from "./push";
 import { connectLive, live, loadBanners, loadError, loadMe, locked, me, refreshAll, route, theme, updated } from "./store";
 import { closeDialogs, DialogHost, haptic } from "./ui";
+import { checkVersion, UpdateBar } from "./version";
 
 function applyTheme() {
   const t = theme.value;
@@ -50,6 +51,7 @@ function App() {
     loadMe();
     loadBanners().then(connectLive);
     updateBell();
+    checkVersion();
     const t = setInterval(() => { if (!document.hidden) updateBell(); }, 60000);
     return () => clearInterval(t);
   }, []);
@@ -82,6 +84,7 @@ function App() {
           </a>
         ))}
       </nav>
+      <UpdateBar />
       <DialogHost />
     </div>
   );
