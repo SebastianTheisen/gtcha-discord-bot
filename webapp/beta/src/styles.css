@@ -369,3 +369,11 @@ ol.guide { margin: 4px 0 10px; padding-left: 20px; font-size: 13px; line-height:
 
 .search .clear { flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--surface-2); color: var(--muted); font-size: 13px; display: flex; align-items: center; justify-content: center; }
 .update-bar { position: fixed; z-index: 35; left: 12px; right: 12px; top: calc(var(--header-h) + env(safe-area-inset-top) + 8px); max-width: 640px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; border-radius: 14px; background: var(--accent); color: var(--accent-ink); font-weight: 800; box-shadow: var(--shadow); }
+
+/* Vielleicht raus (❓): orange gestrichelter Rahmen, Bild je nach Wahrscheinlichkeit blasser, Schild auf dem Bild */
+.card.maybe .img { outline: 2px dashed var(--ok); outline-offset: -2px; }
+.card.maybe .img img { opacity: calc(1 - var(--maybe, 0.3)); filter: saturate(0.6); }
+.maybe-badge { position: absolute; left: 5px; right: 5px; bottom: 5px; padding: 3px 6px; border-radius: 7px; text-align: center; font-size: 12px; font-weight: 800; background: var(--ok); color: #1b1400; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35); }
+.card.maybe .copies { bottom: 30px; }
+.hit.unsure, .hit.maybe { border-left: 4px solid var(--ok); }
+.hit.unsure img, .hit.maybe img { opacity: calc(1 - var(--maybe, 0.3)); }
