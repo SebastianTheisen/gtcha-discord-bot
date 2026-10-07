@@ -206,6 +206,39 @@ class HitsMixin:
                     }
                     await self.db.set_pull_tracking(pid, value, ships[0], ships[1],
                                                     joint["certain"], joint["groups"], batches)
+                elif is_coin_pool(pool):
+                    # Nur Coin-Karten: jede gezogene Karte wird umgewandelt. Aus umgewandelter Summe und gezogenen
+                    # Packs folgt, welche teureren Coins raus sind (Gesamtergebnis, wie beim Versand)
+                    if value is None or value == state["decided_value"]:
+                        await self.db.set_pull_tracking(pid, value, ships[0], ships[1], pulled, unsure)
+                        continue
+                    row = await self.db.get_banner(pid) or {}
+                    total, left = _int(row.get('total_packs')), _int(row.get('current_packs'))
+                    if total is None or left is None:
+                        continue
+                    # zuletzt gezogene Karten sind evtl. noch nicht umgewandelt (die Seite zählt alle 30 Minuten)
+                    pending, _ = await self.db.get_sales_since(pid, datetime.now() - timedelta(minutes=COIN_PENDING_MINUTES))
+                    keys = tier_keys(pool)
+                    medal_keys = {keys[t] for t in await self.db.get_medals(medal_thread) if t in keys}
+                    joint = await asyncio.to_thread(match_coin_conversions, pool, value, total - left, pending, medal_keys)
+                    # erste Auswertung nach dieser Regel: nur speichern, nicht als neue Hits posten (Altbestand)
+                    first_look = state["decided_value"] is None or state["batches"] is None
+                    if joint is None:
+                        logger.info(f"[HIT] {pid}: Umwandlung {fmt_coins(value)} Coins bei {total - left} Packs passt zu "
+                                    f"keiner Aufteilung - übergangen")
+                        await self.db.set_pull_tracking(pid, value, ships[0], ships[1], pulled, unsure)
+                        continue
+                    rejected = await self.db.get_rejects(pid)   # vom Admin als falsch markiert
+                    certain = [k for k in joint["certain"] if k not in rejected]
+                    old_groups = {(frozenset(g["keys"]), g["pulled"]) for g in unsure}
+                    match = {
+                        "certain": [k for k in certain if k not in set(pulled)],
+                        "groups": [g for g in joint["groups"] if (frozenset(g["keys"]), g["pulled"]) not in old_groups],
+                        "maybe": [],
+                    }
+                    reason = (f"{fmt_coins(value)} Coins umgewandelt bei {total - left} gezogenen Packs "
+                              f"(bis {pending} noch offen)")
+                    await self.db.set_pull_tracking(pid, value, ships[0], ships[1], certain, joint["groups"], [])
                 else:
                     known, _, _ = resolve_pulled(pulled, unsure, set())
                     if value is not None and state["decided_value"] is not None and value > state["decided_value"]:

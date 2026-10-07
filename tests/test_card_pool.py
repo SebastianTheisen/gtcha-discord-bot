@@ -543,3 +543,36 @@ def test_pool_keeps_card_number_and_rarity():
     assert by_id["2"]["model"] == "Old Back"          # doppelt geliefert -> einmal
     assert "model" not in by_id["3"] and "rarity" not in by_id["3"]   # nichts geliefert -> nicht gespeichert
     assert {h["id"]: h.get("model") for h in pool["hits"]} == {"2": "Old Back", "1": "M2110-080"}
+
+
+def _coin_pool():
+    cards = [(1, "Coin", 30000, 1), (2, "Coin", 15000, 1), (3, "Coin", 10000, 1), (4, "Coins", 5000, 1),
+             (5, "Coins", 2000, 1), (6, "Coin", 1500, 195)]
+    return summarize_cards([{"id": i, "name": n, "buy_point": v, "duplication": c, "action_type": 1}
+                            for i, n, v, c in cards])
+
+
+def test_coin_banner_hits_from_conversions():
+    """Bonus-Banner nur aus Coins: alles über Packs × 1.500 sind die Aufschläge der teureren Coins."""
+    from utils.card_pool import is_coin_pool, match_coin_conversions
+    pool = _coin_pool()
+    tiers = {k: t for t, k in tier_keys(pool).items()}
+    assert is_coin_pool(pool) and not is_coin_pool(hit_pool())
+    # 5 Packs, 7.500 umgewandelt: nur normale Coins
+    assert match_coin_conversions(pool, 7500, 5, 0)["certain"] == []
+    # 4 Packs, 38.000: 30.000 + 5.000 + 2 × 1.500 -> T1 und T4 sicher, auch wenn eine Karte noch offen sein könnte
+    for pending in (0, 1):
+        assert sorted(tiers[k] for k in match_coin_conversions(pool, 38000, 4, pending)["certain"]) == ["T1", "T4"]
+    # 10 Packs, 15.500: T5 - mit mehreren noch offenen Karten nur noch ❓ (T4 oder T5)
+    assert [tiers[k] for k in match_coin_conversions(pool, 15500, 10, 0)["certain"]] == ["T5"]
+    unsure = match_coin_conversions(pool, 15500, 10, 3)
+    assert unsure["certain"] == [] and len(unsure["groups"]) == 1
+    # passt zu nichts (z. B. Karte zurückbehalten oder Fehlwert): None statt falscher Haken
+    assert match_coin_conversions(pool, 1000, 5, 0) is None
+
+
+def test_old_coin_pool_recognized_by_names():
+    from utils.card_pool import is_coin_pool
+    pool = _coin_pool()
+    del pool["coin_only"]
+    assert is_coin_pool(pool)
