@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 94;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 95;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -867,6 +867,14 @@ async function showSettings() {
           <span class="muted">›</span></a>`).join("")
         : `<div class="line muted">Noch nichts gemeldet – auf einer Banner-Seite unter „Karten“ eine Karte antippen.</div>`}</div>` : ""}
     ${user ? historySection(hist) : ""}
+    ${user ? `<h2>🧪 Beta (neue Oberfläche)</h2>
+      <div class="panel">
+        <div class="hint">Die neue Oberfläche zum Testen – gleiche Daten. Auf dem iPhone ist die installierte Beta eine eigene
+          App: dort einmal mit diesem Code verknüpfen (gilt 10 Minuten, einmalig).</div>
+        <button class="btn primary" id="beta-code">Code für die Beta anzeigen</button>
+        <a class="btn" href="/beta/">Beta öffnen</a>
+        <div class="hint" id="beta-out"></div>
+      </div>` : ""}
     ${accuracySection(acc)}
     <h2>🎖️ Mein Mitgliedsrang</h2>
     <div class="panel">
@@ -942,6 +950,15 @@ async function showSettings() {
     ${admin ? `<h2>⏱ Geschwindigkeit <small>Admin</small></h2>
     <div class="panel"><button class="btn" id="speed">Geschwindigkeit testen</button>
       <div class="hint" id="speed-out"></div></div>` : ""}`;
+  view.querySelector("#beta-code")?.addEventListener("click", async () => {
+    const out = view.querySelector("#beta-out");
+    try {
+      const { code } = await authApi("/api/me/link_code", {});
+      out.innerHTML = `<div class="beta-code">${esc(code)}</div>In der Beta unter <b>Ich</b> eintragen – oder
+        <a href="/beta/#/me?code=${encodeURIComponent(code)}">hier direkt verknüpfen</a> (gleicher Browser).`;
+      haptic();
+    } catch (e) { out.textContent = "Nicht möglich: " + e.message; }
+  });
   view.querySelector("#guide-device")?.addEventListener("change", (e) => {
     save("guideDevice", e.target.value);
     view.querySelector("#guide").innerHTML = guideHtml(e.target.value);

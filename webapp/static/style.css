@@ -504,3 +504,5 @@ details.section > summary small { font-size: 13px; color: var(--muted); font-wei
 .user-card > summary b { font-size: 15px; }
 .user-body { padding: 0 0 12px; border-top: 1px solid var(--line); }
 .user-body h2 { font-size: 15px; }
+
+.beta-code { font-size: 28px; font-weight: 800; letter-spacing: .15em; text-align: center; margin: 8px 0; }

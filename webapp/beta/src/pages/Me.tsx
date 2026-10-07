@@ -10,7 +10,7 @@ import { applyProfile, buyHref, isIOS, isStandalone, LINK_MODES, linkMode, load,
 import {
   disablePush, enablePush, EVENT_DEFAULTS, EVENT_LABELS, pushState, savePrefs, testPush, WATCH_DEFAULT, WATCH_LABELS, type Prefs,
 } from "../push";
-import { banners, connectLive, loadBanners, loadMe, me, theme } from "../store";
+import { banners, connectLive, loadBanners, loadMe, me, route, theme } from "../store";
 import { ask, haptic, showToast } from "../ui";
 
 const THEMES: [typeof theme.value, string][] = [["auto", "Automatisch"], ["dark", "Dunkel"], ["light", "Hell"]];
@@ -100,16 +100,22 @@ export function Me() {
 
 function LinkPanel({ devices, onChange }: { devices: any[]; onChange: () => void }) {
   const user = me.value;
-  const [code, setCode] = useState("");
+  const [code, setCode] = useState(() => (route.value.match(/[?&]code=([A-Za-z0-9]+)/) || [])[1] || "");
   const [msg, setMsg] = useState("");
 
-  async function link() {
+  // Link aus der normalen App ("hier direkt verknüpfen"): Code steht in der Adresse - gleich verknüpfen
+  useEffect(() => {
+    if (!user && code && /[?&]code=/.test(route.value)) link(code);
+  }, []);
+
+  async function link(value = code) {
     setMsg("");
-    const res = await fetch("api/link", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) });
+    const res = await fetch("api/link", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: value }) });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) return setMsg(data.error || "Code ungültig");
     setToken(data.token);
     haptic();
+    if (/[?&]code=/.test(route.value)) location.hash = "#/me";
     await loadMe();
     await loadBanners();
     connectLive();
@@ -119,10 +125,11 @@ function LinkPanel({ devices, onChange }: { devices: any[]; onChange: () => void
     return (
       <div class="panel">
         <h3 style={{ marginTop: 0 }}>🔗 Discord verknüpfen</h3>
-        <p class="muted small">In Discord <b>/tracker-verknüpfen</b> eingeben und den Code hier eintragen.</p>
+        <p class="muted small">Code eintragen – aus der normalen App (<b>Ich → 🧪 Beta → Code anzeigen</b>) oder aus Discord
+          (<b>/tracker-verknüpfen</b>).</p>
         <input class="field" maxLength={8} autoComplete="one-time-code" autoCapitalize="characters" placeholder="Code, z. B. K7M2QX" value={code}
           onInput={(e) => setCode((e.target as HTMLInputElement).value)} />
-        <button class="btn primary block" style={{ marginTop: "10px" }} onClick={link}>Verknüpfen</button>
+        <button class="btn primary block" style={{ marginTop: "10px" }} onClick={() => link()}>Verknüpfen</button>
         {msg && <div class="notice" style={{ marginTop: "10px" }}>{msg}</div>}
       </div>
     );

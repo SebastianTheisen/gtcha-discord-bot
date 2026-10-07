@@ -201,10 +201,6 @@ function Overview({ b }: { b: BannerDetail }) {
         </>
       )}
       {b.conditions && <div class="notice" style={{ marginTop: "12px", whiteSpace: "pre-line" }}>{b.conditions.replace(/\*\*/g, "")}</div>}
-      <div class="section-title"><h2>💰 Ø Rückgabe im Verlauf</h2><span class="muted small">gestrichelt = 100 %</span></div>
-      <div class="panel"><AreaChart points={(b.ev_history || []).map((h) => ({ t: h.t, v: h.ev }))} refLine={100} label={(v) => pct(v, 0)} /></div>
-      <div class="section-title"><h2>📉 Packs im Verlauf</h2></div>
-      <div class="panel"><AreaChart points={(b.history || []).map((h) => ({ t: h.t, v: h.packs }))} label={(v) => num(v)} /></div>
     </div>
   );
 }
@@ -317,6 +313,10 @@ function History({ b }: { b: BannerDetail }) {
       <Timeline events={b.pack_timeline || []} />
       <div class="section-title"><h2>📦 Versandschübe</h2><span class="muted small">Kartenwert = gezählt × 1,1</span></div>
       <Shipments list={b.shipments || []} />
+      <div class="section-title"><h2>💰 Ø Rückgabe im Verlauf</h2><span class="muted small">gestrichelt = 100 %</span></div>
+      <div class="panel"><AreaChart points={(b.ev_history || []).map((h) => ({ t: h.t, v: h.ev }))} refLine={100} label={(v) => pct(v, 0)} /></div>
+      <div class="section-title"><h2>📉 Packs im Verlauf</h2></div>
+      <div class="panel"><AreaChart points={(b.history || []).map((h) => ({ t: h.t, v: h.packs }))} label={(v) => num(v)} /></div>
     </div>
   );
 }

@@ -363,6 +363,15 @@ class App:
         logger.info(f"App mit Discord verknüpft: {device['name']}")
         return web.json_response(device)
 
+    async def api_link_code(self, request):
+        """Code zum Verknüpfen eines weiteren Geräts/einer weiteren App (z. B. der Beta) - ohne Umweg über Discord.
+        Nur für schon verknüpfte Geräte; gleicher einmaliger, kurzlebiger Code wie /tracker-verknüpfen."""
+        user = await self._user(request)
+        if not user:
+            raise web.HTTPUnauthorized()
+        code = await self.bridge.create_code(int(user["user_id"]), user.get("name") or "")
+        return web.json_response({"code": code})
+
     async def api_me(self, request):
         user = await self._user(request)
         if user:
@@ -968,7 +977,8 @@ async def compress_api(request, handler):
 
 def _beta_file(name: str):
     async def handler(_):
-        return web.FileResponse(BETA_DIST / name)
+        headers = {"Cache-Control": "no-cache"} if name.endswith(".json") else None
+        return web.FileResponse(BETA_DIST / name, headers=headers)
     return handler
 
 
@@ -987,6 +997,7 @@ def make_app(app: App) -> web.Application:
         web.get("/img", app.image),
         web.post("/api/link", app.api_link),
         web.get("/api/me", app.api_me),
+        web.post("/api/me/link_code", app.api_link_code),
         web.get("/api/me/medals", app.api_my_medals),
         web.get("/api/me/history", app.api_my_history),
         web.get("/api/me/profile", app.api_my_profile),
@@ -1027,7 +1038,7 @@ def make_app(app: App) -> web.Application:
         web_app.router.add_static(prefix + "/static", STATIC)
         if app.beta and (BETA_DIST / "assets").is_dir():
             web_app.router.add_static(prefix + "/assets", BETA_DIST / "assets")
-            for name in ("icon-180.png", "icon-512.png"):
+            for name in ("icon-180.png", "icon-512.png", "version.json"):
                 web_app.router.add_get(prefix + "/" + name, _beta_file(name))
     if app.beta:
         async def to_slash(_):
