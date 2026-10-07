@@ -32,10 +32,33 @@ export function countdown(t: number, now = Date.now() / 1000): string {
   return `${hours} Std. ${Math.floor((d % 3600) / 60)} Min.`;
 }
 
-// Bilder über den Zwischenspeicher des VPS (verkleinert, lange im Cache) - Pfad relativ wegen /beta
+// Bilder über den Zwischenspeicher des VPS (verkleinert, lange im Cache). Absoluter Pfad /img: liefert die
+// Live-App (gleicher Ursprung) - dort laden die Bilder nachweislich. Fehlt ein Bild, lädt main.tsx es direkt von GTCHA.
 const IMG_VERSION = 3;
+const WIDTHS = [320, 640, 960];
 export const imgSrc = (u: string | undefined, w = 640) =>
-  !u ? "" : /^https:\/\/([\w-]+\.)*gtchaxonline\.com\//.test(u) ? `img?v=${IMG_VERSION}&w=${w}&u=${encodeURIComponent(u)}` : "";
+  !u ? "" : /^https:\/\/([\w-]+\.)*gtchaxonline\.com\//.test(u)
+    ? `/img?v=${IMG_VERSION}&w=${WIDTHS.find((x) => x >= w) || 960}&u=${encodeURIComponent(u)}` : "";
+
+export const shortTime = (t: number) =>
+  new Date(t * 1000).toLocaleString("de-DE", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).replace(",", "");
+
+// Verkaufsende einheitlich in deutscher Zeit (die Seite liefert verschiedene Formate, teils japanisch)
+export function untilText(b: { archived?: boolean; ended_at?: number | null; end_ts?: number | null; end?: string | null }): string {
+  if (b.archived) return b.ended_at ? `Beendet am ${dateTime(b.ended_at)} Uhr` : "Beendet";
+  if (b.end_ts) {
+    const d = new Date(b.end_ts * 1000);
+    const date = d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "Europe/Berlin" });
+    const clock = d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Berlin" });
+    return `Erhältlich bis ${date}, ${clock} Uhr`;
+  }
+  const t = String(b.end || "");
+  return /erhältlich/i.test(t) ? t : t ? `Erhältlich bis ${t}` : "";
+}
+
+export const signedNum = (n: number) => `${n > 0 ? "+" : ""}${num(n)}`;
+export const ddmm = (s?: string | null) => (s ? `${s.slice(8, 10)}.${s.slice(5, 7)}.` : "–");
+export const ddmmhhmm = (s?: string | null) => (s ? `${s.slice(8, 10)}.${s.slice(5, 7)}. ${s.slice(11, 16)}` : "–");
 
 export type Tone = "good" | "ok" | "bad" | "muted";
 export const evTone = (p: number | null | undefined): Tone => (p == null ? "muted" : p >= 100 ? "good" : p >= 90 ? "ok" : "bad");

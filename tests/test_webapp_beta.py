@@ -50,3 +50,22 @@ def test_live_has_no_beta_prefix(tmp_path):
             await client.close()
 
     asyncio.run(run())
+
+
+def test_beta_bookmarklet_matches_live_app():
+    """Beide Apps müssen dasselbe Lesezeichen erzeugen (gleicher Code, gleiche Version, gleiche Seiten)."""
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent / "webapp"
+    live = (root / "static" / "app.js").read_text()
+    beta = (root / "beta" / "src" / "bookmarklet.ts").read_text()
+
+    def body(src):
+        return re.search(r"const src = `(.*?)`;", src, re.S).group(1)
+
+    def const(src, name):
+        return re.search(rf"const {name} = ([^;]+);", src, re.S).group(1).split("//")[0].strip()
+
+    assert body(live) == body(beta)
+    for name in ("SYNC_PAGES", "SYNC_INCREMENTAL", "SYNC_PARALLEL", "SYNC_VERSION"):
+        assert re.sub(r"\s+", "", const(live, name)) == re.sub(r"\s+", "", const(beta, name)), name

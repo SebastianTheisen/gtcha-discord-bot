@@ -24,6 +24,14 @@ jobs:
           for i in 1 2 3; do timeout 180 python -m playwright install chromium && break; sleep 5; done
           timeout 240 sudo env "PATH=$PATH" python -m playwright install-deps chromium || echo "::warning::Systempakete nicht vollständig installiert"
           python -m playwright install chromium
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: webapp/beta/package-lock.json
+      - name: Beta-Oberfläche bauen (für ihren Oberflächen-Test)
+        working-directory: webapp/beta
+        run: npm ci --no-audit --no-fund && npm run build
       - name: Tests
         run: python -m pytest -q tests
       - name: Syntax aller Module prüfen
