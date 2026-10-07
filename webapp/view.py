@@ -14,7 +14,7 @@ from database.db import STORE, Database, store_thread_id
 from utils.banner_info import RANK_ORDER, format_conditions, format_shipping, sale_end_timestamp, to_int
 from utils.card_pool import (
     batch_deadlines, card_value, estimate, explain_batch, out_of_banner_value, fmt_coins, pool_minimum, relevant_units, resolve_pulled, tier_keys,
-    tracked_units, claimable_units, medal_units,
+    tracked_units, claimable_units, medal_units, coin_base_drawn, is_coin_mixed_pool, is_coin_pool,
 )
 from utils import ship_odds
 from utils.translate import set_cache as set_translations, to_german
@@ -226,7 +226,8 @@ class BannerView:
             data["archived"], data["status"], data["ended_at"] = True, "ended", epoch(row.get('updated_at'))
             data["thread_id"] = None   # Thread gibt es nicht mehr
         if with_pool:
-            data["hits"] = self._hit_list(pool, pulled, sure, winners, unsure, price) if pool else []
+            data["hits"] = self._hit_list(pool, pulled, sure, winners, unsure, price,
+                                          self._coin_base(row, pool, pulled, unsure)) if pool else []
             data["hit_keys_detected"] = sorted(sure)
             # für Kartensuche und Wunschliste: alle Karten (ID -> Name, Wert, Bild, Exemplare) und sicher gezogene
             data["cards_brief"] = {str(c.get("id")): [c.get("name"), to_int(c.get("value")), c.get("image"),
@@ -316,9 +317,16 @@ class BannerView:
         return {"ranks": ranks if conditions else [], "min_charge": to_int(cond.get("min_charge"))}
 
     @staticmethod
-    def _hit_list(pool: Dict, pulled: set, sure: set, winners: Dict, unsure: List[Dict], price: int) -> List[Dict]:
-        """Hit-Liste wie im Discord-Thread, mit Status je Karte."""
+    def _hit_list(pool: Dict, pulled: set, sure: set, winners: Dict, unsure: List[Dict], price: int,
+                  coin_base: Optional[Dict] = None) -> List[Dict]:
+        """Hit-Liste wie im Discord-Thread, mit Status je Karte. coin_base: so viele der günstigsten Coins sind
+        umgewandelt (coin_base_drawn) - die ersten Plätze dieser Karte gelten als raus (die Exemplare sind gleich)."""
         units = claimable_units(pool, price or None)
+        converted_keys = set()
+        if coin_base and coin_base["count"]:
+            base_units = [u for u in medal_units(pool) if str(u["key"]).split("#")[0] == coin_base["id"]
+                          and u["key"] not in winners]
+            converted_keys = {u["key"] for u in base_units[:coin_base["count"]]}
         if not pool.get('hits'):
             units = max(units, tracked_units(pool), key=len)
         if pool.get('hits') and not units:
@@ -336,6 +344,8 @@ class BannerView:
                 state, note = "unsure", f"{g['pulled']} von {len(g['keys'])} ähnlich teuren gezogen"
             elif key in pulled:
                 state, note = "pulled", "gezogen (erkannt)" if key in sure else "gezogen"
+            elif key in converted_keys:
+                state, note = "pulled", "gezogen (umgewandelt)"
             elif any(key in g["keys"] and g["pulled"] == 0 for g in unsure):
                 state, note = "maybe", "möglicherweise gezogen"
             result.append({"rank": int(tier[1:]), "tier": tier, "key": key, "name": u["name"], "value": u["value"],
@@ -567,6 +577,13 @@ class BannerView:
         data["_key_ship"] = key_ship
         return shipments
 
+    @staticmethod
+    def _coin_base(row: Dict, pool: Optional[Dict], pulled: set, unsure: List[Dict]) -> Optional[Dict]:
+        """Umgewandelte günstigste Coins (nur bei reinen Coin-Bannern bzw. Coins + Versand-Hits)."""
+        if not pool or not (is_coin_pool(pool) or is_coin_mixed_pool(pool)):
+            return None
+        return coin_base_drawn(pool, to_int(row.get('converted')), set(pulled), unsure)
+
     async def _card_list(self, row: Dict, data: Dict, odds: Optional[Dict[str, float]] = None) -> Dict:
         """Alle Karten des Banners mit Exemplaren, Anteil im Pool und wie viele davon schon gezogen sind."""
         pool = json.loads(row['card_pool']) if row.get('card_pool') else None
@@ -577,6 +594,9 @@ class BannerView:
         _, sure, winners, open_groups, _ = await self._pulled(data.get("medal_thread") or 0, row['pack_id'], pool)
         certain = set(sure) | set(winners)
         total, price = pool['total_count'], data.get("price") or 0
+        # günstigste Coins: wie viele schon umgewandelt sind (reine Coin-Banner und Coins + Versand-Hits)
+        pulled_all, _, _, _, unsure_all = await self._pulled(data.get("medal_thread") or 0, row['pack_id'], pool)
+        coin_base = self._coin_base(row, pool, pulled_all, unsure_all)
         of_card = lambda keys, cid: [k for k in keys if k == cid or k.startswith(cid + "#")]
         cards = []
         for c in pool['cards']:
@@ -587,6 +607,8 @@ class BannerView:
             chance = max((p for k, p in (odds or {}).items() if k == cid or k.startswith(cid + "#")), default=None)
             if unsure and chance is not None:
                 unsure += f" · ~{round(chance * 100)} %"
+            if coin_base and coin_base["id"] == cid:
+                gone = max(gone, coin_base["count"])
             cards.append({"id": cid, "name": c["name"], "value": c["value"], "copies": c["copies"], "image": c.get("image"),
                           "hit": bool(c.get("hit")), "pulled": min(gone, c["copies"]), "unsure": unsure,
                           "model": c.get("model") or None, "rarity": c.get("rarity") or None,
