@@ -7,6 +7,7 @@ nur verschickt werden. pack/list zählt verschickte Karten (total_sendcount) und
 Banner ohne Versand-Hits verfolgen ersatzweise die drei wertvollsten Karten (T1-T3).
 """
 
+import re
 from itertools import combinations
 from typing import Dict, List, Optional, Set
 
@@ -46,6 +47,7 @@ def summarize_cards(cards: List[Dict]) -> Optional[Dict]:
                 # für genauere Marktplatz-Suche und die Anzeige (leer, wenn die Seite nichts liefert)
                 "model": _model_number(c.get("model_number")),
                 "rarity": str(c.get("rarity") or "").strip(),
+                "kind": int(c.get("action_type") or 0),   # 0 normal, 1 nur Coins, 2 nur Versand
             })
         except (TypeError, ValueError):
             continue
@@ -67,6 +69,8 @@ def summarize_cards(cards: List[Dict]) -> Optional[Dict]:
         "top": [{k: c[k] for k in ("id", "name", "value", "image", "hit")} for c in parsed[:5]],
         "normal_values": normal_values,
         "min": _min_card(parsed),
+        # nur Coin-Karten (Bonus-Banner): jede gezogene Karte wird umgewandelt - Hits an der Umwandlung erkennbar
+        "coin_only": bool(parsed) and all(c["kind"] == 1 for c in parsed if c["copies"] > 0),
         # komplette Kartenliste (für die Web-App), wertvollste zuerst
         "cards": [{k: c[k] for k in ("id", "name", "value", "copies", "image", "hit", "model", "rarity")
                    if k not in ("model", "rarity") or c[k]} for c in parsed if c["copies"] > 0],
@@ -794,6 +798,68 @@ def decided_value(item: Dict) -> Optional[int]:
         return int(float(item.get("total_kangen") or 0)) + int(float(item.get("total_sendprice") or 0))
     except (TypeError, ValueError):
         return None
+
+
+COIN_NAME = re.compile(r"^\s*coins?\s*$", re.I)
+
+
+def is_coin_pool(pool: Optional[Dict]) -> bool:
+    """Banner nur aus Coin-Karten (z. B. Bonus mit 1.500/2.000/5.000 … Coins): die Karten lassen sich nur umwandeln.
+    Ältere Pools ohne "coin_only": alle Karten heißen "Coin"/"Coins"."""
+    if not pool or pool.get("hits"):
+        return False
+    if "coin_only" in pool:
+        return bool(pool["coin_only"])
+    cards = pool.get("cards") or []
+    return bool(cards) and all(COIN_NAME.match(str(c.get("name") or "")) for c in cards)
+
+
+def match_coin_conversions(pool: Dict, converted: int, drawn: int, pending_max: int,
+                           required: Set[str] = frozenset()) -> Optional[Dict]:
+    """Hits eines reinen Coin-Banners aus der umgewandelten Summe und der Zahl gezogener Packs.
+
+    Jede gezogene Karte wird umgewandelt; die günstigste Karte (z. B. 1.500) ist der Normalfall. Was über
+    "umgewandelte Karten × günstigster Wert" hinausgeht, sind die Aufschläge der teureren Karten - daraus
+    folgt, welche Hits raus sind. Bis zu pending_max zuletzt gezogene Karten können noch nicht umgewandelt
+    sein (die Seite zählt nur alle 30 Minuten); alle Möglichkeiten werden zusammen ausgewertet.
+    required: Hits mit Medaille (sicher gezogen) - wenn es damit aufgeht, nur solche Aufteilungen.
+    Ergebnis wie match_shipped_hits (certain, groups), None = passt zu keiner Aufteilung."""
+    units = medal_units(pool)
+    if not units or converted is None or drawn is None or drawn < 0:
+        return None
+    base = min(u["value"] for u in units)
+    hits = [u for u in units if u["value"] > base]
+    if not hits:
+        return {"certain": [], "groups": [], "maybe": []}
+    classes = _value_classes(hits, 0)
+    extras = [c["min"] - base for c in classes]
+    possible = set()
+    for pending in range(0, max(0, pending_max) + 1):
+        n = drawn - pending
+        if n < 0:
+            break
+        target = converted - base * n
+        if target < 0:
+            continue
+
+        def walk(i, taken, rest, count):
+            if len(possible) > 20000:
+                return
+            if i == len(classes):
+                if rest == 0:
+                    possible.add(tuple(taken))
+                return
+            for m in range(0, min(len(classes[i]["keys"]), n - count) + 1):
+                if m * extras[i] > rest:
+                    break
+                walk(i + 1, taken + [m], rest - m * extras[i], count + m)
+
+        walk(0, [], target, 0)
+    if not possible:
+        return None
+    need = [sum(1 for k in required if k in c["keys"]) for c in classes]
+    with_required = [t for t in possible if all(x >= r for x, r in zip(t, need))]
+    return _summarize_options(classes, with_required or list(possible), hits)
 
 
 def detect_jump_pulls(pool: Dict, jump: int, pulled_keys: Set[str]) -> List[str]:

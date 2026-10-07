@@ -46,7 +46,7 @@ from utils.banner_info import (
 from utils.card_pool import (
     VALUE_TOLERANCE, card_value, card_value_changes, estimate, fmt_coins, fmt_pct, out_of_banner_value, TIERS, MAX_LISTED, EMBEDS_PER_MESSAGE, decided_value, detect_jump_pulls,
     batch_deadlines, is_relevant_hit, match_shipped_hits, pool_minimum, match_shipment_history, relevant_units, resolve_pulled, shipment_values, tier_keys,
-    tracked_units, claimable_units, medal_units, medal_units_hits_first,
+    tracked_units, claimable_units, medal_units, medal_units_hits_first, is_coin_pool, match_coin_conversions,
 )
 
 
@@ -59,6 +59,9 @@ SALES_WINDOW_HOURS = 2
 # Zugzahlen für die Hit-Chance in der 🎯-Nachricht
 HIT_CHANCE_PULLS = (1, 10, 50)
 
+
+# Reine Coin-Banner: so lange zurück gezogene Karten können noch nicht umgewandelt sein (Seite zählt alle 30 Min)
+COIN_PENDING_MINUTES = 10
 
 # Fehlende Kartenpools, die pro Scrape geladen werden (Nachrüsten bestehender Threads)
 POOL_FETCH_PER_SCRAPE = 8
