@@ -74,6 +74,8 @@ export interface Card {
   pulled: number;
   unsure?: string | null;
   share: number;
+  model?: string | null;    // Kartennummer/Set der Seite, z. B. "M2110-080" oder "Old Back"
+  rarity?: string | null;   // z. B. "SAR", "★"
 }
 
 export interface TimelineEvent {

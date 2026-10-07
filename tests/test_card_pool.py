@@ -528,3 +528,18 @@ def test_single_card_above_all_normals_is_hit_with_other_value():
     assert one["kind"] == "hits" and [names[k] for k in one["certain"]] == ["Box"]
     # unter der teuersten normalen Karte: keine Annahme
     assert match_shipment_history(pool, [[1, 20000, 1000]])["certain"] == []
+
+
+def test_pool_keeps_card_number_and_rarity():
+    pool = summarize_cards([
+        {"id": 1, "name": "Mega Charizard Xex", "buy_point": 171160, "duplication": 1, "action_type": 2,
+         "model_number": "M2110-080", "rarity": "SAR"},
+        {"id": 2, "name": "Mew LV.23", "buy_point": 921360, "duplication": 1, "action_type": 2,
+         "model_number": "Old Back Old Back", "rarity": "★"},
+        {"id": 3, "name": "Normal", "buy_point": 300, "duplication": 5, "action_type": 0},
+    ])
+    by_id = {c["id"]: c for c in pool["cards"]}
+    assert by_id["1"]["model"] == "M2110-080" and by_id["1"]["rarity"] == "SAR"
+    assert by_id["2"]["model"] == "Old Back"          # doppelt geliefert -> einmal
+    assert "model" not in by_id["3"] and "rarity" not in by_id["3"]   # nichts geliefert -> nicht gespeichert
+    assert {h["id"]: h.get("model") for h in pool["hits"]} == {"2": "Old Back", "1": "M2110-080"}

@@ -24,6 +24,13 @@ VALUE_TOLERANCE = 0.01     # nur Rundung (Werte werden ohne Steuer gezählt, sie
 TAX_FACTOR = 1.1
 
 
+def _model_number(raw) -> str:
+    """Kartennummer/Set der Seite, z. B. "M2110-080" oder "Old Back" (bei alten Karten teils doppelt geliefert)."""
+    text = " ".join(str(raw or "").split())
+    half = text[:len(text) // 2].strip()
+    return half if half and text == f"{half} {half}" else text
+
+
 def summarize_cards(cards: List[Dict]) -> Optional[Dict]:
     """Verdichtet die rohen card_list-Einträge auf das, was der Bot speichert."""
     parsed = []
@@ -36,6 +43,9 @@ def summarize_cards(cards: List[Dict]) -> Optional[Dict]:
                 "copies": int(c.get("duplication") or 0),
                 "hit": int(c.get("action_type") or 0) == HIT_ACTION_TYPE,
                 "image": c.get("image_url") or None,
+                # für genauere Marktplatz-Suche und die Anzeige (leer, wenn die Seite nichts liefert)
+                "model": _model_number(c.get("model_number")),
+                "rarity": str(c.get("rarity") or "").strip(),
             })
         except (TypeError, ValueError):
             continue
@@ -52,12 +62,14 @@ def summarize_cards(cards: List[Dict]) -> Optional[Dict]:
         "total_count": total_count,
         "total_value": sum(c["value"] * c["copies"] for c in parsed),
         "hits_total": sum(c["copies"] for c in parsed if c["hit"]),
-        "hits": [{k: c[k] for k in ("id", "name", "value", "image", "copies")} for c in parsed if c["hit"]],
+        "hits": [{k: c[k] for k in ("id", "name", "value", "image", "copies", "model", "rarity")
+                  if k not in ("model", "rarity") or c[k]} for c in parsed if c["hit"]],
         "top": [{k: c[k] for k in ("id", "name", "value", "image", "hit")} for c in parsed[:5]],
         "normal_values": normal_values,
         "min": _min_card(parsed),
         # komplette Kartenliste (für die Web-App), wertvollste zuerst
-        "cards": [{k: c[k] for k in ("id", "name", "value", "copies", "image", "hit")} for c in parsed if c["copies"] > 0],
+        "cards": [{k: c[k] for k in ("id", "name", "value", "copies", "image", "hit", "model", "rarity")
+                   if k not in ("model", "rarity") or c[k]} for c in parsed if c["copies"] > 0],
     }
 
 
