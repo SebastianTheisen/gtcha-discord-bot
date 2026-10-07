@@ -1,7 +1,7 @@
 import { useState } from "preact/hooks";
 import { authApi } from "../api";
 import { cardName, num, pct } from "../format";
-import { isWish } from "../local";
+import { buyHref, isWish } from "../local";
 import { cardCode, marketLinks } from "../links";
 import { toggleWish } from "../push";
 import { me } from "../store";
@@ -140,7 +140,9 @@ export function CardSheet({ card, price, category, packId, units = [], archived,
 
       <div class="links">
         {marketLinks(card.name, category, card.model).map((l) => (
-          <a href={l.url} target="_blank" rel="noopener noreferrer">
+          // in der installierten App im echten Browser öffnen (wie „Öffnen ↗“) - im eingebetteten Fenster lädt z. B.
+          // Cardmarket seine Bilder nicht
+          <a href={buyHref(l.url)} target="_blank" rel="noopener noreferrer">
             <span>{l.label} <span class="muted small" style={{ fontWeight: 400 }}>· {l.hint}</span></span>
             <span>↗</span>
           </a>
