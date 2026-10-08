@@ -592,3 +592,18 @@ def test_mixed_coin_and_shipping_banner():
     # 12 Packs gezogen, 0 verschickt, 2 Versand-Hits evtl. gezogen: 10-12 Coin-Karten; 21.000 = 10.000 + 11 × 1.000
     res = match_coin_conversions(pool, 21000, 10, 12)
     assert res["certain"] == [keys["Coin10000"]]
+
+
+def test_second_batch_with_value_of_already_shipped_hit():
+    """Gardevoir (18.260) im ersten Schub verschickt; ein zweiter Schub mit genau 18.260 kann nicht nochmal Gardevoir
+    sein - wie in der App: Hit mit anderem Wert (einziger in Reichweite: Magikarp 19.580)."""
+    from utils.card_pool import match_shipment_history
+    pool = summarize_cards([
+        {"id": 1, "name": "Charizard", "buy_point": 60340, "duplication": 1, "action_type": 2},
+        {"id": 2, "name": "Magikarp", "buy_point": 19580, "duplication": 1, "action_type": 2},
+        {"id": 3, "name": "Gardevoir", "buy_point": 18260, "duplication": 1, "action_type": 2},
+        {"id": 4, "name": "Normal", "buy_point": 1210, "duplication": 200, "action_type": 0},
+    ])
+    names = {u["key"]: u["name"] for u in tracked_units(pool)}
+    res = match_shipment_history(pool, [[1, 16600, 1000], [1, 16600, 2000]])
+    assert sorted(names[k] for k in res["certain"]) == ["Gardevoir", "Magikarp"] and res["off_value"] == [1]
