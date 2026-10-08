@@ -37,14 +37,24 @@ export function searchName(name: string): string {
 }
 
 // "M2110-080" -> Set "M2", Nummer "110/080" (japanische Kartennummer: Nummer/Setgröße); "Old Back" = alte Karte ohne Nummer
-export function cardCode(model?: string | null): { set?: string; number?: string; text: string } | null {
+// One Piece / Dragon Ball: "OP17-079" = Set OP17, Karte 079 (Cardmarket führt sie als "(OP17-079)")
+const SET_DASH_NUMBER = /^([A-Z]{1,4}\d{1,2}[A-Z]?)-(\d{3})$/i;
+
+export function cardCode(model?: string | null): { set?: string; number?: string; text: string; cm?: string } | null {
   const m = (model || "").trim();
   if (!m) return null;
+  const tcg = m.match(SET_DASH_NUMBER);
+  if (tcg) {
+    const code = `${tcg[1]}-${tcg[2]}`.toUpperCase();
+    return { set: tcg[1].toUpperCase(), number: code, text: `${tcg[1].toUpperCase()} · ${tcg[2]}`, cm: code };
+  }
   const parts = m.match(/^(.*?)(\d{2,3})-(\d{2,3})$/);
   if (parts) {
     const set = parts[1].replace(/[-\s]+$/, "") || undefined;
     const number = `${parts[2]}/${parts[3]}`;
-    return { set, number, text: [set, number].filter(Boolean).join(" · ") };
+    // Pokémon: Set + Nummer in einem Wort ("SV8a217-187" -> "sv8a217")
+    const cm = set ? m.replace(/-\d{2,3}$/, "").replace(/\s+/g, "").toLowerCase() : undefined;
+    return { set, number, text: [set, number].filter(Boolean).join(" · "), cm };
   }
   return { text: m };
 }
@@ -66,8 +76,7 @@ export function marketLinks(name: string, category?: string, model?: string | nu
   const links: MarketLink[] = [];
   // Cardmarket findet Karten über Set-Kürzel + Kartennummer in einem Wort ("sv8a217") - steht so in der
   // Kartennummer der Seite ("SV8a217-187", Teil vor dem Bindestrich)
-  const code = cardCode(model);
-  const cmCode = code?.set && code.number ? (model || "").trim().replace(/-\d{2,3}$/, "").replace(/\s+/g, "").toLowerCase() : null;
+  const cmCode = cardCode(model)?.cm || null;
   if (game && cmCode) {
     links.push({
       label: "Cardmarket",
