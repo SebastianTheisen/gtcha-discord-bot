@@ -771,6 +771,13 @@ def match_shipment_history(pool: Dict, batches: List[List], tol: float = VALUE_T
             combined = combine(options)
             if combined is None:
                 return result
+            if not combined and valid:
+                # passt nur zu Hits, die schon verschickt sind (zweiter Schub mit Gardevoirs Wert, Gardevoir ist raus):
+                # dann wie bei einem unerklärten Schub ein Hit, für den die Seite einen anderen Wert zählt
+                off = _off_value_hit_options(pool, classes, count, value, tol)
+                combined = combine(off) if off else set()
+                if combined:
+                    result["off_value"].append(i)
         if not combined:
             continue  # widerspricht den anderen Schüben: übergehen statt falsch zuordnen
         states = combined
