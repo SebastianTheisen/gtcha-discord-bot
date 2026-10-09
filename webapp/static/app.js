@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 96;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 97;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -1111,19 +1111,21 @@ async function claimFlow(b, card) {
     if (choice === "Verknüpfen") location.hash = "#/settings";
     return;
   }
-  const free = units.find((u) => !u.medal_user && u.state !== "pulled");
+  // frei = ohne Medaille; zuerst noch offene Exemplare, sonst automatisch erkannte (nachträglich beanspruchen)
+  const open = units.find((u) => !u.medal_user && u.state !== "pulled");
+  const free = open || units.find((u) => !u.medal_user && u.origin?.via !== "admin");
   const own = units.find((u) => u.medal_user === String(user.user_id));
   // Admin: ohne Person abhaken ("Hit ist raus") oder das wieder aufheben - löst keine Versand-Frist aus
   const marked = units.find((u) => u.origin?.via === "admin");
-  if (user.admin && (free || marked)) {
-    const opts = [star, "Abbrechen", ...(free ? ["Selbst melden", `🛠️ ${free.tier} abhaken (ohne Person)`] : []),
+  if (user.admin && (open || marked)) {
+    const opts = [star, "Abbrechen", ...(free ? ["Selbst melden"] : []), ...(open ? [`🛠️ ${open.tier} abhaken (ohne Person)`] : []),
                   ...(marked ? [`🛠️ ${marked.tier} Abhaken aufheben`] : [])];
     const choice = await ask("Admin", `${esc(card.name)} · ${num(card.value)} Coins<br><br>
         Abhaken ohne Person, wenn ihr denkt, der Hit ist raus – darunter steht dann „durch Admin abgehakt“.`, opts);
     if (await wishPicked(choice) || !choice || choice === "Abbrechen") return;
     if (choice.startsWith("🛠️")) {
       const payload = choice.includes("aufheben") ? { pack_id: b.id, tier: marked.tier, action: "remove" }
-        : { pack_id: b.id, tier: free.tier, action: "mark" };
+        : { pack_id: b.id, tier: open.tier, action: "mark" };
       haptic();
       const { id } = await authApi("/api/admin/medal", payload);
       return waitForBot(id);
@@ -1141,7 +1143,8 @@ async function claimFlow(b, card) {
     else return;
   } else if (free) {
     const choice = await ask("Hit beanspruchen?", `<b>${free.tier}</b> · ${esc(card.name)}<br>${num(card.value)} Coins<br><br>
-        Als von dir gezogen melden? Der Bot postet das im Discord-Thread.`, [star, "Nein", "Ja"]);
+        ${free.state === "pulled" ? "Automatisch als gezogen erkannt – nachträglich als von dir gezogen melden?"
+          : "Als von dir gezogen melden?"} Der Bot postet das im Discord-Thread.`, [star, "Nein", "Ja"]);
     if (await wishPicked(choice) || choice !== "Ja") return;
     unit = free; action = "claim";
   } else if (own) {
