@@ -419,3 +419,18 @@ def test_minimal_mode_posts_no_detected_hits(tmp_path, env):
         assert (await db.get_pull_tracking(7))["pulled"] == ["hitA"]   # App sieht ihn trotzdem
 
     asyncio.run(run())
+
+
+def test_minimal_cleanup_selects_only_outdated_posts(env):
+    """Minimal räumt alte Bot-Posts auf: Hit-Listen, erkannte Hits, Hit-Chance, Lohnt sich, Endspurt, Admin-Haken
+    ohne Person - Medaillen, Pack-Updates und Korrekturen an Medaillen von Personen bleiben."""
+    from bot.discord_view import minimal_drop
+    drop = ["🏆 **Hits im Pool** (nur Versand) · noch drin: 3 von 5", "🏆 **Top 5 Karten** (Coin-Wert)",
+            "🔥 **Hit gezogen:** 🥇 Glurak (50.000 Coins)", "@everyone 🔥 **T1 gezogen:** X",
+            "❓ **Möglicher Hit:** Eine Karte …", "🎯 **Hit-Chance:** 3,2 %", "💰 **Lohnt sich** …",
+            "@everyone ⚡ **Endspurt** …", "🛠️ T2 als raus abgehakt *(Admin)*", "🛠️ T2: Abhaken aufgehoben *(Admin)*"]
+    keep = ["🥇 T1 geht an <@5>!", "↩️ T2 von <@5> zurückgenommen", "📉 **Pack-Update:** 120 → 115 / 500 (-5)",
+            "🛠️ T2 an <@6> umgetragen *(Admin)*", "🛠️ T3 von <@5> entfernt *(Admin)*", "@everyone Neuer Banner verfügbar!",
+            "🟢 **Verkauf gestartet!** Ab jetzt kann gezogen werden."]
+    assert all(minimal_drop(t) for t in drop)
+    assert not any(minimal_drop(t) for t in keep)
