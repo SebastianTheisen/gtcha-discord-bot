@@ -453,9 +453,11 @@ class ThreadsMixin:
                 [thread_data['top5_message_id']] if thread_data.get('top5_message_id') else [])
             hit_link = (f"https://discord.com/channels/{thread.guild.id}/{thread.id}/{hit_ids[0]}"
                         if hit_ids else None)
-            new_embed = self._build_banner_embed(banner, stats=stats, tempo=tempo, conditions=conditions,
-                                                 shipped=shipped, minimum=minimum, pool_value=pool_value,
-                                                 hit_link=hit_link, slim=await self._slim())
+            minimal = await self._minimal()   # minimal: nur Grundinfos (Preis, Packs, Ende, Kaufbedingungen)
+            new_embed = self._build_banner_embed(banner, stats=None if minimal else stats, tempo=tempo,
+                                                 conditions=conditions, shipped=shipped, minimum=minimum,
+                                                 pool_value=pool_value, hit_link=None if minimal else hit_link,
+                                                 slim=await self._slim())
 
             # Message updaten
             await discord_rate_limiter.acquire("message_edit")

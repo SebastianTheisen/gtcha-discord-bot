@@ -86,6 +86,7 @@ def test_detected_hit_published_after_delay(tmp_path, env):
         bridge = AppBridge(str(tmp_path / "w.db"))
         await bridge.init()
         await bridge.set_setting("discord_delay", "30")
+        await bridge.set_setting("discord_mode", "slim")   # schlank: erkannte Hits kommen verzögert in Discord
         sent, refreshed = [], []
         bot = make_bot(db, bridge, sent, refreshed)
         before = await db.get_pull_tracking(7)
@@ -170,7 +171,7 @@ def test_admin_settings_only_for_admins(tmp_path, monkeypatch):
         assert (await client.get("/api/admin/settings", headers=h(7))).status == 403
         assert (await client.post("/api/admin/settings", headers=h(7), json={"mode": "full", "delay_minutes": 0})).status == 403
         res = await (await client.get("/api/admin/settings", headers=h(42))).json()
-        assert (res["mode"], res["delay_minutes"]) == ("slim", 30)                  # Voreinstellung
+        assert (res["mode"], res["delay_minutes"]) == ("minimal", 30)               # Voreinstellung
         assert res["admins"] == [{"name": "U42"}] and "you" not in res          # keine IDs im Klartext
         res = await (await client.post("/api/admin/settings", headers=h(42), json={"mode": "slim", "delay_minutes": 90})).json()
         assert (res["mode"], res["delay_minutes"]) == ("slim", 90)
@@ -392,5 +393,29 @@ def test_thread_rename_does_not_block(env):
         assert asyncio.get_running_loop().time() - t0 < 0.2 and renamed == []   # sofort zurück
         await bot._title_worker
         assert renamed and "ID 5" in renamed[0]
+
+    asyncio.run(run())
+
+
+
+def test_minimal_mode_posts_no_detected_hits(tmp_path, env):
+    """Minimal: automatisch erkannte Hits nur in der App - in Discord kein Post, auch nicht verzögert."""
+    async def run():
+        db = Database(str(tmp_path / "b.db"))
+        await db.init()
+        async with aiosqlite.connect(db.db_path) as conn:
+            await conn.execute("INSERT INTO banners (pack_id, is_active) VALUES (7, 1)")
+            await conn.commit()
+        bridge = AppBridge(str(tmp_path / "w.db"))
+        await bridge.init()
+        await bridge.set_setting("discord_delay", "0")
+        assert (await bridge.discord_view())["minimal"] is True      # Voreinstellung
+        sent, refreshed = [], []
+        bot = make_bot(db, bridge, sent, refreshed)
+        before = await db.get_pull_tracking(7)
+        await db.set_pull_tracking(7, None, None, None, ["hitA"], [])
+        await bot._publish_pulls(7, 700, before, "🔥 **Hit gezogen:** A")
+        assert sent == []
+        assert (await db.get_pull_tracking(7))["pulled"] == ["hitA"]   # App sieht ihn trotzdem
 
     asyncio.run(run())

@@ -465,6 +465,8 @@ class HitsMixin:
                 await self._update_thread_embed(banner, initial_pool=initial_pool)
 
             thread_id = int(thread_data['thread_id'])
+            if await self._minimal():
+                return   # minimal: keine Hit-Liste in Discord (alte löscht _cleanup_minimal_posts)
             thread = self.get_channel(thread_id)
             if not thread:
                 thread = await self.fetch_channel(thread_id)
