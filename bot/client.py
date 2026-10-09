@@ -114,6 +114,12 @@ class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, Hits
             self._watch_discord_mode, 'interval', minutes=1,
             id='discord_mode_job', replace_existing=True, coalesce=True, max_instances=1,
         )
+        # Premium-Foren: laufende Banner ohne Premium-Thread nachrüsten (erster Lauf kurz nach dem Start)
+        self.scheduler.add_job(
+            self._ensure_premium_threads, 'interval', minutes=5,
+            id='premium_threads_job', replace_existing=True, coalesce=True, max_instances=1,
+            next_run_time=datetime.now() + timedelta(minutes=1),
+        )
         # Web-App erreichbar? (nur Meldung im Admin-Kanal, wenn sie vorher schon lief)
         self._webapp_seen, self._webapp_fails = False, 0
         self.scheduler.add_job(

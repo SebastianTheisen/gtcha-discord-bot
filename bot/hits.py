@@ -73,7 +73,8 @@ class HitsMixin:
         keys = tier_keys(pool)
         return {t: t in medals or keys.get(t) in detected for t in TIERS}
 
-    async def _check_endspurt(self, thread: discord.Thread, thread_data: dict, stats: dict, banner, silent: bool):
+    async def _check_endspurt(self, thread: discord.Thread, thread_data: dict, stats: dict, banner, silent: bool,
+                              scope: str = "main"):
         """Einmaliger Alarm, wenn nur noch wenige Packs übrig und noch Hits drin sind."""
         if thread_data.get('endspurt_sent'):
             return
@@ -84,7 +85,7 @@ class HitsMixin:
         if not total or remaining <= 0 or remaining > total * ENDSPURT_PERCENT / 100 or not open_hits:
             return
         await self.db.set_endspurt_sent(thread.id)
-        if silent or await self._slim():   # schlank: nur in der App
+        if silent or await self._slim(scope):   # schlank: nur in der App
             return
         units = tracked_units(await self.db.get_card_pool(get('pack_id')))
         rank = {u['key']: i for i, u in enumerate(units, 1)}
@@ -102,13 +103,13 @@ class HitsMixin:
         logger.info(f"Endspurt-Alarm gepostet: Banner {get('pack_id')} ({remaining}/{total})")
 
     async def _check_value_alert(self, thread: discord.Thread, thread_data: dict, stats: dict, banner,
-                                 silent: bool = False):
+                                 silent: bool = False, scope: str = "main"):
         """Einmaliger Hinweis, wenn die Ø Rückgabe über 100 % des Preises steigt."""
         pct = stats.get('ev_pct')
         if pct is None:
             return
         alert_sent = bool(thread_data.get('value_alert_sent'))
-        silent = silent or await self._slim()   # schlank: "Lohnt sich" nur in der App
+        silent = silent or await self._slim(scope)   # schlank: "Lohnt sich" nur in der App
         if pct > 100 and not alert_sent and silent:
             await self.db.set_value_alert_sent(thread.id, True)
         elif pct > 100 and not alert_sent:
@@ -456,17 +457,29 @@ class HitsMixin:
         """
         try:
             banner = await self.db.get_banner(pack_id)
-            thread_data = await self.db.get_thread_by_banner_id(pack_id)
             pool = await self.db.get_card_pool(pack_id)
-            if not banner or not thread_data or not pool or thread_data.get('is_expired'):
+            if not banner or not pool:
+                return
+            threads = await self._banner_threads(pack_id)
+            if not threads:
                 return
 
             if embed:
                 await self._update_thread_embed(banner, initial_pool=initial_pool)
 
+            for thread_data, scope in threads:
+                if await self._minimal(scope):
+                    continue   # minimal: keine Hit-Liste in Discord (alte löscht _cleanup_minimal_posts)
+                await self._refresh_hit_list(banner, pool, thread_data, scope, embed, force)
+        except Exception as e:
+            logger.warning(f"Fehler bei Hit-Nachricht/Ø-Update für {pack_id}: {e}")
+
+    async def _refresh_hit_list(self, banner: dict, pool: dict, thread_data: dict, scope: str, embed: bool,
+                                force: bool):
+        """Hit-Nachricht(en) eines Threads anlegen oder bearbeiten."""
+        pack_id = banner['pack_id']
+        try:
             thread_id = int(thread_data['thread_id'])
-            if await self._minimal():
-                return   # minimal: keine Hit-Liste in Discord (alte löscht _cleanup_minimal_posts)
             thread = self.get_channel(thread_id)
             if not thread:
                 thread = await self.fetch_channel(thread_id)
@@ -514,7 +527,10 @@ class HitsMixin:
             if new_ids != old_ids:
                 await self.db.set_hit_message_ids(thread_id, new_ids)
                 if embed and (not old_ids or new_ids[0] != old_ids[0]):
-                    await self._update_thread_embed(banner)   # Link zur neuen Hit-Liste
+                    # Link zur neuen Hit-Liste
+                    fresh = await (self.db.get_premium_thread(pack_id) if scope == "premium"
+                                   else self.db.get_thread_by_banner_id(pack_id))
+                    await self._update_one_embed(banner, fresh or thread_data, scope)
             await self.db.set_hit_list_sig(thread_id, sig)
             if old_ids:
                 logger.info(f"Hit-Liste aktualisiert: Banner {pack_id} ({len(messages)} Nachricht(en))")
@@ -552,10 +568,15 @@ class HitsMixin:
             logger.debug(f"Fehler beim Suchen der Probability-Nachricht: {e}")
         return None
 
-    async def _update_probability_message(self, thread_id: int, banner_id: int):
-        """Erstellt oder aktualisiert die Wahrscheinlichkeits-Nachricht im Thread (nicht im schlanken Modus)."""
-        if await self._slim():
-            return
+    async def _update_probability_message(self, thread_id: Optional[int], banner_id: int):
+        """Erstellt oder aktualisiert die Wahrscheinlichkeits-Nachricht in allen Threads des Banners, die nicht
+        schlank sind (thread_id wird nicht mehr gebraucht - es gelten immer alle Threads)."""
+        for thread_data, scope in await self._banner_threads(banner_id):
+            if not await self._slim(scope):
+                await self._update_one_probability(thread_data, banner_id)
+
+    async def _update_one_probability(self, thread_data: dict, banner_id: int):
+        thread_id = int(thread_data['thread_id'])
         try:
             # Banner-Daten holen
             banner = await self.db.get_banner(banner_id)
@@ -566,14 +587,7 @@ class HitsMixin:
             if not current_packs or current_packs <= 0:
                 return
 
-            # Pulls pro Tag (entries_per_day), None = unbegrenzt
-            pulls_per_day = banner.get('entries_per_day')
-
-            # Thread-Daten für starter_message_id holen
-            thread_data = await self.db.get_thread_by_banner_id(banner_id)
-            starter_message_id = thread_data.get('starter_message_id') if thread_data else None
-
-            thread_id_int = int(thread_id)
+            thread_id_int = thread_id
             full_message = await self._hit_chance_text(banner, thread_data, thread_id_int)
 
             # Thread holen (falls nicht schon im Fallback geholt)

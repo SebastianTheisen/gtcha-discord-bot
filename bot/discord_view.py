@@ -1,6 +1,8 @@
 """Was Discord zu sehen bekommt - schlank und zeitversetzt (die App und der VPS haben immer alles).
 
-Einstellung (in der App, nur für Admins): Modus "slim"/"full" und Verzögerung in Minuten.
+Einstellung (in der App, nur für Admins): Modus "minimal"/"slim"/"full" der normalen Foren, Modus der Premium-Foren
+("slim"/"full") und Verzögerung in Minuten. Sind Premium-Foren eingerichtet (PREMIUM_CHANNEL_* in der .env), bekommt
+jeder Banner dort einen zweiten Thread; Medaillen gelten für beide (gespeichert am normalen Thread).
 
 Schlank:
   - Startbeitrag ohne Auswertungen, nur Ampel 🟢/🟡/🔴 und "Hits noch drin"; neutraler Thread-Titel
@@ -39,8 +41,9 @@ def minimal_drop(content: str) -> bool:
 
 
 class DiscordViewMixin:
-    async def _view(self) -> dict:
-        """{"slim", "delay" (Sekunden)} aus den App-Einstellungen, kurz zwischengespeichert."""
+    async def _settings_view(self) -> dict:
+        """Einstellungen aus der App ({"mode", "slim", "minimal", "delay", "delay_minutes", "premium_mode"}),
+        kurz zwischengespeichert."""
         cached = getattr(self, "_view_cache", None)
         if cached and time.monotonic() - cached[0] < SETTINGS_CACHE_SECONDS:
             return cached[1]
@@ -49,16 +52,97 @@ class DiscordViewMixin:
             view = await self.app_bridge.discord_view()
         except Exception as e:
             logger.debug(f"Discord-Einstellungen nicht lesbar: {e}")
-            view = {"mode": "minimal", "slim": True, "minimal": True, "delay": 30 * 60, "delay_minutes": 30}
+            view = {"mode": "minimal", "slim": True, "minimal": True, "delay": 30 * 60, "delay_minutes": 30,
+                    "premium_mode": "full"}
         self._view_cache = (time.monotonic(), view)
         return view
 
-    async def _slim(self) -> bool:
-        return (await self._view())["slim"]
+    @staticmethod
+    def _premium_enabled() -> bool:
+        return any(PREMIUM_CHANNEL_IDS.values())
 
-    async def _minimal(self) -> bool:
+    async def _view(self, scope: str = "main") -> dict:
+        """Was ein Thread zeigt: scope "main" = normales Forum (Einstellung discord_mode), "premium" = Premium-Forum
+        (premium_mode, immer mit der eingestellten Verzögerung)."""
+        view = await self._settings_view()
+        delay = view.get("delay_minutes", 0) * 60
+        if scope == "premium":
+            mode = view.get("premium_mode") or "full"
+            return {**view, "mode": mode, "slim": mode == "slim", "minimal": False, "delay": delay}
+        if self._premium_enabled():
+            view = {**view, "delay": delay}   # ein gemeinsamer öffentlicher Stand für beide Foren
+        return view
+
+    async def _slim(self, scope: str = "main") -> bool:
+        return (await self._view(scope))["slim"]
+
+    async def _minimal(self, scope: str = "main") -> bool:
         """Minimal: Discord nur noch mit Grundinfos, Pack-Updates und Medaillen von euch - alles andere in der App."""
-        return bool((await self._view()).get("minimal"))
+        return bool((await self._view(scope)).get("minimal"))
+
+    async def _delay(self) -> int:
+        """Verzögerung (Sekunden) für erkannte Hits und Tracker-Medaillen - gilt für alle Foren gemeinsam."""
+        return (await self._view())["delay"]
+
+    # --- Threads eines Banners (normal + Premium) ---
+    async def _banner_threads(self, pack_id: int) -> list:
+        """[(thread_data, scope)] der aktiven Threads eines Banners: "main" (normales Forum), "premium"."""
+        out = []
+        main = await self.db.get_thread_by_banner_id(pack_id)
+        if main and not main.get("is_expired"):
+            out.append((main, "main"))
+        if self._premium_enabled():
+            premium = await self.db.get_premium_thread(pack_id)
+            if premium and not premium.get("is_expired"):
+                out.append((premium, "premium"))
+        return out
+
+    async def _medal_thread(self, thread_id: int) -> int:
+        """Medaillen hängen am normalen Thread - für einen Premium-Thread dessen ID."""
+        if not self._premium_enabled():
+            return int(thread_id)
+        premium = await self.db.get_premium_thread_by_id(int(thread_id))
+        if not premium:
+            return int(thread_id)
+        main = await self.db.get_thread_by_banner_id(premium["banner_id"])
+        return int(main["thread_id"]) if main else int(thread_id)
+
+    async def _open_thread(self, thread_id: int):
+        """Thread holen und ggf. entarchivieren (sonst kann der Bot nicht posten); None, wenn es ihn nicht gibt."""
+        try:
+            thread = self.get_channel(int(thread_id)) or await self.fetch_channel(int(thread_id))
+        except discord.NotFound:
+            return None
+        if not isinstance(thread, discord.Thread):
+            return None
+        if thread.archived:
+            await discord_rate_limiter.acquire("thread_edit")
+            await thread.edit(archived=False)
+        return thread
+
+    async def _post_to_threads(self, pack_id: int, text: str, scopes=None, skip_minimal: bool = False,
+                               exclude: Optional[int] = None, reaction: Optional[tuple] = None, **kwargs) -> bool:
+        """Text in alle Threads des Banners posten (scopes: nur diese Foren, skip_minimal: nicht ins minimale Forum,
+        exclude: diesen Thread auslassen). reaction = (Emoji, hinzufügen?) am Startbeitrag. True = mind. ein Post."""
+        posted = False
+        for thread_data, scope in await self._banner_threads(pack_id):
+            if (scopes and scope not in scopes) or int(thread_data["thread_id"]) == exclude:
+                continue
+            if skip_minimal and await self._minimal(scope):
+                continue
+            try:
+                thread = await self._open_thread(thread_data["thread_id"])
+                if thread is None:
+                    continue
+                if reaction:
+                    await self._set_starter_reaction(thread, thread_data, reaction[0], add=reaction[1])
+                if text:
+                    await discord_rate_limiter.acquire("message_send")
+                    await thread.send(text, **kwargs)
+                posted = True
+            except Exception as e:
+                logger.warning(f"[DISCORD] Post in Thread {thread_data['thread_id']} ({scope}) fehlgeschlagen: {e}")
+        return posted
 
     # --- Öffentlicher Stand (was Discord schon wissen darf) ---
     async def _public_pull_tracking(self, pack_id: int) -> dict:
@@ -67,7 +151,8 @@ class DiscordViewMixin:
         return {**state, **public} if public else state
 
     async def _public_medals(self, thread_id: int) -> dict:
-        delay = (await self._view())["delay"]
+        thread_id = await self._medal_thread(thread_id)
+        delay = await self._delay()
         if not delay:
             return await self.db.get_medals(int(thread_id))
         since = (datetime.now() - timedelta(seconds=delay)).isoformat()
@@ -77,14 +162,12 @@ class DiscordViewMixin:
                              immediate: bool = False):
         """Neuer echter Stand ist gespeichert. Ohne Verzögerung sofort öffentlich (und Post), sonst den alten
         Stand für Discord festhalten und Post + neuen Stand in die Warteschlange legen."""
-        if text and await self._minimal():
-            text = None   # minimal: erkannte Hits nur in der App
-        delay = 0 if immediate else (await self._view())["delay"]
+        delay = 0 if immediate else await self._delay()
         if not delay:
             if not await self.db.pending_discord(pack_id):
                 await self.db.set_public_pulls(pack_id, None)
-            if text:
-                await self._send_thread(thread_id, text)
+            if text:   # nicht ins minimale Forum: erkannte Hits dort nur in der App
+                await self._post_to_threads(pack_id, text, skip_minimal=True)
             return
         await self.db.set_public_pulls(pack_id, before["pulled"], before["unsure"], only_if_missing=True)
         now_state = await self.db.get_pull_tracking(pack_id)
@@ -92,16 +175,6 @@ class DiscordViewMixin:
                                     {"pulled": now_state["pulled"], "unsure": now_state["unsure"], "text": text},
                                     time.time() + delay)
         logger.info(f"[DISCORD] Hit-Erkennung bei {pack_id} erscheint in {delay // 60} Min")
-
-    async def _send_thread(self, thread_id: int, text: str, **kwargs):
-        thread = self.get_channel(int(thread_id)) or await self.fetch_channel(int(thread_id))
-        if not isinstance(thread, discord.Thread):
-            return None
-        if thread.archived:
-            await discord_rate_limiter.acquire("thread_edit")
-            await thread.edit(archived=False)
-        await discord_rate_limiter.acquire("message_send")
-        return await thread.send(text, **kwargs)
 
     async def _process_discord_outbox(self):
         """Fällige zeitversetzte Posts senden und den öffentlichen Stand nachziehen (läuft alle 30 s)."""
@@ -111,15 +184,12 @@ class DiscordViewMixin:
                 try:
                     if item["kind"] == "pulls":
                         await self.db.set_public_pulls(pid, data["pulled"], data["unsure"])
-                        if data.get("text") and not await self._minimal():
-                            await self._send_thread(tid, data["text"])
+                        if data.get("text"):
+                            await self._post_to_threads(pid, data["text"], skip_minimal=True)
                     elif item["kind"] == "app_medal":
-                        await self._send_thread(tid, data["text"], **({"allowed_mentions": discord.AllowedMentions.none()}
-                                                                        if data.get("silent") else {}))
-                        thread_data = await self.db.get_thread_by_banner_id(pid)
-                        if thread_data and data.get("emoji"):
-                            thread = self.get_channel(int(tid)) or await self.fetch_channel(int(tid))
-                            await self._set_starter_reaction(thread, thread_data, data["emoji"], add=data.get("add", True))
+                        await self._post_to_threads(
+                            pid, data["text"], reaction=(data["emoji"], data.get("add", True)) if data.get("emoji") else None,
+                            **({"allowed_mentions": discord.AllowedMentions.none()} if data.get("silent") else {}))
                 except Exception as e:
                     logger.warning(f"[DISCORD] Zeitversetzter Post {item['id']} fehlgeschlagen: {e}")
                 await self.db.done_discord(item["id"])
@@ -171,7 +241,7 @@ class DiscordViewMixin:
         """In der App umgeschaltet (schlank/voll)? Dann alle Startbeiträge, Titel und Hit-Listen neu zeichnen
         und beim Wechsel auf schlank die alten Posts löschen."""
         try:
-            view = await self._view()
+            view = await self._settings_view()
             mode = view["mode"]
             # einmalig: bisher "schlank" -> neuer Standard "minimal" (Discord nur noch Grundinfos und Medaillen)
             if mode == "slim" and await self.db.get_meta("minimal_default") != "1":
@@ -193,6 +263,14 @@ class DiscordViewMixin:
                             await self.db.set_public_pulls(pid, None)
                 await self.db.set_meta("embed_version", "")
                 await self._refresh_all_embeds()
+            if self._premium_enabled():
+                premium = view.get("premium_mode") or "full"
+                applied_premium = await self.db.get_meta("premium_mode_applied")
+                await self.db.set_meta("premium_mode_applied", premium)
+                if applied_premium and applied_premium != premium:
+                    logger.info(f"[DISCORD] Premium-Ansicht umgestellt auf {premium} - zeichne alle Threads neu")
+                    await self.db.set_meta("embed_version", "")
+                    await self._refresh_all_embeds()
             if mode in ("slim", "minimal"):
                 await self._cleanup_old_posts()
             if mode == "minimal":

@@ -82,6 +82,7 @@ def test_detected_hit_published_after_delay(tmp_path, env):
         await db.init()
         async with aiosqlite.connect(db.db_path) as conn:
             await conn.execute("INSERT INTO banners (pack_id, is_active) VALUES (7, 1)")
+            await conn.execute("INSERT INTO discord_threads (banner_id, thread_id) VALUES (7, 700)")
             await conn.commit()
         bridge = AppBridge(str(tmp_path / "w.db"))
         await bridge.init()
@@ -113,6 +114,9 @@ def test_no_delay_in_full_mode(tmp_path, env):
     async def run():
         db = Database(str(tmp_path / "b.db"))
         await db.init()
+        async with aiosqlite.connect(db.db_path) as conn:
+            await conn.execute("INSERT INTO discord_threads (banner_id, thread_id) VALUES (7, 700)")
+            await conn.commit()
         bridge = AppBridge(str(tmp_path / "w.db"))
         await bridge.init()
         await bridge.set_setting("discord_mode", "full")
@@ -383,7 +387,10 @@ def test_thread_rename_does_not_block(env):
         async def _thread_status(self, row, data):
             return "running"
 
-        async def _slim(self):
+        async def _banner_threads(self, pid):
+            return [(await self.db.get_thread_by_banner_id(pid), "main")]
+
+        async def _slim(self, scope="main"):
             return True
 
     async def run():

@@ -56,19 +56,24 @@ def test_bot_applies_app_medals(tmp_path, monkeypatch):
 
     sent = []
 
-    class Thread:
+    import discord
+
+    class Thread(discord.Thread):
         archived = False
+        def __init__(self): pass
         async def send(self, text, **kw): sent.append(text)
         async def fetch_message(self, _id): raise RuntimeError("kein Startbeitrag im Test")
 
-    class Bot(AppLinkMixin, MedalsMixin):
+    from bot.discord_view import DiscordViewMixin
+
+    class Bot(AppLinkMixin, MedalsMixin, DiscordViewMixin):
         user = None
         def __init__(self, db, bridge):
             self.db, self._app_bridge = db, bridge
         def get_channel(self, _id): return Thread()
         async def _update_probability_message(self, *a): pass
         async def _refresh_pool_views(self, *a): pass
-        async def _view(self): return {"slim": False, "delay": 0, "delay_minutes": 0}
+        async def _view(self, scope="main"): return {"slim": False, "delay": 0, "delay_minutes": 0}
 
     async def run():
         db = Database(str(tmp_path / "bot.db"))
