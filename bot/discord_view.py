@@ -22,9 +22,20 @@ SETTINGS_CACHE_SECONDS = 20
 OLD_POST_PREFIXES = ("💰 **Lohnt sich", "@everyone 💰 **Lohnt sich", "⚡ **Endspurt", "@everyone ⚡ **Endspurt",
                      "🎯 **Hit-Chance")
 CLEANUP_VERSION = "1"
-# minimal: diese eigenen Posts verschwinden (automatisch erkannte Hits, Admin-Haken ohne Person)
-MINIMAL_DROP_PREFIXES = ("🔥 **", "@everyone 🔥 **", "❓ **Möglicher Hit", "@everyone ❓ **Möglicher Hit")
-MINIMAL_CLEANUP_VERSION = "1"
+# minimal: diese eigenen Posts verschwinden - alle Arten aus früheren Versionen: Hit-Listen (auch ohne gespeicherte
+# ID), automatisch erkannte Hits, Hit-Chance, "Lohnt sich", Endspurt. Medaillen und Pack-Updates bleiben.
+MINIMAL_DROP_PREFIXES = ("🏆 **", "🔥 **", "@everyone 🔥 **", "❓ **Möglicher Hit", "@everyone ❓ **Möglicher Hit",
+                         "🎯 **Hit-Chance", "🎯 Hit-Chance") + OLD_POST_PREFIXES
+MINIMAL_CLEANUP_VERSION = "2"
+
+
+def minimal_drop(content: str) -> bool:
+    """Eigener Post, den es im minimalen Modus nicht mehr gibt? Admin-Haken ohne Person ebenfalls weg;
+    Admin-Korrekturen an Medaillen von Personen ("umgetragen", "entfernt") bleiben."""
+    text = content or ""
+    if text.startswith(MINIMAL_DROP_PREFIXES):
+        return True
+    return text.startswith("🛠️ ") and ("als raus abgehakt" in text or "Abhaken aufgehoben" in text)
 
 
 class DiscordViewMixin:
@@ -212,7 +223,7 @@ class DiscordViewMixin:
                 if thread_data.get("top5_message_id"):
                     hit_ids.add(int(thread_data["top5_message_id"]))
                 old = [msg async for msg in thread.history(limit=None)
-                       if msg.author.id == self.user.id and (msg.id in hit_ids or (msg.content or "").startswith(MINIMAL_DROP_PREFIXES))]
+                       if msg.author.id == self.user.id and (msg.id in hit_ids or minimal_drop(msg.content))]
                 deleted += await self._delete_messages(thread, old)
                 await self.db.set_hit_message_ids(int(thread_data["thread_id"]), [])
                 await self.db.set_hit_list_sig(int(thread_data["thread_id"]), None)
