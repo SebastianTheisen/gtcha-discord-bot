@@ -81,9 +81,10 @@ class AppLinkMixin:
             if problem:
                 return False, problem.replace("❌ ", "")
             await self.db.save_medal(thread_id, tier, 0, source="admin")
-            await self._set_starter_reaction(thread, thread_data, emoji, add=True)
-            await discord_rate_limiter.acquire("message_send")
-            await thread.send(f"🛠️ {tier} als raus abgehakt *(Admin)*", allowed_mentions=discord.AllowedMentions.none())
+            if not await self._minimal():   # minimal: Admin-Haken ohne Person nur in der App
+                await self._set_starter_reaction(thread, thread_data, emoji, add=True)
+                await discord_rate_limiter.acquire("message_send")
+                await thread.send(f"🛠️ {tier} als raus abgehakt *(Admin)*", allowed_mentions=discord.AllowedMentions.none())
             logger.info(f"Admin-Korrektur: {tier} bei {pack_id} abgehakt (ohne Person)")
         elif req["action"] in ("admin_remove", "admin_assign"):
             # Korrektur durch den Admin (in der App geprüft): sofort, auch in Discord

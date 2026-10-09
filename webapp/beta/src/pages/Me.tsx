@@ -293,6 +293,7 @@ function AdminSettings({ a }: { a: any }) {
     <Section id="admin" title="⚙️ Discord-Ansicht" extra="Admin">
       <div class="row">
         <select class="select wide" value={mode} onChange={(e) => setMode((e.target as HTMLSelectElement).value)}>
+          <option value="minimal">Minimal (Grundinfos + Medaillen)</option>
           <option value="slim">Schlank</option><option value="full">Voll (wie früher)</option>
         </select>
         <input class="field small-field" inputMode="numeric" value={delay} onInput={(e) => setDelay((e.target as HTMLInputElement).value)} aria-label="Verzögerung in Minuten" />

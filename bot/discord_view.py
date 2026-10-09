@@ -22,6 +22,9 @@ SETTINGS_CACHE_SECONDS = 20
 OLD_POST_PREFIXES = ("💰 **Lohnt sich", "@everyone 💰 **Lohnt sich", "⚡ **Endspurt", "@everyone ⚡ **Endspurt",
                      "🎯 **Hit-Chance")
 CLEANUP_VERSION = "1"
+# minimal: diese eigenen Posts verschwinden (automatisch erkannte Hits, Admin-Haken ohne Person)
+MINIMAL_DROP_PREFIXES = ("🔥 **", "@everyone 🔥 **", "❓ **Möglicher Hit", "@everyone ❓ **Möglicher Hit")
+MINIMAL_CLEANUP_VERSION = "1"
 
 
 class DiscordViewMixin:
@@ -35,12 +38,16 @@ class DiscordViewMixin:
             view = await self.app_bridge.discord_view()
         except Exception as e:
             logger.debug(f"Discord-Einstellungen nicht lesbar: {e}")
-            view = {"slim": True, "delay": 30 * 60, "delay_minutes": 30}
+            view = {"mode": "minimal", "slim": True, "minimal": True, "delay": 30 * 60, "delay_minutes": 30}
         self._view_cache = (time.monotonic(), view)
         return view
 
     async def _slim(self) -> bool:
         return (await self._view())["slim"]
+
+    async def _minimal(self) -> bool:
+        """Minimal: Discord nur noch mit Grundinfos, Pack-Updates und Medaillen von euch - alles andere in der App."""
+        return bool((await self._view()).get("minimal"))
 
     # --- Öffentlicher Stand (was Discord schon wissen darf) ---
     async def _public_pull_tracking(self, pack_id: int) -> dict:
@@ -59,6 +66,8 @@ class DiscordViewMixin:
                              immediate: bool = False):
         """Neuer echter Stand ist gespeichert. Ohne Verzögerung sofort öffentlich (und Post), sonst den alten
         Stand für Discord festhalten und Post + neuen Stand in die Warteschlange legen."""
+        if text and await self._minimal():
+            text = None   # minimal: erkannte Hits nur in der App
         delay = 0 if immediate else (await self._view())["delay"]
         if not delay:
             if not await self.db.pending_discord(pack_id):
@@ -91,7 +100,7 @@ class DiscordViewMixin:
                 try:
                     if item["kind"] == "pulls":
                         await self.db.set_public_pulls(pid, data["pulled"], data["unsure"])
-                        if data.get("text"):
+                        if data.get("text") and not await self._minimal():
                             await self._send_thread(tid, data["text"])
                     elif item["kind"] == "app_medal":
                         await self._send_thread(tid, data["text"], **({"allowed_mentions": discord.AllowedMentions.none()}
@@ -151,7 +160,14 @@ class DiscordViewMixin:
         """In der App umgeschaltet (schlank/voll)? Dann alle Startbeiträge, Titel und Hit-Listen neu zeichnen
         und beim Wechsel auf schlank die alten Posts löschen."""
         try:
-            mode = "slim" if await self._slim() else "full"
+            view = await self._view()
+            mode = view["mode"]
+            # einmalig: bisher "schlank" -> neuer Standard "minimal" (Discord nur noch Grundinfos und Medaillen)
+            if mode == "slim" and await self.db.get_meta("minimal_default") != "1":
+                await self.app_bridge.set_setting("discord_mode", "minimal")
+                self._view_cache = None
+                mode = "minimal"
+            await self.db.set_meta("minimal_default", "1")
             applied = await self.db.get_meta("discord_mode_applied")
             if not applied:
                 # erster Start mit dieser Version: Startbeiträge zeichnet schon der EMBED_VERSION-Wechsel neu
@@ -166,10 +182,46 @@ class DiscordViewMixin:
                             await self.db.set_public_pulls(pid, None)
                 await self.db.set_meta("embed_version", "")
                 await self._refresh_all_embeds()
-            if mode == "slim":
+            if mode in ("slim", "minimal"):
                 await self._cleanup_old_posts()
+            if mode == "minimal":
+                await self._cleanup_minimal_posts()
         except Exception as e:
             logger.warning(f"[DISCORD] Ansicht nicht übernommen: {e}")
+
+    async def _cleanup_minimal_posts(self):
+        """Einmalig nach dem Umstellen auf minimal: in allen aktiven Threads Hit-Listen, Posts zu automatisch
+        erkannten Hits und Admin-Haken löschen; Startbeiträge ohne Auswertung neu zeichnen. Medaillen-Posts von
+        euch und Pack-Updates bleiben."""
+        try:
+            if await self.db.get_meta("minimal_cleanup") == MINIMAL_CLEANUP_VERSION:
+                return
+            deleted = 0
+            for pid in await self.db.get_active_banners():
+                thread_data = await self.db.get_thread_by_banner_id(pid)
+                if not thread_data or thread_data.get("is_expired"):
+                    continue
+                try:
+                    thread = self.get_channel(int(thread_data["thread_id"])) or \
+                        await self.fetch_channel(int(thread_data["thread_id"]))
+                except discord.NotFound:
+                    continue
+                if not isinstance(thread, discord.Thread):
+                    continue
+                hit_ids = {int(i) for i in json.loads(thread_data.get("hit_message_ids") or "null") or []}
+                if thread_data.get("top5_message_id"):
+                    hit_ids.add(int(thread_data["top5_message_id"]))
+                old = [msg async for msg in thread.history(limit=None)
+                       if msg.author.id == self.user.id and (msg.id in hit_ids or (msg.content or "").startswith(MINIMAL_DROP_PREFIXES))]
+                deleted += await self._delete_messages(thread, old)
+                await self.db.set_hit_message_ids(int(thread_data["thread_id"]), [])
+                await self.db.set_hit_list_sig(int(thread_data["thread_id"]), None)
+            await self.db.set_meta("embed_version", "")
+            await self._refresh_all_embeds()
+            await self.db.set_meta("minimal_cleanup", MINIMAL_CLEANUP_VERSION)
+            logger.info(f"[DISCORD] Minimal: {deleted} Hit-Listen und Erkennungs-Posts gelöscht, Startbeiträge gekürzt")
+        except Exception as e:
+            logger.warning(f"[DISCORD] Minimal-Aufräumen fehlgeschlagen (nächster Start versucht es erneut): {e}")
 
     async def _delete_messages(self, thread, messages: list) -> int:
         """Jüngere als 14 Tage gesammelt löschen (bis 100 auf einmal - ein Aufruf statt 100, kaum Wartezeiten

@@ -390,8 +390,8 @@ class App:
         if request.method == "POST":
             body = await request.json()
             mode = str(body.get("mode", ""))
-            if mode not in ("slim", "full"):
-                raise web.HTTPBadRequest(text="Modus: slim oder full")
+            if mode not in ("minimal", "slim", "full"):
+                raise web.HTTPBadRequest(text="Modus: minimal, slim oder full")
             try:
                 delay = int(body.get("delay_minutes"))
             except (TypeError, ValueError):
@@ -401,7 +401,7 @@ class App:
             await self.bridge.set_setting("discord_delay", str(delay))
             logger.info(f"Discord-Ansicht von {user['name']} geändert: {mode}, {delay} Min")
         view = await self.bridge.discord_view()
-        return web.json_response({"mode": "slim" if view["slim"] else "full", "delay_minutes": view["delay_minutes"],
+        return web.json_response({"mode": view["mode"], "delay_minutes": view["delay_minutes"],
                                   "admins": [{"name": x["name"]} for x in await self.bridge.names(admin_ids())]})
 
     async def api_my_medals(self, request):

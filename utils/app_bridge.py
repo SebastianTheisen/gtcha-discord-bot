@@ -48,7 +48,8 @@ MAX_IMPORT_BYTES = 8_000_000
 # Was Discord zu sehen bekommt (App und VPS haben immer alles):
 #   discord_mode  "slim" = abgespeckt, "full" = alles wie früher
 #   discord_delay Minuten, um die automatisch erkannte Hits und in der App gemeldete Medaillen in Discord später erscheinen
-DEFAULT_SETTINGS = {"discord_mode": "slim", "discord_delay": "30"}
+DEFAULT_SETTINGS = {"discord_mode": "minimal", "discord_delay": "30"}
+DISCORD_MODES = ("minimal", "slim", "full")
 MAX_DELAY_MINUTES = 24 * 60
 KEEP_IMPORTS = 24    # je Person (~3 Läufe; der Verlauf liegt zusammengeführt in user_history)
 
@@ -184,14 +185,17 @@ class AppBridge:
             return {**DEFAULT_SETTINGS, **{k: v for k, v in await cur.fetchall()}}
 
     async def discord_view(self) -> Dict:
-        """{"slim": bool, "delay": Sekunden} - Verzögerung nur im schlanken Modus."""
+        """{"mode", "slim", "minimal", "delay": Sekunden} - Verzögerung nur im schlanken/minimalen Modus.
+        minimal: nur Grundinfos, Pack-Updates und Medaillen von euch (keine Auswertungen, keine Hit-Liste)."""
         s = await self.settings()
-        slim = s.get("discord_mode") != "full"
+        mode = s.get("discord_mode") if s.get("discord_mode") in DISCORD_MODES else "minimal"
+        slim = mode != "full"
         try:
             minutes = max(0, min(MAX_DELAY_MINUTES, int(s.get("discord_delay") or 0)))
         except ValueError:
             minutes = 0
-        return {"slim": slim, "delay": minutes * 60 if slim else 0, "delay_minutes": minutes}
+        return {"mode": mode, "slim": slim, "minimal": mode == "minimal", "delay": minutes * 60 if slim else 0,
+                "delay_minutes": minutes}
 
     async def set_setting(self, key: str, value: str):
         if key not in DEFAULT_SETTINGS:

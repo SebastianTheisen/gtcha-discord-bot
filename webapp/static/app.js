@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 95;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 96;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -1446,6 +1446,7 @@ function adminSection(a) {
     <div class="panel">
       <div class="add-watch">
         <select id="admin-mode" aria-label="Modus">
+          <option value="minimal" ${a.mode === "minimal" ? "selected" : ""}>Minimal (Grundinfos + Medaillen)</option>
           <option value="slim" ${a.mode === "slim" ? "selected" : ""}>Schlank</option>
           <option value="full" ${a.mode === "full" ? "selected" : ""}>Voll (wie früher)</option>
         </select>
