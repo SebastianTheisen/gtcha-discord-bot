@@ -59,7 +59,9 @@ interface Props {
 export function CardSheet({ card, price, category, packId, units = [], archived, onClose, onChanged }: Props) {
   const [busy, setBusy] = useState(false);
   const user = me.value;
-  const free = units.find((u) => !u.medal_user && u.state !== "pulled");
+  // frei = ohne Medaille: zuerst noch offene Exemplare, sonst automatisch erkannte (nachträglich beanspruchen)
+  const open = units.find((u) => !u.medal_user && u.state !== "pulled");
+  const free = open || units.find((u) => !u.medal_user && u.origin?.via !== "admin");
   const own = user ? units.find((u) => u.medal_user === String(user.user_id)) : undefined;
   const marked = units.find((u) => u.origin?.via === "admin");
   const canReport = !!packId && !archived && units.length > 0;
@@ -102,8 +104,10 @@ export function CardSheet({ card, price, category, packId, units = [], archived,
         {canReport && !user && <a class="btn primary block" href="#/me" onClick={onClose}>Zum Melden mit Discord verknüpfen</a>}
         {canReport && user && free && (
           <button class="btn primary block" disabled={busy}
-            onClick={() => send("api/medal", { pack_id: packId, tier: free.tier, action: "claim" }, `${free.tier} als von dir gezogen melden?`)}>
-            🏅 {free.tier} melden
+            onClick={() => send("api/medal", { pack_id: packId, tier: free.tier, action: "claim" },
+              free.state === "pulled" ? `${free.tier} wurde automatisch erkannt – nachträglich als von dir gezogen melden?`
+                : `${free.tier} als von dir gezogen melden?`)}>
+            🏅 {free.tier} {free.state === "pulled" ? "für mich beanspruchen" : "melden"}
           </button>
         )}
         {canReport && user && own && (
@@ -112,10 +116,10 @@ export function CardSheet({ card, price, category, packId, units = [], archived,
             ↩️ {own.tier} zurücknehmen
           </button>
         )}
-        {canReport && user?.admin && free && (
+        {canReport && user?.admin && open && (
           <button class="btn block" disabled={busy}
-            onClick={() => send("api/admin/medal", { pack_id: packId, tier: free.tier, action: "mark" }, `${free.tier} ohne Person abhaken?`)}>
-            🛠️ {free.tier} abhaken (ohne Person)
+            onClick={() => send("api/admin/medal", { pack_id: packId, tier: open.tier, action: "mark" }, `${open.tier} ohne Person abhaken?`)}>
+            🛠️ {open.tier} abhaken (ohne Person)
           </button>
         )}
         {canReport && user?.admin && marked && (
