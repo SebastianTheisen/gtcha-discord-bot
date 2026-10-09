@@ -48,8 +48,10 @@ MAX_IMPORT_BYTES = 8_000_000
 # Was Discord zu sehen bekommt (App und VPS haben immer alles):
 #   discord_mode  "slim" = abgespeckt, "full" = alles wie früher
 #   discord_delay Minuten, um die automatisch erkannte Hits und in der App gemeldete Medaillen in Discord später erscheinen
-DEFAULT_SETTINGS = {"discord_mode": "minimal", "discord_delay": "30"}
+#   premium_mode  Premium-Foren: "full" = alle Infos wie in der App, "slim" = abgespeckt (immer mit Verzögerung)
+DEFAULT_SETTINGS = {"discord_mode": "minimal", "discord_delay": "30", "premium_mode": "full"}
 DISCORD_MODES = ("minimal", "slim", "full")
+PREMIUM_MODES = ("slim", "full")
 MAX_DELAY_MINUTES = 24 * 60
 KEEP_IMPORTS = 24    # je Person (~3 Läufe; der Verlauf liegt zusammengeführt in user_history)
 
@@ -194,8 +196,9 @@ class AppBridge:
             minutes = max(0, min(MAX_DELAY_MINUTES, int(s.get("discord_delay") or 0)))
         except ValueError:
             minutes = 0
+        premium = s.get("premium_mode") if s.get("premium_mode") in PREMIUM_MODES else "full"
         return {"mode": mode, "slim": slim, "minimal": mode == "minimal", "delay": minutes * 60 if slim else 0,
-                "delay_minutes": minutes}
+                "delay_minutes": minutes, "premium_mode": premium}
 
     async def set_setting(self, key: str, value: str):
         if key not in DEFAULT_SETTINGS:

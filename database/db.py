@@ -25,6 +25,9 @@ API_LOG_DAYS = 30
 # für Discord (Threads, Top 10, "nicht gefunden") arbeiten nur mit is_active = 1 und sehen sie nie; Funktionen
 # nach Banner-ID (Kartenpool, Pack-Verlauf, Preis ...) und die App funktionieren für beide.
 STORE = 2
+# Discord-Threads je Banner: normal (discord_threads, Medaillen hängen an dieser Thread-ID) und Premium (premium_threads,
+# gleicher Banner im Premium-Forum mit allen Infos). Updates nach Thread-ID gelten für beide Tabellen.
+THREAD_TABLES = ("discord_threads", "premium_threads")
 
 
 def store_thread_id(pack_id: int) -> int:
@@ -153,6 +156,12 @@ class Database:
                 CREATE TABLE IF NOT EXISTS translations (source TEXT PRIMARY KEY, german TEXT, created_at TEXT);
                 CREATE TABLE IF NOT EXISTS discord_public (
                     pack_id INTEGER PRIMARY KEY, pulled_cards TEXT, unsure_cards TEXT);
+                -- Premium-Forum: derselbe Banner noch einmal mit allen Infos (Hit-Liste, erkannte Hits, zeitversetzt)
+                CREATE TABLE IF NOT EXISTS premium_threads (
+                    banner_id INTEGER PRIMARY KEY, thread_id INTEGER UNIQUE, channel_id INTEGER,
+                    starter_message_id INTEGER, is_expired INTEGER DEFAULT 0, created_at TEXT, title TEXT,
+                    hit_message_ids TEXT, hit_list_sig TEXT, top5_message_id INTEGER, probability_message_id INTEGER,
+                    endspurt_sent INTEGER DEFAULT 0, value_alert_sent INTEGER DEFAULT 0);
                 CREATE TABLE IF NOT EXISTS discord_outbox (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, pack_id INTEGER, thread_id INTEGER,
                     payload TEXT, send_at REAL);
@@ -485,7 +494,8 @@ class Database:
 
     async def set_endspurt_sent(self, thread_id: int) -> None:
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("UPDATE discord_threads SET endspurt_sent = 1 WHERE thread_id = ?", (thread_id,))
+            for table in THREAD_TABLES:
+                await db.execute(f"UPDATE {table} SET endspurt_sent = 1 WHERE thread_id = ?", (thread_id,))
             await db.commit()
 
     async def get_meta(self, key: str) -> Optional[str]:
@@ -578,7 +588,8 @@ class Database:
 
     async def set_thread_title(self, thread_id: int, title: str) -> None:
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("UPDATE discord_threads SET title = ? WHERE thread_id = ?", (title, thread_id))
+            for table in THREAD_TABLES:
+                await db.execute(f"UPDATE {table} SET title = ? WHERE thread_id = ?", (title, thread_id))
             await db.commit()
 
     async def set_start(self, pack_id: int, starts_at: Optional[int], announced: bool) -> None:
@@ -598,25 +609,29 @@ class Database:
 
     async def set_hit_list_sig(self, thread_id: int, sig: str) -> None:
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("UPDATE discord_threads SET hit_list_sig = ? WHERE thread_id = ?", (sig, thread_id))
+            for table in THREAD_TABLES:
+                await db.execute(f"UPDATE {table} SET hit_list_sig = ? WHERE thread_id = ?", (sig, thread_id))
             await db.commit()
 
     async def set_hit_message_ids(self, thread_id: int, message_ids: List[int]) -> None:
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("UPDATE discord_threads SET hit_message_ids = ?, top5_message_id = ? WHERE thread_id = ?",
-                             (json.dumps(message_ids), message_ids[0] if message_ids else None, thread_id))
+            for table in THREAD_TABLES:
+                await db.execute(f"UPDATE {table} SET hit_message_ids = ?, top5_message_id = ? WHERE thread_id = ?",
+                                 (json.dumps(message_ids), message_ids[0] if message_ids else None, thread_id))
             await db.commit()
 
     async def set_top5_message_id(self, thread_id: int, message_id: int) -> None:
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("UPDATE discord_threads SET top5_message_id = ? WHERE thread_id = ?",
-                             (message_id, thread_id))
+            for table in THREAD_TABLES:
+                await db.execute(f"UPDATE {table} SET top5_message_id = ? WHERE thread_id = ?",
+                                 (message_id, thread_id))
             await db.commit()
 
     async def set_value_alert_sent(self, thread_id: int, sent: bool) -> None:
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("UPDATE discord_threads SET value_alert_sent = ? WHERE thread_id = ?",
-                             (1 if sent else 0, thread_id))
+            for table in THREAD_TABLES:
+                await db.execute(f"UPDATE {table} SET value_alert_sent = ? WHERE thread_id = ?",
+                                 (1 if sent else 0, thread_id))
             await db.commit()
 
     async def update_banner_entries(self, pack_id: int, entries_per_day: int) -> None:
@@ -738,6 +753,40 @@ class Database:
             )
             row = await cursor.fetchone()
             return dict(row) if row else None
+
+    # --- Premium-Threads ---
+    async def save_premium_thread(self, banner_id: int, thread_id: int, channel_id: int,
+                                  starter_message_id: int) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("INSERT OR REPLACE INTO premium_threads (banner_id, thread_id, channel_id, "
+                             "starter_message_id, created_at) VALUES (?, ?, ?, ?, ?)",
+                             (banner_id, thread_id, channel_id, starter_message_id, datetime.now().isoformat()))
+            await db.commit()
+
+    async def get_premium_thread(self, banner_id: int) -> Optional[Dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT * FROM premium_threads WHERE banner_id = ?", (banner_id,))
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def get_premium_thread_by_id(self, thread_id: int) -> Optional[Dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT * FROM premium_threads WHERE thread_id = ?", (thread_id,))
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def premium_missing(self) -> List[int]:
+        """Laufende Banner mit normalem Thread, aber ohne aktiven Premium-Thread (zum Nachrüsten)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("""
+                SELECT b.pack_id FROM banners b
+                JOIN discord_threads t ON t.banner_id = b.pack_id AND t.is_expired = 0
+                LEFT JOIN premium_threads p ON p.banner_id = b.pack_id AND p.is_expired = 0
+                WHERE b.is_active = 1 AND p.thread_id IS NULL
+                ORDER BY b.pack_id""")
+            return list(dict.fromkeys(r[0] for r in await cur.fetchall()))
 
     async def delete_thread(self, banner_id: int) -> None:
         async with aiosqlite.connect(self.db_path) as db:
@@ -878,7 +927,12 @@ class Database:
                 JOIN banners b ON dt.banner_id = b.pack_id
                 WHERE b.is_active = 0 AND b.updated_at <= ?
                   AND dt.thread_id IS NOT NULL AND dt.is_expired = 0
-            """, (cutoff,))
+                UNION
+                SELECT pt.thread_id FROM premium_threads pt
+                JOIN banners b ON pt.banner_id = b.pack_id
+                WHERE b.is_active = 0 AND b.updated_at <= ?
+                  AND pt.thread_id IS NOT NULL AND pt.is_expired = 0
+            """, (cutoff, cutoff))
             return [row[0] for row in await cursor.fetchall()]
 
     async def mark_threads_expired(self, thread_ids: List[int]) -> None:
@@ -886,8 +940,9 @@ class Database:
         if not thread_ids:
             return
         async with aiosqlite.connect(self.db_path) as db:
-            await db.executemany("UPDATE discord_threads SET is_expired = 1 WHERE thread_id = ?",
-                                 [(int(t),) for t in thread_ids])
+            for table in THREAD_TABLES:
+                await db.executemany(f"UPDATE {table} SET is_expired = 1 WHERE thread_id = ?",
+                                     [(int(t),) for t in thread_ids])
             await db.commit()
 
     async def fix_sold_out_counts(self) -> List[int]:
@@ -1067,10 +1122,8 @@ class Database:
             await db.execute(f"DELETE FROM card_value_history WHERE banner_id IN ({placeholders})", old_ids)
 
             # Threads löschen
-            await db.execute(
-                f"DELETE FROM discord_threads WHERE banner_id IN ({placeholders})",
-                old_ids
-            )
+            for table in THREAD_TABLES:
+                await db.execute(f"DELETE FROM {table} WHERE banner_id IN ({placeholders})", old_ids)
 
             # Banner löschen
             await db.execute(
@@ -1133,30 +1186,30 @@ class Database:
     async def mark_thread_expired(self, banner_id: int) -> None:
         """Markiert einen Thread als abgelaufen (statt löschen)."""
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "UPDATE discord_threads SET is_expired = 1 WHERE banner_id = ?",
-                (banner_id,)
-            )
+            for table in THREAD_TABLES:
+                await db.execute(f"UPDATE {table} SET is_expired = 1 WHERE banner_id = ?", (banner_id,))
             await db.commit()
 
     async def update_probability_message_id(self, thread_id: int, message_id: int) -> None:
         """Speichert die Message-ID der Wahrscheinlichkeits-Nachricht."""
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "UPDATE discord_threads SET probability_message_id = ? WHERE thread_id = ?",
-                (message_id, thread_id)
-            )
+            for table in THREAD_TABLES:
+                await db.execute(
+                    f"UPDATE {table} SET probability_message_id = ? WHERE thread_id = ?",
+                    (message_id, thread_id)
+                )
             await db.commit()
 
     async def get_probability_message_id(self, thread_id: int) -> Optional[int]:
         """Gibt die Message-ID der Wahrscheinlichkeits-Nachricht zurück."""
         async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT probability_message_id FROM discord_threads WHERE thread_id = ?",
-                (thread_id,)
-            )
-            row = await cursor.fetchone()
-            return row[0] if row and row[0] else None
+            for table in THREAD_TABLES:
+                cursor = await db.execute(f"SELECT probability_message_id FROM {table} WHERE thread_id = ?",
+                                          (thread_id,))
+                row = await cursor.fetchone()
+                if row and row[0]:
+                    return row[0]
+            return None
 
     async def get_all_active_banners_with_threads(self) -> List[Dict]:
         """Gibt alle aktiven Banner mit Thread-Daten und Medaillen-Anzahl zurück."""

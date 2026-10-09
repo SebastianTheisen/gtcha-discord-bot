@@ -78,6 +78,17 @@ CHANNEL_IDS = {
     "Dragon Ball": int(os.getenv("CHANNEL_DRAGON_BALL") or "0"),
 }
 
+# Premium-Foren (optional): jeder Banner zusätzlich mit allen Infos (Hit-Liste, erkannte Hits, Medaillen aus dem
+# Tracker - zeitversetzt). Die normalen Foren zeigen dann nur Grundinfos, Pack-Updates und Medaillen.
+PREMIUM_CHANNEL_IDS = {
+    "Bonus": int(os.getenv("PREMIUM_CHANNEL_BONUS") or "0"),
+    "MIX": int(os.getenv("PREMIUM_CHANNEL_MIX") or "0"),
+    "Pokémon": int(os.getenv("PREMIUM_CHANNEL_POKEMON") or "0"),
+    "One piece": int(os.getenv("PREMIUM_CHANNEL_ONE_PIECE") or "0"),
+    "Dragon Ball": int(os.getenv("PREMIUM_CHANNEL_DRAGON_BALL") or "0"),
+}
+PREMIUM_ENABLED = any(PREMIUM_CHANNEL_IDS.values())
+
 # Admin-Channel für Bot-Benachrichtigungen (optional)
 # Der Bot postet hier Status-Updates, Fehler und Erfolge
 ADMIN_CHANNEL_ID = int(os.getenv("ADMIN_CHANNEL_ID") or "0")

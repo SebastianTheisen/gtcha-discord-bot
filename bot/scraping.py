@@ -315,18 +315,10 @@ class ScrapingMixin:
             if (item and is_upcoming(item)) or (not item and now < row['starts_at']):
                 continue
             await self.db.set_start(pid, row['starts_at'], announced=True)
-            thread_data = await self.db.get_thread_by_banner_id(pid)
-            if not thread_data or thread_data.get('is_expired'):
-                continue
             try:
-                thread = self.get_channel(int(thread_data['thread_id'])) or await self.fetch_channel(
-                    int(thread_data['thread_id']))
-                if thread.archived:
-                    await discord_rate_limiter.acquire("thread_edit")
-                    await thread.edit(archived=False)
                 mention = "@everyone " if MENTION_ON_NEW_THREAD else ""
-                await discord_rate_limiter.acquire("message_send")
-                await thread.send(f"{mention}🟢 **Verkauf gestartet!** Ab jetzt kann gezogen werden.")
+                if not await self._post_to_threads(pid, f"{mention}🟢 **Verkauf gestartet!** Ab jetzt kann gezogen werden."):
+                    continue
                 await self._update_thread_embed(await self.db.get_banner(pid))
                 logger.info(f"Start gemeldet: Banner {pid}")
             except Exception as e:
@@ -454,40 +446,12 @@ class ScrapingMixin:
                         await notify_all_retries_failed()
 
     async def _post_pack_update_to_thread(self, pack_id: int, old_packs: int, new_packs: int, total_packs: int) -> bool:
-        """Postet einen Kommentar im Thread wenn sich die Pack-Anzahl ändert. Gibt True bei Erfolg zurück."""
+        """Postet einen Kommentar in allen Threads des Banners, wenn sich die Pack-Anzahl ändert.
+        True, sobald es in mindestens einem Thread geklappt hat."""
         try:
-            thread_data = await self.db.get_thread_by_banner_id(pack_id)
-            if not thread_data:
+            if not await self._banner_threads(pack_id):
                 logger.debug(f"Kein Thread für Pack-Update {pack_id}")
                 return False
-
-            thread_id = thread_data.get('thread_id')
-            if not thread_id:
-                return False
-
-            # Thread holen
-            thread = self.get_channel(int(thread_id))
-            if not thread:
-                try:
-                    thread = await self.fetch_channel(int(thread_id))
-                except discord.NotFound:
-                    logger.debug(f"Thread {thread_id} nicht gefunden")
-                    return False
-                except Exception:
-                    return False
-
-            if not isinstance(thread, discord.Thread):
-                return False
-
-            # Archivierte Threads entsperren (Discord archiviert inaktive Threads automatisch → keine Posts möglich)
-            if thread.archived:
-                try:
-                    await discord_rate_limiter.acquire("thread_edit")
-                    await thread.edit(archived=False)
-                    logger.info(f"Thread {thread_id} entsperrt (war archiviert)")
-                except Exception as e:
-                    logger.warning(f"Konnte Thread {thread_id} nicht entsperren: {e}")
-                    return False
 
             # Kommentar erstellen
             old_packs = old_packs or 0
@@ -513,14 +477,12 @@ class ScrapingMixin:
             if MENTION_ON_PACK_UPDATE:
                 message = f"@everyone\n{message}"
 
-            await discord_rate_limiter.acquire("message_send")
-            await thread.send(message)
-            logger.info(f"Pack-Update gepostet: {pack_id} ({old_packs} → {new_packs})")
-            return True
+            # Archivierte Threads entsperrt _post_to_threads (Discord archiviert inaktive Threads automatisch)
+            posted = await self._post_to_threads(pack_id, message)
+            if posted:
+                logger.info(f"Pack-Update gepostet: {pack_id} ({old_packs} → {new_packs})")
+            return posted
 
-        except discord.HTTPException as e:
-            logger.warning(f"Discord-Fehler bei Pack-Update {pack_id}: {e}")
-            return False
         except Exception as e:
             logger.warning(f"Fehler bei Pack-Update {pack_id}: {e}")
             return False
@@ -601,12 +563,7 @@ class ScrapingMixin:
                     result['updated'] = True
 
                     if packs_changed:
-                        thread_data = await self.db.get_thread_by_banner_id(banner.pack_id)
-                        if thread_data and thread_data.get('thread_id'):
-                            await self._update_probability_message(
-                                thread_data['thread_id'],
-                                banner.pack_id
-                            )
+                        await self._update_probability_message(None, banner.pack_id)
 
                 # Banner im Cache aktualisieren
                 await banner_cache.set(banner.pack_id, {
@@ -623,7 +580,8 @@ class ScrapingMixin:
             return result
 
     async def _delete_banner_thread(self, pack_id: int) -> bool:
-        """Löscht den Discord-Thread für einen abgelaufenen Banner."""
+        """Löscht die Discord-Threads (normal und Premium) für einen abgelaufenen Banner."""
+        await self._delete_premium_thread(pack_id)
         try:
             logger.info(f"   Archiviere Thread für Banner {pack_id}...")
 
@@ -691,6 +649,21 @@ class ScrapingMixin:
         except Exception as e:
             logger.error(f"Fehler beim Thread löschen für {pack_id}: {e}")
             return False
+
+    async def _delete_premium_thread(self, pack_id: int):
+        premium = await self.db.get_premium_thread(pack_id)
+        if not premium or premium.get('is_expired'):
+            return
+        try:
+            thread = self.get_channel(int(premium['thread_id'])) or await self.fetch_channel(int(premium['thread_id']))
+            if isinstance(thread, discord.Thread):
+                await discord_rate_limiter.acquire("thread_delete")
+                await thread.delete()
+                logger.info(f"   Premium-Thread {premium['thread_id']} gelöscht")
+        except discord.NotFound:
+            pass
+        except Exception as e:
+            logger.warning(f"   Premium-Thread von {pack_id} nicht gelöscht: {e}")
 
     async def _purge_archived_data(self):
         """Löscht archivierte Banner-Daten und deren Discord-Threads."""

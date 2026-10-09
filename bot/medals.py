@@ -90,28 +90,37 @@ class MedalsMixin:
                 await self._refresh_pool_views(pack_id)
 
             else:
-                # Normaler Thread
-                thread_data = await self.db.get_thread_by_id(thread_id)
+                # Normaler Thread oder Premium-Thread (Medaille zählt für beide, gespeichert am normalen Thread)
+                own = thread_data = await self.db.get_thread_by_id(thread_id)
+                if not thread_data and self._premium_enabled():
+                    own = await self.db.get_premium_thread_by_id(thread_id)
+                    if own:
+                        thread_data = await self.db.get_thread_by_banner_id(own['banner_id'])
+                        if not thread_data or thread_data.get('is_expired'):
+                            await message.reply("❌ Zu diesem Banner gibt es keinen aktiven Thread mehr.")
+                            return
                 if not thread_data:
                     logger.debug(f"Thread {thread_id} nicht in DB gefunden")
                     return
+                medal_thread = int(thread_data['thread_id'])
+                banner_id = thread_data.get('banner_id')
 
-                problem = await self._invalid_medal_reason(thread_data.get('banner_id'), tier)
+                problem = await self._invalid_medal_reason(banner_id, tier)
                 if problem:
                     await message.reply(problem)
                     return
 
                 # Pruefe ob Medaille schon vergeben
-                existing = await self.db.get_medal(thread_id, tier)
+                existing = await self.db.get_medal(medal_thread, tier)
                 if existing:
                     await message.reply(f"❌ {tier} wurde bereits von <@{existing['user_id']}> beansprucht!")
                     return
 
                 # Medaille vergeben
-                await self.db.save_medal(thread_id, tier, user_id)
+                await self.db.save_medal(medal_thread, tier, user_id)
 
-                # Hole die Starter-Message (erste Nachricht im Thread)
-                starter_message_id = thread_data.get('starter_message_id')
+                # Reaktion am Startbeitrag dieses Threads
+                starter_message_id = own.get('starter_message_id')
                 if starter_message_id:
                     try:
                         starter_message = await message.channel.fetch_message(int(starter_message_id))
@@ -126,10 +135,13 @@ class MedalsMixin:
 
                 logger.info(f"Medaille: {tier} an {message.author.name} in {message.channel.name}")
 
-                # Wahrscheinlichkeit aktualisieren
-                banner_id = thread_data.get('banner_id')
                 if banner_id:
-                    await self._update_probability_message(thread_id, banner_id)
+                    # im anderen Forum (normal/Premium) ebenfalls - ohne zweite Benachrichtigung
+                    await self._post_to_threads(banner_id, f"{emoji} {tier} geht an <@{user_id}>!",
+                                                exclude=thread_id, reaction=(emoji, True),
+                                                allowed_mentions=discord.AllowedMentions.none())
+                    # Wahrscheinlichkeit aktualisieren
+                    await self._update_probability_message(medal_thread, banner_id)
                     await self._refresh_pool_views(banner_id)
 
         except Exception as e:

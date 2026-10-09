@@ -289,6 +289,7 @@ function Guide() {
 function AdminSettings({ a }: { a: any }) {
   const [mode, setMode] = useState(a.mode);
   const [delay, setDelay] = useState(String(a.delay_minutes));
+  const [premium, setPremium] = useState(a.premium_mode === "slim" ? "slim" : "full");
   return (
     <Section id="admin" title="⚙️ Discord-Ansicht" extra="Admin">
       <div class="row">
@@ -298,9 +299,16 @@ function AdminSettings({ a }: { a: any }) {
         </select>
         <input class="field small-field" inputMode="numeric" value={delay} onInput={(e) => setDelay((e.target as HTMLInputElement).value)} aria-label="Verzögerung in Minuten" />
       </div>
-      <p class="muted small">Modus · Verzögerung in Min (0 = sofort) · Admin: {(a.admins || []).map((x: any) => x.name || "–").join(", ") || "–"}</p>
+      {a.premium && (
+        <div class="row">
+          <select class="select wide" value={premium} onChange={(e) => setPremium((e.target as HTMLSelectElement).value)} aria-label="Premium-Foren">
+            <option value="full">Premium: Voll (alle Infos)</option><option value="slim">Premium: Schlank</option>
+          </select>
+        </div>
+      )}
+      <p class="muted small">{a.premium ? "Normale Foren · Verzögerung in Min (0 = sofort, gilt für alle Foren) · Premium-Foren" : "Modus · Verzögerung in Min (0 = sofort)"} · Admin: {(a.admins || []).map((x: any) => x.name || "–").join(", ") || "–"}</p>
       <button class="btn primary" onClick={async () => {
-        try { await authApi("api/admin/settings", { mode, delay_minutes: Number(delay) || 0 }); showToast("Gespeichert ✓"); haptic(); }
+        try { await authApi("api/admin/settings", { mode, delay_minutes: Number(delay) || 0, premium_mode: a.premium ? premium : "" }); showToast("Gespeichert ✓"); haptic(); }
         catch (e) { showToast(`Nicht gespeichert: ${(e as Error).message}`); }
       }}>Speichern</button>
     </Section>

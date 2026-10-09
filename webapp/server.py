@@ -85,6 +85,15 @@ def import_result_page(lines: list, ok: bool = True, report: list = None) -> web
                         content_type="text/html", headers={"Cache-Control": "no-store"})
 
 
+PREMIUM_ENV = ("PREMIUM_CHANNEL_BONUS", "PREMIUM_CHANNEL_MIX", "PREMIUM_CHANNEL_POKEMON", "PREMIUM_CHANNEL_ONE_PIECE",
+               "PREMIUM_CHANNEL_DRAGON_BALL")
+
+
+def premium_enabled() -> bool:
+    """Premium-Foren eingerichtet (PREMIUM_CHANNEL_* in der .env)?"""
+    return any((os.getenv(k) or "0").strip() not in ("", "0") for k in PREMIUM_ENV)
+
+
 def admin_ids() -> list:
     """Admins = genau die Discord-IDs in APP_ADMIN_IDS (.env, bei jeder Anfrage gelesen). Leer = niemand."""
     return [i.strip() for i in os.getenv("APP_ADMIN_IDS", "").split(",") if i.strip().isdigit()]
@@ -397,11 +406,17 @@ class App:
             except (TypeError, ValueError):
                 raise web.HTTPBadRequest(text="Verzögerung in Minuten")
             delay = max(0, min(MAX_DELAY_MINUTES, delay))
+            premium = str(body.get("premium_mode") or "")
+            if premium and premium not in ("slim", "full"):
+                raise web.HTTPBadRequest(text="Premium-Modus: slim oder full")
             await self.bridge.set_setting("discord_mode", mode)
             await self.bridge.set_setting("discord_delay", str(delay))
-            logger.info(f"Discord-Ansicht von {user['name']} geändert: {mode}, {delay} Min")
+            if premium:
+                await self.bridge.set_setting("premium_mode", premium)
+            logger.info(f"Discord-Ansicht von {user['name']} geändert: {mode}, Premium {premium or '-'}, {delay} Min")
         view = await self.bridge.discord_view()
         return web.json_response({"mode": view["mode"], "delay_minutes": view["delay_minutes"],
+                                  "premium_mode": view["premium_mode"], "premium": premium_enabled(),
                                   "admins": [{"name": x["name"]} for x in await self.bridge.names(admin_ids())]})
 
     async def api_my_medals(self, request):

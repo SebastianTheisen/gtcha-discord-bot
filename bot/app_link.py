@@ -65,13 +65,10 @@ class AppLinkMixin:
         thread_data = await self.db.get_thread_by_banner_id(pack_id)
         if not thread_data or thread_data.get("is_expired"):
             return False, "Zu diesem Banner gibt es keinen aktiven Thread"
-        thread_id = int(thread_data["thread_id"])
-        thread = self.get_channel(thread_id) or await self.fetch_channel(thread_id)
-        if thread.archived:
-            await discord_rate_limiter.acquire("thread_edit")
-            await thread.edit(archived=False)
+        thread_id = int(thread_data["thread_id"])   # Medaillen hängen am normalen Thread (gilt auch für Premium)
         emoji = MEDAL_EMOJIS.get(tier, MEDAL_EMOJI_DEFAULT)
         existing = await self.db.get_medal(thread_id, tier)
+        quiet = {"allowed_mentions": discord.AllowedMentions.none()}
 
         if req["action"] == "admin_mark":
             # Admin hakt ab ("Hit ist raus"), ohne Person - in Discord als Admin-Korrektur
@@ -81,18 +78,18 @@ class AppLinkMixin:
             if problem:
                 return False, problem.replace("❌ ", "")
             await self.db.save_medal(thread_id, tier, 0, source="admin")
-            if not await self._minimal():   # minimal: Admin-Haken ohne Person nur in der App
-                await self._set_starter_reaction(thread, thread_data, emoji, add=True)
-                await discord_rate_limiter.acquire("message_send")
-                await thread.send(f"🛠️ {tier} als raus abgehakt *(Admin)*", allowed_mentions=discord.AllowedMentions.none())
+            # minimal: Admin-Haken ohne Person nur in der App
+            await self._post_to_threads(pack_id, f"🛠️ {tier} als raus abgehakt *(Admin)*", skip_minimal=True,
+                                        reaction=(emoji, True), **quiet)
             logger.info(f"Admin-Korrektur: {tier} bei {pack_id} abgehakt (ohne Person)")
         elif req["action"] in ("admin_remove", "admin_assign"):
             # Korrektur durch den Admin (in der App geprüft): sofort, auch in Discord
+            reaction = None
             if req["action"] == "admin_remove":
                 if not existing:
                     return False, f"{tier} ist nicht vergeben"
                 await self.db.delete_medal(thread_id, tier)
-                await self._set_starter_reaction(thread, thread_data, emoji, add=False)
+                reaction = (emoji, False)
                 text = (f"🛠️ {tier} von <@{existing.get('user_id')}> entfernt *(Admin)*" if existing.get('user_id')
                         else f"🛠️ {tier}: Abhaken aufgehoben *(Admin)*")
             else:
@@ -103,10 +100,9 @@ class AppLinkMixin:
                     await self.db.delete_medal(thread_id, tier)
                 await self.db.save_medal(thread_id, tier, user_id)
                 if not existing:
-                    await self._set_starter_reaction(thread, thread_data, emoji, add=True)
+                    reaction = (emoji, True)
                 text = f"🛠️ {tier} an <@{user_id}> umgetragen *(Admin)*"
-            await discord_rate_limiter.acquire("message_send")
-            await thread.send(text, allowed_mentions=discord.AllowedMentions.none())
+            await self._post_to_threads(pack_id, text, reaction=reaction, **quiet)
             logger.info(f"Admin-Korrektur: {req['action']} {tier} bei {pack_id}")
         elif req["action"] == "unclaim":
             if not existing:
@@ -114,7 +110,7 @@ class AppLinkMixin:
             if int(existing.get("user_id") or 0) != user_id:
                 return False, f"{tier} hat jemand anderes gemeldet"
             await self.db.delete_medal(thread_id, tier)
-            await self._post_app_medal(thread, thread_data, pack_id, emoji, add=False, silent=True,
+            await self._post_app_medal(pack_id, emoji, add=False, silent=True,
                                        text=f"↩️ {tier} von <@{user_id}> zurückgenommen")
             logger.info(f"App-Medaille zurückgenommen: {tier} von {req['discord_name']} bei {pack_id}")
         else:
@@ -124,7 +120,7 @@ class AppLinkMixin:
             if existing:
                 return False, f"{tier} ist schon vergeben"
             await self.db.save_medal(thread_id, tier, user_id, source="app")
-            await self._post_app_medal(thread, thread_data, pack_id, emoji, add=True, silent=False,
+            await self._post_app_medal(pack_id, emoji, add=True, silent=False,
                                        text=f"{emoji} {tier} geht an <@{user_id}>!")
             logger.info(f"App-Medaille: {tier} an {req['discord_name']} bei {pack_id}")
 
@@ -155,17 +151,16 @@ class AppLinkMixin:
         logger.info(f"Store-Medaille: {action} {tier} bei {pack_id} ({req.get('discord_name')})")
         return True, None
 
-    async def _post_app_medal(self, thread, thread_data: dict, pack_id: int, emoji: str, add: bool, silent: bool,
-                              text: str):
-        """In der App gemeldet: in der App sofort, in Discord nach der eingestellten Verzögerung."""
-        delay = (await self._view())["delay"]
+    async def _post_app_medal(self, pack_id: int, emoji: str, add: bool, silent: bool, text: str):
+        """In der App gemeldet: in der App sofort, in Discord (alle Foren) nach der eingestellten Verzögerung."""
+        delay = await self._delay()
         if delay:
-            await self.db.queue_discord("app_medal", pack_id, thread.id,
+            main = await self.db.get_thread_by_banner_id(pack_id) or {}
+            await self.db.queue_discord("app_medal", pack_id, int(main.get("thread_id") or 0),
                                         {"text": text, "emoji": emoji, "add": add, "silent": silent}, time.time() + delay)
             return
-        await self._set_starter_reaction(thread, thread_data, emoji, add=add)
-        await discord_rate_limiter.acquire("message_send")
-        await thread.send(text, **({"allowed_mentions": discord.AllowedMentions.none()} if silent else {}))
+        await self._post_to_threads(pack_id, text, reaction=(emoji, add),
+                                    **({"allowed_mentions": discord.AllowedMentions.none()} if silent else {}))
 
     async def _set_starter_reaction(self, thread, thread_data: dict, emoji: str, add: bool):
         starter_id = thread_data.get("starter_message_id")

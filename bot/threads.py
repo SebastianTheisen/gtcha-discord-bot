@@ -16,6 +16,7 @@ class ThreadsMixin:
             if channel_id:
                 forum_channel_ids.add(int(channel_id))
                 channel_to_category[int(channel_id)] = category
+        premium_channel_ids = {int(c) for c in PREMIUM_CHANNEL_IDS.values() if c}
 
         # Alle aktiven Threads vom Server holen (nicht aus Cache!)
         if GUILD_ID:
@@ -32,6 +33,19 @@ class ThreadsMixin:
                         thread_id = int(thread_data['id'])
                         parent_id = int(thread_data.get('parent_id', 0))
                         thread_name = thread_data.get('name', '')
+
+                        if parent_id in premium_channel_ids:
+                            # Premium-Thread: nur die Zuordnung wiederherstellen (Banner kommt aus dem normalen Forum)
+                            premium_pid = parse_thread_title(thread_name)["pack_id"]
+                            known = await self.db.get_premium_thread(premium_pid) if premium_pid else None
+                            if premium_pid and not (known and not known.get('is_expired')):
+                                thread = self.get_channel(thread_id)
+                                starter = getattr(thread, 'starter_message', None) if thread else None
+                                await self.db.save_premium_thread(premium_pid, thread_id, parent_id,
+                                                                  starter.id if starter else thread_id)
+                                recovered_count += 1
+                                logger.info(f"Premium-Thread wiederhergestellt: {premium_pid} ({thread_name})")
+                            continue
 
                         # Nur Threads aus unseren Forum-Channels
                         if parent_id not in forum_channel_ids:
@@ -110,7 +124,7 @@ class ThreadsMixin:
 
         # Archivierte Threads löschen (nicht wiederherstellen!)
         # Archivierte Threads sind abgelaufen und sollten entfernt werden
-        for category, channel_id in CHANNEL_IDS.items():
+        for category, channel_id in list(CHANNEL_IDS.items()) + list(PREMIUM_CHANNEL_IDS.items()):
             if not channel_id:
                 continue
 
@@ -268,25 +282,98 @@ class ThreadsMixin:
         return embed
 
     async def _post_banner_to_discord(self, banner, starts_at: Optional[int] = None):
-        """Postet einen Banner als Thread in Discord (starts_at = angekündigt, Verkauf startet später)."""
+        """Postet einen Banner als Thread in Discord (starts_at = angekündigt, Verkauf startet später) -
+        im normalen Forum und, falls eingerichtet, im Premium-Forum."""
+        thread, message = await self._create_banner_thread(banner, CHANNEL_IDS.get(banner.category), starts_at)
+        if thread:
+            await self.db.save_thread(banner_id=banner.pack_id, thread_id=thread.id, channel_id=thread.parent_id,
+                                      starter_message_id=message.id)
+            # Wahrscheinlichkeit initial posten
+            await self._update_probability_message(thread.id, banner.pack_id)
+        await self._create_premium_thread(banner, starts_at)
 
-        # Channel fuer Kategorie finden
-        channel_id = CHANNEL_IDS.get(banner.category)
+    async def _create_premium_thread(self, banner, starts_at: Optional[int] = None, backfill: bool = False):
+        """Premium-Thread anlegen (nur einmal je Banner). backfill: laufender Banner wird nachgerüstet -
+        ohne @everyone, dafür gleich mit Startbeitrag, Hit-Liste und Medaillen."""
+        get = lambda key, default=None: self._get_banner_value(banner, key, default)
+        channel_id = PREMIUM_CHANNEL_IDS.get(get('category'))
         if not channel_id:
-            logger.warning(f"Kein Channel fuer Kategorie: {banner.category}")
+            return None
+        async with self.__dict__.setdefault("_premium_lock", asyncio.Lock()):
+            known = await self.db.get_premium_thread(get('pack_id'))
+            if known and not known.get('is_expired'):
+                return None
+            thread, message = await self._create_banner_thread(banner, channel_id, starts_at, mention=not backfill)
+            if not thread:
+                return None
+            await self.db.save_premium_thread(get('pack_id'), thread.id, thread.parent_id, message.id)
+        if backfill:
+            await self._fill_premium_thread(get('pack_id'))
+        else:
+            await self._update_probability_message(thread.id, get('pack_id'))
+        return thread
+
+    async def _fill_premium_thread(self, pack_id: int):
+        """Nachgerüsteter Premium-Thread: Startbeitrag mit allen Infos, Hit-Liste, Hit-Chance, Titel und die
+        schon vergebenen Medaillen als Reaktion."""
+        row = await self.db.get_banner(pack_id)
+        premium = await self.db.get_premium_thread(pack_id)
+        if not row or not premium:
             return
+        if row.get('card_pool'):
+            await self._refresh_pool_views(pack_id, force=True)
+        else:
+            await self._update_thread_embed(row)
+        await self._update_probability_message(premium['thread_id'], pack_id)
+        await self._sync_thread_title(pack_id)
+        main = await self.db.get_thread_by_banner_id(pack_id)
+        medals = await self._public_medals(main['thread_id']) if main else {}
+        if medals:
+            thread = await self._open_thread(premium['thread_id'])
+            for tier in medals:
+                await self._set_starter_reaction(thread, premium, MEDAL_EMOJIS.get(tier, MEDAL_EMOJI_DEFAULT), add=True)
+
+    async def _ensure_premium_threads(self):
+        """Laufende Banner ohne Premium-Thread nachrüsten (beim Start, danach regelmäßig als Absicherung)."""
+        if not self._premium_enabled():
+            return
+        try:
+            missing = await self.db.premium_missing()
+            if missing:
+                logger.info(f"[PREMIUM] Rüste {len(missing)} laufende Banner im Premium-Forum nach...")
+            for pid in missing:
+                row = await self.db.get_banner(pid)
+                if not row or not PREMIUM_CHANNEL_IDS.get(row.get('category')):
+                    continue
+                starts_at = row.get('starts_at') if not row.get('start_announced') else None
+                await self._create_premium_thread(row, starts_at, backfill=True)
+        except Exception as e:
+            logger.warning(f"[PREMIUM] Nachrüsten fehlgeschlagen: {type(e).__name__}: {e}")
+
+    async def _create_banner_thread(self, banner, channel_id, starts_at: Optional[int] = None,
+                                    mention: bool = True):
+        """Forum-Thread mit Startbeitrag anlegen: (Thread, Startbeitrag), bei Fehler (None, None)."""
+        get = lambda key, default=None: self._get_banner_value(banner, key, default)
+        if not channel_id:
+            logger.warning(f"Kein Channel fuer Kategorie: {get('category')}")
+            return None, None
 
         channel = self.get_channel(int(channel_id))
         if not channel:
+            try:
+                channel = await self.fetch_channel(int(channel_id))
+            except Exception:
+                channel = None
+        if not channel:
             logger.warning(f"Channel nicht gefunden: {channel_id}")
-            return
+            return None, None
 
         # Pruefe ob es ein Forum-Channel ist
         if not isinstance(channel, discord.ForumChannel):
             logger.warning(f"Channel {channel.name} ist kein Forum!")
-            return
+            return None, None
 
-        title = thread_title(banner.pack_id, banner.price_coins, banner.total_packs, banner.entries_per_day,
+        title = thread_title(get('pack_id'), get('price_coins'), get('total_packs'), get('entries_per_day'),
                              "upcoming" if starts_at else "running", starts_at)
 
         # Embed erstellen mit Helper-Funktion
@@ -300,34 +387,25 @@ class ThreadsMixin:
             thread, message = await channel.create_thread(
                 name=title,
                 embed=embed,
-                reason=f"Neuer Banner: {banner.pack_id}"
-            )
-
-            # Thread-ID in DB speichern
-            await self.db.save_thread(
-                banner_id=banner.pack_id,
-                thread_id=thread.id,
-                channel_id=channel.id,
-                starter_message_id=message.id
+                reason=f"Neuer Banner: {get('pack_id')}"
             )
 
             # @everyone Mention bei neuem Thread
-            if MENTION_ON_NEW_THREAD:
+            if MENTION_ON_NEW_THREAD and mention:
                 await discord_rate_limiter.acquire("message_send")
                 if starts_at:
                     await thread.send(f"@everyone 🕒 Neuer Banner angekündigt! Verkaufsstart <t:{starts_at}:R>")
                 else:
                     await thread.send("@everyone Neuer Banner verfügbar!")
 
-            # Wahrscheinlichkeit initial posten
-            await self._update_probability_message(thread.id, banner.pack_id)
-
             logger.info(f"Thread erstellt: {title} in #{channel.name}")
+            return thread, message
 
         except discord.HTTPException as e:
             logger.error(f"Discord-Fehler beim Thread erstellen: {e}")
         except Exception as e:
             logger.error(f"Fehler beim Thread erstellen: {e}")
+        return None, None
 
     async def _update_thread_title(self, banner):
         """Aktualisiert den Thread-Titel wenn sich Banner-Daten geändert haben."""
@@ -354,26 +432,26 @@ class ThreadsMixin:
         return "running"
 
     async def _sync_thread_title(self, pack_id: int):
-        """Benennt den Thread um, wenn Status, Preis, Packs oder Limit nicht mehr zum Titel passen."""
+        """Benennt die Threads um, wenn Status, Preis, Packs oder Limit nicht mehr zum Titel passen."""
         try:
             row = await self.db.get_banner(pack_id)
-            thread_data = await self.db.get_thread_by_banner_id(pack_id)
-            if not row or not thread_data or thread_data.get('is_expired'):
+            if not row:
                 return
-            status = await self._thread_status(row, thread_data)
-            if status in ("endspurt", "hits_out") and await self._slim():
-                status = "running"   # schlank: Titel verrät nicht, dass Hits raus sind oder Endspurt ist
-            title = thread_title(pack_id, row.get('price_coins'), row.get('total_packs'),
-                                 row.get('entries_per_day'), status, row.get('starts_at'))
-            thread_id = int(thread_data['thread_id'])
-            if thread_data.get('title') == title:
-                return
-            # Umbenennen im Hintergrund: Discord erlaubt pro Thread nur ~2 Umbenennungen in 10 Minuten und
-            # lässt sonst minutenlang warten - darauf darf der Scrape (und damit die Pack-Zahlen) nie warten.
-            pending = self.__dict__.setdefault("_title_tasks", {})
-            pending[thread_id] = (pack_id, title)
-            if not getattr(self, "_title_worker", None) or self._title_worker.done():
-                self._title_worker = asyncio.create_task(self._rename_threads())
+            for thread_data, scope in await self._banner_threads(pack_id):
+                status = await self._thread_status(row, thread_data)
+                if status in ("endspurt", "hits_out") and await self._slim(scope):
+                    status = "running"   # schlank: Titel verrät nicht, dass Hits raus sind oder Endspurt ist
+                title = thread_title(pack_id, row.get('price_coins'), row.get('total_packs'),
+                                     row.get('entries_per_day'), status, row.get('starts_at'))
+                thread_id = int(thread_data['thread_id'])
+                if thread_data.get('title') == title:
+                    continue
+                # Umbenennen im Hintergrund: Discord erlaubt pro Thread nur ~2 Umbenennungen in 10 Minuten und
+                # lässt sonst minutenlang warten - darauf darf der Scrape (und damit die Pack-Zahlen) nie warten.
+                pending = self.__dict__.setdefault("_title_tasks", {})
+                pending[thread_id] = (pack_id, title)
+                if not getattr(self, "_title_worker", None) or self._title_worker.done():
+                    self._title_worker = asyncio.create_task(self._rename_threads())
         except Exception as e:
             logger.warning(f"Thread-Titel von {pack_id} nicht aktualisiert: {type(e).__name__}: {e}")
 
@@ -400,13 +478,14 @@ class ThreadsMixin:
                 logger.warning(f"Thread-Titel von {pack_id} nicht aktualisiert: {type(e).__name__}: {e}")
 
     async def _update_thread_embed(self, banner, initial_pool: bool = False):
-        """Aktualisiert das Embed im Thread mit aktuellen Daten (z.B. Countdown, Ø Rückgabe)."""
+        """Aktualisiert das Embed in allen Threads des Banners mit aktuellen Daten (z.B. Countdown, Ø Rückgabe)."""
+        pack_id = self._get_banner_value(banner, 'pack_id')
+        for thread_data, scope in await self._banner_threads(pack_id):
+            await self._update_one_embed(banner, thread_data, scope, initial_pool)
+
+    async def _update_one_embed(self, banner, thread_data: dict, scope: str, initial_pool: bool = False):
         pack_id = self._get_banner_value(banner, 'pack_id')
         try:
-            thread_data = await self.db.get_thread_by_banner_id(pack_id)
-            if not thread_data:
-                return
-
             thread_id = thread_data.get('thread_id')
             starter_message_id = thread_data.get('starter_message_id')
 
@@ -453,11 +532,11 @@ class ThreadsMixin:
                 [thread_data['top5_message_id']] if thread_data.get('top5_message_id') else [])
             hit_link = (f"https://discord.com/channels/{thread.guild.id}/{thread.id}/{hit_ids[0]}"
                         if hit_ids else None)
-            minimal = await self._minimal()   # minimal: nur Grundinfos (Preis, Packs, Ende, Kaufbedingungen)
+            minimal = await self._minimal(scope)   # minimal: nur Grundinfos (Preis, Packs, Ende, Kaufbedingungen)
             new_embed = self._build_banner_embed(banner, stats=None if minimal else stats, tempo=tempo,
                                                  conditions=conditions, shipped=shipped, minimum=minimum,
                                                  pool_value=pool_value, hit_link=None if minimal else hit_link,
-                                                 slim=await self._slim())
+                                                 slim=await self._slim(scope))
 
             # Message updaten
             await discord_rate_limiter.acquire("message_edit")
@@ -468,8 +547,8 @@ class ThreadsMixin:
                 # Beim Nachrüsten alter Threads ist der erste Wert eine Schätzung ohne Verlauf
                 # (Medaillen oft nie gesetzt) - dann nur scharf schalten, nicht posten.
                 silent = initial_pool and stats['estimated']
-                await self._check_value_alert(thread, thread_data, stats, banner, silent=silent)
-                await self._check_endspurt(thread, thread_data, stats, banner, silent=initial_pool)
+                await self._check_value_alert(thread, thread_data, stats, banner, silent=silent, scope=scope)
+                await self._check_endspurt(thread, thread_data, stats, banner, silent=initial_pool, scope=scope)
 
         except Exception as e:
             logger.warning(f"Startbeitrag von {pack_id} nicht aktualisiert: {type(e).__name__}: {e}")

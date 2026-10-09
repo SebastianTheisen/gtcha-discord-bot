@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 97;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 98;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -975,7 +975,8 @@ async function showSettings() {
     const msg = view.querySelector("#admin-msg");
     try {
       const res = await authApi("/api/admin/settings", { mode: view.querySelector("#admin-mode").value,
-        delay_minutes: Number(view.querySelector("#admin-delay").value) || 0 });
+        delay_minutes: Number(view.querySelector("#admin-delay").value) || 0,
+        premium_mode: view.querySelector("#admin-premium")?.value || "" });
       msg.textContent = "Gespeichert ✓";
       haptic();
     } catch (e) { msg.textContent = "Nicht gespeichert: " + e.message; }
@@ -1455,7 +1456,12 @@ function adminSection(a) {
         </select>
         <input id="admin-delay" class="code-input plain" inputmode="numeric" value="${a.delay_minutes}" aria-label="Verzögerung in Minuten">
       </div>
-      <div class="hint">Modus · Verzögerung in Min (0 = sofort)</div>
+      ${a.premium ? `<div class="add-watch"><select id="admin-premium" aria-label="Premium-Foren">
+          <option value="full" ${a.premium_mode !== "slim" ? "selected" : ""}>Premium: Voll (alle Infos)</option>
+          <option value="slim" ${a.premium_mode === "slim" ? "selected" : ""}>Premium: Schlank</option>
+        </select></div>` : ""}
+      <div class="hint">${a.premium ? "Normale Foren · Verzögerung in Min (0 = sofort, gilt für alle Foren) · Premium-Foren"
+        : "Modus · Verzögerung in Min (0 = sofort)"}</div>
       <button class="btn primary" id="admin-save">Speichern</button>
       <div class="hint">Admin: ${(a.admins || []).map((x) => esc(x.name || "–")).join(", ") || "–"}</div>
       <div class="hint" id="admin-msg"></div>
