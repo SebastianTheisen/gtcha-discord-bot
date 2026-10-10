@@ -89,6 +89,7 @@ main { max-width: 900px; margin: 0 auto; padding: 0 0 20px; }
   border-bottom: 3px solid transparent; cursor: pointer; color: var(--text);
 }
 .tab.bonus { color: var(--orange); }
+.tab.hot { grid-column: 1 / -1; color: var(--red); }
 .tab.active { background: var(--tab-active); border-bottom-color: var(--red); }
 .search { padding: 10px 10px 0; }
 .search input {
