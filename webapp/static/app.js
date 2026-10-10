@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 107;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 108;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -806,6 +806,7 @@ function b64ToBytes(b64) {
 }
 
 const EVENT_LABELS = {
+  hot_new: ["🔥 Besonders heiß", "neu, ≥ 150 %, ohne Zuglimit – auffälliger Push"],
   new: ["🆕 Neuer Banner", ""],
   value: ["💰 Lohnt sich", "über 100 %"],
   hit: ["🎯 Hit raus", ""],
@@ -815,7 +816,7 @@ const EVENT_LABELS = {
   end: ["🏁 Beendet", ""],
 };
 // Vorgaben wie auf dem Server (DEFAULTS in webapp/push.py)
-const EVENT_DEFAULTS = { new: true, value: true, hit: true, packs: false, ship: false, low: true, end: false };
+const EVENT_DEFAULTS = { hot_new: true, new: true, value: true, hit: true, packs: false, ship: false, low: true, end: false };
 const WATCH_LABELS = {
   hit: "🎯 Hit raus", packs: "📉 Packs weniger", ship: "📦 Versand",
   ev: "💰 Über 100 %", low: "⚡ Endspurt", end: "🏁 Beendet",

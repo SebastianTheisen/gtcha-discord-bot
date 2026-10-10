@@ -1,9 +1,9 @@
 // Service Worker: App-Hülle offline verfügbar halten, Push-Benachrichtigungen anzeigen.
-const CACHE = "gtcha-tracker-v107";
+const CACHE = "gtcha-tracker-v108";
 // Bilder dauerhaft auf dem Gerät halten (iOS leert den normalen Browser-Cache installierter Apps oft)
 const IMG_CACHE = "gtcha-img-v2";
 const IMG_MAX = 4000;
-const SHELL = ["/", "/static/style.css?v=107", "/static/app.js?v=107", "/static/icon-180.png?v=4", "/manifest.webmanifest"];
+const SHELL = ["/", "/static/style.css?v=108", "/static/app.js?v=108", "/static/icon-180.png?v=4", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -77,6 +77,9 @@ self.addEventListener("push", (event) => {
     icon: "/static/icon-512.png?v=4",
     badge: "/static/icon-180.png?v=4",
     data: { url: data.url || "/" },
+    // Besonders heiß: bleibt stehen bis zum Antippen, lange Vibration, großes Bild, Ton erneut
+    ...(data.hot ? { requireInteraction: true, renotify: true, tag: `hot-${data.id}`, vibrate: [400, 150, 400, 150, 800],
+      ...(data.image ? { image: data.image } : {}) } : {}),
   })]));
 });
 
