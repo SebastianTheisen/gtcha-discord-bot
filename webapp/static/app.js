@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 100;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 101;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -1494,15 +1494,18 @@ function announceSection(a) {
         : annActive(x) ? `<button class="btn" data-ann-cancel="${x.id}">Beenden</button>` : ""}</div>`).join("");
   return `<h2>📢 Ankündigung <small>Admin</small></h2>
     <div class="panel">
-      <textarea id="ann-text" class="bm-code" maxlength="1900" placeholder="Text der Ankündigung"></textarea>
-      <div class="add-watch">
-        <input id="ann-at" class="code-input plain" type="datetime-local" aria-label="Zeitpunkt (deutsche Zeit)">
-        <select id="ann-scope" aria-label="Forum">${Object.entries(ANN_SCOPES).filter(([k]) => a.premium || k === "main")
+      <div class="ann">
+        <label class="ann-label" for="ann-text">Text</label>
+        <textarea id="ann-text" class="ann-input ann-text" maxlength="1900" placeholder="Text der Ankündigung"></textarea>
+        <label class="ann-label" for="ann-at">Zeitpunkt (deutsche Zeit)</label>
+        <input id="ann-at" class="ann-input" type="datetime-local">
+        <label class="ann-label" for="ann-scope">Forum</label>
+        <select id="ann-scope" class="ann-input">${Object.entries(ANN_SCOPES).filter(([k]) => a.premium || k === "main")
           .map(([k, label]) => `<option value="${k}">${label}</option>`).join("")}</select>
+        <label class="ann-check"><span>mit @everyone</span><input type="checkbox" id="ann-mention"></label>
+        <label class="ann-check"><span>danach auch bei jedem neuen Banner</span><input type="checkbox" id="ann-new"></label>
+        <div class="hint">Wird einmal zur Zeit in jeden laufenden Thread gepostet – mit Häkchen danach auch in jeden neuen, bis du „Beenden“ tippst.</div>
       </div>
-      <label class="hint"><input type="checkbox" id="ann-mention"> mit @everyone</label>
-      <label class="hint"><input type="checkbox" id="ann-new"> danach auch bei jedem neuen Banner</label>
-      <div class="hint">Wird einmal zur Zeit (deutsche Zeit) in jeden laufenden Thread gepostet – mit Häkchen danach auch in jeden neuen, bis du „Beenden“ tippst.</div>
       <button class="btn primary" id="ann-save">Planen</button>
       <div class="hint" id="ann-msg"></div>
       ${rows ? `<div class="rows">${rows}</div>` : ""}
