@@ -9,6 +9,7 @@ Nur Adressen von gtchaxonline.com werden geladen - kein offener Proxy.
 import asyncio
 import hashlib
 import os
+import re
 import time
 from pathlib import Path
 from typing import Optional
@@ -35,6 +36,20 @@ def allowed(url: str) -> bool:
         return False
     host = (parts.hostname or "").lower()
     return parts.scheme == "https" and (host == ALLOWED_HOST or host.endswith("." + ALLOWED_HOST))
+
+
+def complete(data: bytes) -> bool:
+    """Ist die Bilddatei vollständig? (abgeschnittene Downloads zeigt kein Browser an)"""
+    if data[:4] == b"RIFF":                       # WebP: Länge steht im Dateikopf
+        return len(data) >= 8 + int.from_bytes(data[4:8], "little")
+    tail = data.rstrip(b"\x00")
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return b"IEND" in data[-16:]
+    if data[:3] == b"\xff\xd8\xff":
+        return tail[-2:] == b"\xff\xd9"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return tail[-1:] == b";"
+    return len(data) > 0
 
 
 def _looks_like_image(data: bytes) -> bool:
@@ -103,7 +118,13 @@ class ImageCache:
                     if resp.status != 200:
                         self.last_error = f"HTTP {resp.status} ({ctype or 'ohne Typ'}) bei {url}"
                         return None
-                    data = await resp.content.read(MAX_BYTES + 1)
+                    # bis zum Ende lesen: content.read(n) liefert nur, was gerade da ist (ein Paket, ~8 KB)
+                    buf = bytearray()
+                    async for chunk in resp.content.iter_chunked(64 * 1024):
+                        buf += chunk
+                        if len(buf) > MAX_BYTES:
+                            break
+                    data = bytes(buf)
             except Exception as e:
                 self.last_error = f"{type(e).__name__}: {e} bei {url}"
                 return None
@@ -112,14 +133,39 @@ class ImageCache:
             return None
         if len(data) > MAX_BYTES:
             return None
+        if not complete(data):
+            self.last_error = f"unvollständig ({len(data)} Bytes) bei {url}"
+            return None
         path = self.dir / cache_name(url)
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_bytes(data)
         tmp.replace(path)
         return path
 
+    def repair(self) -> int:
+        """Abgeschnittene Bilder (und ihre verkleinerten Kopien) löschen, damit sie neu geladen werden."""
+        removed = 0
+        for path in list(self.dir.iterdir()):
+            if not path.is_file() or re.search(r"\.w\d+\.webp$", path.name) or path.suffix == ".tmp":
+                continue
+            try:
+                ok = complete(path.read_bytes())
+            except OSError:
+                continue
+            if ok:
+                continue
+            for p in [path, *self.dir.glob(f"{path.stem}.w[0-9]*.webp")]:
+                p.unlink(missing_ok=True)
+            removed += 1
+        if removed:
+            logger.warning(f"Bilder: {removed} abgeschnittene Bilder gelöscht - werden neu geladen")
+        return removed
+
     async def warm(self, urls) -> int:
         """Lädt alle fehlenden Bilder vorab (höchstens 4 gleichzeitig, siehe _limit)."""
+        if not getattr(self, "_repaired", False):   # einmal je Start: kaputte Altbestände aufräumen
+            self._repaired = True
+            await asyncio.get_running_loop().run_in_executor(None, self.repair)
         missing = list(dict.fromkeys(u for u in urls if u and allowed(u) and not self.cached(u)))
         if not missing:
             return 0

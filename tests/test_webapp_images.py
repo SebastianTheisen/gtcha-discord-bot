@@ -77,3 +77,66 @@ def test_resized_copies_and_cleanup(tmp_path):
     cache.cleanup([big])
     names = sorted(p.name for p in cache.dir.iterdir())
     assert names == sorted([cache_name(big), small.name])
+
+
+def _webp(size=(800, 480)) -> bytes:
+    import io
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.effect_noise(size, 80).convert("RGB").save(buf, "WEBP", quality=95)   # Rauschen: groß, nicht komprimierbar
+    return buf.getvalue()
+
+
+def test_download_reads_all_chunks_and_rejects_truncated(tmp_path):
+    """Bild kommt in vielen kleinen Paketen (wie von GTCHA): vollständig speichern, abgeschnittenes nie."""
+    import asyncio
+
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+
+    from webapp.images import ImageCache, complete
+    data = _webp()
+    assert len(data) > 30000 and complete(data) and not complete(data[:7940])
+
+    async def chunked(request):
+        resp = web.StreamResponse(headers={"Content-Type": "image/webp"})
+        await resp.prepare(request)
+        for i in range(0, len(data), 4000):
+            await resp.write(data[i:i + 4000])
+            await asyncio.sleep(0.01)
+        return resp
+
+    async def cut(request):
+        return web.Response(body=data[:7940], content_type="image/webp")
+
+    async def run():
+        app = web.Application()
+        app.router.add_get("/full.webp", chunked)
+        app.router.add_get("/cut.webp", cut)
+        server = TestServer(app, port=0)
+        await server.start_server()
+        cache = ImageCache(str(tmp_path))
+        try:
+            path = await cache._download(str(server.make_url("/full.webp")))
+            assert path and path.read_bytes() == data
+            assert await cache._download(str(server.make_url("/cut.webp"))) is None
+            assert "unvollständig" in cache.last_error
+        finally:
+            await cache.close()
+            await server.close()
+
+
+    asyncio.run(run())
+
+
+def test_repair_removes_truncated_images_and_their_copies(tmp_path):
+    from webapp.images import ImageCache
+    cache = ImageCache(str(tmp_path))
+    data = _webp()
+    good, bad = "https://gtchaxonline.com/pack/1/1.webp", "https://gtchaxonline.com/pack/2/1.webp"
+    (cache.dir / cache_name(good)).write_bytes(data)
+    (cache.dir / cache_name(bad)).write_bytes(data[:7940])
+    (cache.dir / (cache_name(bad).rsplit(".", 1)[0] + ".w640.webp")).write_bytes(b"x")
+    assert cache.repair() == 1
+    assert cache.cached(good) and not cache.cached(bad)
+    assert not list(cache.dir.glob("*.w640.webp"))
