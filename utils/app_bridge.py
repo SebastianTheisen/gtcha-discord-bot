@@ -341,6 +341,19 @@ class AppBridge:
     # Je GTCHA-Konto eigene Bereiche ("shipped@id:94"); ohne Konto-Kennung ohne Zusatz. Gelesen wird für die
     # Anzeige alles zusammen (mehrere Konten einer Person), geschrieben je Konto - sonst überschreibt ein Konto
     # beim vollständigen Übertragen die Karten des anderen.
+    async def history_images(self) -> List[str]:
+        """Kartenbilder aus allen übertragenen Verläufen (angefordert/versendet), zum Vorladen auf den VPS."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT data FROM user_history WHERE area LIKE 'shipped%' OR area LIKE 'pending%'")
+            rows = await cur.fetchall()
+        out = []
+        for (data,) in rows:
+            try:
+                out += [c.get("image") for c in (json.loads(data).get("items") or []) if c.get("image")]
+            except (ValueError, AttributeError):
+                continue
+        return list(dict.fromkeys(out))
+
     async def get_history(self, user_id: str) -> Dict:
         """Alle Konten einer Person zusammen: Karten und Buchungen vereint (neueste zuerst)."""
         async with aiosqlite.connect(self.db_path) as db:

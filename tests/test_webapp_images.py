@@ -26,7 +26,7 @@ def test_cleanup_keeps_active_and_recent_images(tmp_path):
     active = "https://gtchaxonline.com/card/1.webp"
     ended = "https://gtchaxonline.com/card/2.webp"
     just_viewed = "https://gtchaxonline.com/card/3.webp"
-    old = time.time() - 3600
+    old = time.time() - 31 * 86400   # länger als 30 Tage nicht abgerufen
     for url in (active, ended, just_viewed):
         (cache.dir / cache_name(url)).write_bytes(b"x")
     for url in (active, ended):
@@ -71,7 +71,7 @@ def test_resized_copies_and_cleanup(tmp_path):
     with Image.open(cache.resized(cache.cached(anim), 320)) as im:
         assert im.size == (320, 180)
     # Aufräumen: Kopien bleiben mit ihrem Original, verschwinden mit ihm
-    old = time.time() - 3600
+    old = time.time() - 31 * 86400   # länger als 30 Tage nicht abgerufen
     for p in cache.dir.iterdir():
         os.utime(p, (old, old))
     cache.cleanup([big])
@@ -140,3 +140,20 @@ def test_repair_removes_truncated_images_and_their_copies(tmp_path):
     assert cache.repair() == 1
     assert cache.cached(good) and not cache.cached(bad)
     assert not list(cache.dir.glob("*.w640.webp"))
+
+
+def test_history_card_images_are_kept(tmp_path):
+    import asyncio
+
+    from utils.app_bridge import AppBridge
+
+    async def run():
+        bridge = AppBridge(str(tmp_path / "w.db"))
+        await bridge.init()
+        await bridge.set_history("7", {"shipped": {"items": [{"name": "A", "image": "https://gtchaxonline.com/card/1_small.jpg"},
+                                                             {"name": "B"}], "gap": False},
+                                       "coins": {"items": [{"amount": 1}], "gap": False}}, "id:1")
+        await bridge.set_history("8", {"pending": {"items": [{"name": "C", "image": "/card/2_small.jpg"}], "gap": False}})
+        assert sorted(await bridge.history_images()) == ["/card/2_small.jpg", "https://gtchaxonline.com/card/1_small.jpg"]
+
+    asyncio.run(run())
