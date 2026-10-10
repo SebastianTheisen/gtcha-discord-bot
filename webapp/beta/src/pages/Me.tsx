@@ -329,23 +329,28 @@ function Announce({ a, reload }: { a: any; reload: () => void }) {
   const scopes = Object.entries(ANN_SCOPES).filter(([k]) => a.premium || k === "main");
   return (
     <Section id="announce" title="📢 Ankündigung" extra="Admin">
-      <textarea class="field code" style="font-size:15px;font-family:inherit" maxLength={1900} placeholder="Text der Ankündigung"
-        value={text} onInput={(e) => setText((e.target as HTMLTextAreaElement).value)} />
-      <div class="row">
-        <input class="field left" type="datetime-local" value={at} onInput={(e) => setAt((e.target as HTMLInputElement).value)} aria-label="Zeitpunkt (deutsche Zeit)" />
-        <select class="select wide" value={scope} onChange={(e) => setScope((e.target as HTMLSelectElement).value)} aria-label="Forum">
-          {scopes.map(([k, label]) => <option value={k}>{label}</option>)}
+      <div class="ann">
+        <label class="ann-label">Text</label>
+        <textarea class="ann-input ann-text" maxLength={1900} placeholder="Text der Ankündigung"
+          value={text} onInput={(e) => setText((e.target as HTMLTextAreaElement).value)} />
+        <label class="ann-label">Zeitpunkt (deutsche Zeit)</label>
+        <input class="ann-input" type="datetime-local" value={at} onInput={(e) => setAt((e.target as HTMLInputElement).value)} />
+        <label class="ann-label">Forum</label>
+        <select class="ann-input" value={scope} onChange={(e) => setScope((e.target as HTMLSelectElement).value)}>
+          {scopes.map(([k, label]) => <option value={k} selected={k === scope}>{label}</option>)}
         </select>
+        <label class="toggle"><span>mit @everyone</span>
+          <input type="checkbox" checked={mention} onChange={(e) => setMention((e.target as HTMLInputElement).checked)} /></label>
+        <label class="toggle"><span>danach auch bei jedem neuen Banner</span>
+          <input type="checkbox" checked={alsoNew} onChange={(e) => setAlsoNew((e.target as HTMLInputElement).checked)} /></label>
+        <p class="muted small">Wird einmal zur Zeit in jeden laufenden Thread gepostet – mit Häkchen danach auch in jeden neuen, bis du „Beenden“ tippst.</p>
       </div>
-      <label class="muted small"><input type="checkbox" checked={mention} onChange={(e) => setMention((e.target as HTMLInputElement).checked)} /> mit @everyone</label>
-      <label class="muted small"><input type="checkbox" checked={alsoNew} onChange={(e) => setAlsoNew((e.target as HTMLInputElement).checked)} /> danach auch bei jedem neuen Banner</label>
-      <p class="muted small">Wird einmal zur Zeit (deutsche Zeit) in jeden laufenden Thread gepostet – mit Häkchen danach auch in jeden neuen, bis du „Beenden“ tippst.</p>
       <button class="btn primary" onClick={async () => {
         try { await authApi("api/admin/announce", { text, at, scope, mention, also_new: alsoNew }); showToast("Geplant ✓"); haptic(); setText(""); reload(); }
         catch (e) { showToast(`Nicht geplant: ${(e as Error).message}`); }
       }}>Planen</button>
       {(a.announcements || []).map((x: any) => (
-        <div class="line">
+        <div class="line ann-item">
           <span>{x.at} · {ANN_SCOPES[x.scope] || x.scope} · {ANN_STATUS[x.status] || x.status}{x.posted ? ` (${x.posted} Threads)` : ""}{annActive(x) ? " · läuft für neue Banner" : x.also_new && x.status === "pending" ? " · auch neue Banner" : ""}
             <br /><small class="muted">{x.text.length > 80 ? x.text.slice(0, 80) + "…" : x.text}</small></span>
           {(x.status === "pending" || annActive(x)) && <button class="btn" onClick={async () => {
