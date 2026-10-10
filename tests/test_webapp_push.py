@@ -180,3 +180,21 @@ def test_personal_pushes_auto_medal_and_reminder(tmp_path, monkeypatch):
         assert sent[0][1]["url"].startswith("/#/settings?n=")
 
     asyncio.run(run())
+
+
+def test_hot_new_banner_push_once_and_on_by_default():
+    """Bald startender Banner mit ≥ 150 % und ohne Zuglimit: ein auffälliger Push, für alle (Standard an)."""
+    _, state = build_events([full(1)], [], {})
+    soon = {**full(2, pct=201.8, status="upcoming"), "per_day": None, "starts_at": 1791122400,
+            "image": "https://gtchaxonline.com/pack/2/1.webp"}
+    limited = {**full(3, pct=300, status="upcoming"), "per_day": 5}
+    low = {**full(4, pct=120, status="upcoming"), "per_day": None}
+    running = {**full(5, pct=200, status="running"), "per_day": None}
+    messages, state = build_events([full(1), soon, limited, low, running], [], state)
+    hot_msgs = [m for m in messages if m[0] == "hot_new"]
+    assert [m[3] for m in hot_msgs] == [2]
+    assert "BESONDERS HEISS" in hot_msgs[0][1] and "201,8" in hot_msgs[0][1] and "OHNE Zuglimit" in hot_msgs[0][2]
+    assert hot_msgs[0] in recipients(messages, clean_prefs({}))                 # ohne Einstellung: an
+    assert hot_msgs[0] not in recipients(messages, clean_prefs({"hot_new": False}))
+    again, _ = build_events([full(1), soon], [], state)
+    assert not [m for m in again if m[0] == "hot_new"]                          # nur einmal je Banner

@@ -13,13 +13,23 @@ from typing import Dict, List, Optional
 import aiosqlite
 from loguru import logger
 
+from utils.banner_info import berlin_time
 from utils.card_pool import fmt_coins, fmt_pct
 from utils.hot_list import ALERT_PCT, ALERT_RESET_PCT, new_alerts
 
 # Allgemein (für alle Banner): neuer Banner, über 100 % (nur ziehbare, wie Top 10) und dieselben
 # Banner-Ereignisse wie beim Beobachten. Pack-Bewegung für alle wird zu einem Push zusammengefasst.
-EVENTS = ("new", "value", "hit", "packs", "ship", "low", "end")
-DEFAULTS = {"new": True, "value": True, "hit": True, "packs": False, "ship": False, "low": True, "end": False}
+EVENTS = ("hot_new", "new", "value", "hit", "packs", "ship", "low", "end")
+DEFAULTS = {"hot_new": True, "new": True, "value": True, "hit": True, "packs": False, "ship": False, "low": True,
+            "end": False}
+# Besonders heiß: neuer Banner, der bald startet, mit mindestens HOT_MIN_PCT % Ø Rückgabe und ohne Zuglimit -
+# ein besonders auffälliger Push (bleibt stehen, lange Vibration, großes Bild), je Banner einmal
+HOT_MIN_PCT = 150
+HOT_IMAGES: Dict[int, str] = {}   # Banner-ID -> Bild für den Push (von build_events gefüllt)
+
+
+def is_hot_new(b: Dict) -> bool:
+    return b.get("status") == "upcoming" and (b.get("ev_pct") or 0) >= HOT_MIN_PCT and not b.get("per_day")
 # pro beobachtetem Banner: Hit raus, Packs weniger, Versandschub, über 100 %, Endspurt, beendet
 WATCH_EVENTS = ("hit", "packs", "ship", "ev", "low", "end")
 MAX_WATCHED = 50
@@ -86,6 +96,18 @@ def build_events(banners: List[Dict], hot: List[Dict], state: Dict) -> tuple:
             price = f"{fmt_coins(b['price'])} Coins" if b["price"] else "gratis"
             messages.append(("new", f"🆕 Neuer Banner {b['id']}", f"{b['title']} · {price}", b["id"], False))
 
+    announced = set(state.get("hot_new", []))
+    for b in banners:
+        if is_hot_new(b) and b["id"] not in announced and not first:
+            start = (f" · Start {berlin_time(b['starts_at']).strftime('%d.%m. %H:%M')} Uhr" if b.get("starts_at") else "")
+            price = f"{fmt_coins(b['price'])} Coins" if b.get("price") else "gratis"
+            if b.get("image"):
+                HOT_IMAGES[b["id"]] = b["image"]
+            messages.append(("hot_new", f"🔥🔥🔥 BESONDERS HEISS · {fmt_pct(b['ev_pct'])} % 🔥🔥🔥",
+                             f"Banner {b['id']} · OHNE Zuglimit · {price}{start}\n{b.get('title') or ''}",
+                             b["id"], False))
+    hot_now = {b["id"] for b in banners if is_hot_new(b)}
+
     candidates = [{**e, "pack_id": e["id"]} for e in hot]
     fresh, alerted = new_alerts(candidates, set(state.get("alerted", [])))
     if not first:
@@ -108,8 +130,9 @@ def build_events(banners: List[Dict], hot: List[Dict], state: Dict) -> tuple:
 
     wish, cards, outc = wish_events(banners, state, first)
     messages += wish
+    # gemeldete heiße Banner merken, solange es sie gibt (je Banner nur ein Push)
     new_state = {"known": sorted(by_id), "alerted": sorted(alerted), "banners": new_banners,
-                 "cards": cards, "outc": outc}
+                 "cards": cards, "outc": outc, "hot_new": sorted((announced & set(by_id)) | hot_now)}
     return messages, new_state
 
 
@@ -371,7 +394,13 @@ class PushService:
         else:
             url = f"/#/banner/{banner_id}?n={log_id}" if banner_id else f"/#/inbox?n={log_id}"
         unread = (await self.inbox(endpoint, 1))["unread"]
-        payload = json.dumps({"title": title, "body": body, "url": url, "id": log_id, "unread": unread})
+        data = {"title": title, "body": body, "url": url, "id": log_id, "unread": unread}
+        if kind == "hot_new":   # auffällig: bleibt stehen, lange Vibration, großes Bannerbild (Android)
+            data["hot"] = True
+            if HOT_IMAGES.get(banner_id):
+                from urllib.parse import quote
+                data["image"] = f"/img?v=4&w=640&u={quote(HOT_IMAGES[banner_id], safe='')}"
+        payload = json.dumps(data)
         loop = asyncio.get_running_loop()
         try:
             await loop.run_in_executor(None, lambda: webpush(

@@ -62,6 +62,9 @@ self.addEventListener("push", (event) => {
     icon: "icon-512.png",
     badge: "icon-180.png",
     data: { url: data.url || "/" },
+    // Besonders heiß: bleibt stehen bis zum Antippen, lange Vibration, großes Bild, Ton erneut
+    ...(data.hot ? { requireInteraction: true, renotify: true, tag: `hot-${data.id}`, vibrate: [400, 150, 400, 150, 800],
+      ...(data.image ? { image: data.image } : {}) } : {}),
   })]));
 });
 

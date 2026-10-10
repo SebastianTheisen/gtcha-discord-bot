@@ -5,6 +5,7 @@ import { haptic } from "./ui";
 import { save, wishList, isWish, type Wish } from "./local";
 
 export const EVENT_LABELS: Record<string, [string, string]> = {
+  hot_new: ["🔥 Besonders heiß", "neu, ≥ 150 %, ohne Zuglimit – auffälliger Push"],
   new: ["🆕 Neuer Banner", ""],
   value: ["💰 Lohnt sich", "über 100 %"],
   hit: ["🎯 Hit raus", ""],
@@ -14,7 +15,7 @@ export const EVENT_LABELS: Record<string, [string, string]> = {
   end: ["🏁 Beendet", ""],
 };
 // Vorgaben wie auf dem Server (DEFAULTS in webapp/push.py)
-export const EVENT_DEFAULTS: Record<string, boolean> = { new: true, value: true, hit: true, packs: false, ship: false, low: true, end: false };
+export const EVENT_DEFAULTS: Record<string, boolean> = { hot_new: true, new: true, value: true, hit: true, packs: false, ship: false, low: true, end: false };
 export const WATCH_LABELS: Record<string, string> = {
   hit: "🎯 Hit raus", packs: "📉 Packs weniger", ship: "📦 Versand", ev: "💰 Über 100 %", low: "⚡ Endspurt", end: "🏁 Beendet",
 };
