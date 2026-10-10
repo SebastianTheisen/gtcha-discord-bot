@@ -38,7 +38,7 @@ BETA_DIST = Path(__file__).parent / "beta" / "dist"   # neue Oberfläche (Vite-B
 ROLE = os.getenv("WEBAPP_ROLE", "live")
 STREAM_HEARTBEAT = 25
 REFRESH_SECONDS = 20
-BOOKMARKLET_VERSION = 6   # = SYNC_VERSION in app.js; ältere Lesezeichen bekommen einen Hinweis
+BOOKMARKLET_VERSION = 7   # = SYNC_VERSION in app.js; ältere Lesezeichen bekommen einen Hinweis
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
        "img-src 'self' data: https://gtchaxonline.com https://*.gtchaxonline.com; connect-src 'self'; "
        "manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; "
@@ -523,10 +523,12 @@ class App:
             for path, area, label in (("pending-detail", "pending", "Angefordert"), ("shipped-detail", "shipped", "Versendet")):
                 entry = next((e for e in entries if e["path"] == path), None)
                 if entry and area in changed and not changed[area]["items"]:
-                    head = [ln.strip()[:60] for ln in ((entry["pages"][0] or {}).get("text") or "").split("\n")
-                            if ln.strip()][:15]
+                    page0 = entry["pages"][0] or {}
+                    all_lines = [ln.strip()[:60] for ln in (page0.get("text") or "").split("\n") if ln.strip()]
                     logger.info(f"Sync von {user['name']}: {path} ohne erkannte Karten "
-                                f"(vorher {before.get(area, 0)}) · Seitenanfang: {' | '.join(head)}")
+                                f"(vorher {before.get(area, 0)}, {len(all_lines)} Zeilen, "
+                                f"{len(page0.get('images') or [])} Kartenbilder) · Seitenanfang: {' | '.join(all_lines[:15])}"
+                                f" · Seitenende: {' | '.join(all_lines[15:][-15:])}")
                     if before.get(area):
                         warnings.append(f"⚠️ {label}: auf der Seite keine Karten erkannt (vorher {before[area]}). "
                                         f"Falls dort Karten stehen, bitte dem Admin Bescheid geben.")
