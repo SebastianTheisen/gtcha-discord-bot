@@ -166,6 +166,7 @@ class App:
         self.view = BannerView(Database(db_path))
         self.push = PushService(data_dir, contact)
         self.images = ImageCache(data_dir)
+        self.data_dir = data_dir
         self.bridge = AppBridge(os.path.join(data_dir, "webapp.db"))
         self.accuracy = AccuracyStore(os.path.join(data_dir, "webapp.db"))
         self._link_fails = []
@@ -468,6 +469,17 @@ class App:
         age = int(time.time()) - self._updated if self._updated else None
         return web.json_response({"ok": True, "data_age": age})
 
+    def _dump_unparsed(self, user: Dict, path: str, page: Dict):
+        """Seite ohne erkannte Karten zur Fehlersuche ablegen (nur auf dem VPS, je Person und Bereich nur die
+        letzte): data/sync_debug/<Discord-ID>-<Bereich>.txt - genau der Text mit Leerzeilen, dazu die Bilder."""
+        try:
+            folder = Path(self.data_dir) / "sync_debug"
+            folder.mkdir(exist_ok=True)
+            text = (page.get("text") or "") + "\n\n--- Bilder ---\n" + "\n".join(page.get("images") or [])
+            (folder / f"{user['user_id']}-{path}.txt").write_text(text, encoding="utf-8")
+        except Exception as e:
+            logger.debug(f"Seite nicht abgelegt: {e}")
+
     async def api_import_form(self, request):
         """"Alles übertragen"-Lesezeichen: Formular-POST von gtchaxonline.com (kein CORS nötig).
 
@@ -529,6 +541,7 @@ class App:
                                 f"(vorher {before.get(area, 0)}, {len(all_lines)} Zeilen, "
                                 f"{len(page0.get('images') or [])} Kartenbilder) · Seitenanfang: {' | '.join(all_lines[:15])}"
                                 f" · Seitenende: {' | '.join(all_lines[15:][-15:])}")
+                    self._dump_unparsed(user, path, page0)
                     if before.get(area):
                         warnings.append(f"⚠️ {label}: auf der Seite keine Karten erkannt (vorher {before[area]}). "
                                         f"Falls dort Karten stehen, bitte dem Admin Bescheid geben.")
