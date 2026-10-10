@@ -114,6 +114,11 @@ class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, Hits
             self._watch_discord_mode, 'interval', minutes=1,
             id='discord_mode_job', replace_existing=True, coalesce=True, max_instances=1,
         )
+        # Ankündigungen aus dem Admin-Bereich zur eingestellten Zeit posten
+        self.scheduler.add_job(
+            self._process_announcements, 'interval', seconds=30,
+            id='announcements_job', replace_existing=True, coalesce=True, max_instances=1,
+        )
         # Premium-Foren: laufende Banner ohne Premium-Thread nachrüsten (erster Lauf kurz nach dem Start)
         self.scheduler.add_job(
             self._ensure_premium_threads, 'interval', minutes=5,

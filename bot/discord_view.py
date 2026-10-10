@@ -200,6 +200,42 @@ class DiscordViewMixin:
         except Exception as e:
             logger.warning(f"[DISCORD] Warteschlange nicht abgearbeitet: {e}")
 
+    # --- Ankündigungen aus dem Admin-Bereich der App ---
+    async def _process_announcements(self):
+        """Fällige Ankündigungen einmal in alle laufenden Threads posten (läuft alle 30 s). Jeder gepostete Thread
+        wird sofort gemerkt - nach einem Neustart geht es dort weiter, ohne doppelt zu posten."""
+        try:
+            await self.app_bridge.init()
+            due = await self.app_bridge.due_announcements(time.time())
+            if not due:
+                return
+            pids = list(await self.db.get_active_banners())
+            for ann in due:
+                posted = list(ann["posted"])
+                text = ("@everyone\n" if ann.get("mention") else "") + ann["text"]
+                mentions = discord.AllowedMentions(everyone=bool(ann.get("mention")), users=False, roles=False)
+                logger.info(f"[ANKÜNDIGUNG] {ann['id']}: poste in {ann['scope']} ({len(pids)} Banner)")
+                for pid in pids:
+                    for thread_data, scope in await self._banner_threads(pid):
+                        tid = int(thread_data["thread_id"])
+                        if tid in posted or (ann["scope"] != "all" and scope != ann["scope"]):
+                            continue
+                        try:
+                            thread = await self._open_thread(tid)
+                            if thread is None:
+                                continue
+                            await discord_rate_limiter.acquire("message_send")
+                            await thread.send(text, allowed_mentions=mentions)
+                        except Exception as e:
+                            logger.warning(f"[ANKÜNDIGUNG] Thread {tid} fehlgeschlagen: {e}")
+                            continue
+                        posted.append(tid)
+                        await self.app_bridge.announcement_progress(ann["id"], posted, done=False)
+                await self.app_bridge.announcement_progress(ann["id"], posted, done=True)
+                logger.info(f"[ANKÜNDIGUNG] {ann['id']}: in {len(posted)} Threads gepostet")
+        except Exception as e:
+            logger.warning(f"[ANKÜNDIGUNG] nicht abgearbeitet: {e}")
+
     # --- Umstellen: alte Posts der wegfallenden Arten löschen ---
     async def _cleanup_old_posts(self):
         """Einmalig nach dem Umstellen auf schlank: eigene "Lohnt sich"-, Endspurt- und

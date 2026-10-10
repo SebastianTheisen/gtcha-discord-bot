@@ -23,7 +23,7 @@ from loguru import logger
 
 from database.db import Database
 from utils.app_bridge import MAX_DELAY_MINUTES, MAX_IMPORT_BYTES, AppBridge
-from utils.banner_info import berlin_time
+from utils.banner_info import berlin_time, berlin_to_ts
 from webapp.accuracy import AccuracyStore
 from webapp.history import (JST_OFFSET, build_from_stored, ingest, local_time, plan_claims, profile, stored_events,
                             summarize, attribute_opens, opens_by_banner, CLAIM_OPEN_DAYS)
@@ -417,7 +417,38 @@ class App:
         view = await self.bridge.discord_view()
         return web.json_response({"mode": view["mode"], "delay_minutes": view["delay_minutes"],
                                   "premium_mode": view["premium_mode"], "premium": premium_enabled(),
+                                  "announcements": [self._announcement_out(a) for a in await self.bridge.announcements()],
                                   "admins": [{"name": x["name"]} for x in await self.bridge.names(admin_ids())]})
+
+    @staticmethod
+    def _announcement_out(a: Dict) -> Dict:
+        return {"id": a["id"], "text": a["text"], "scope": a["scope"], "mention": bool(a["mention"]),
+                "status": a["status"], "posted": a["posted"], "by": a.get("created_by"),
+                "at": berlin_time(a["send_at"]).strftime("%d.%m.%Y %H:%M")}
+
+    async def api_admin_announce(self, request):
+        """Ankündigung planen ({text, at: "YYYY-MM-DDTHH:MM" deutsche Zeit, scope, mention}) oder zurückziehen
+        ({cancel: id}). Der Bot postet sie einmal zur Zeit in alle laufenden Threads des gewählten Forums."""
+        user = await self._admin(request)
+        body = await request.json()
+        if body.get("cancel"):
+            if not await self.bridge.cancel_announcement(int(body["cancel"])):
+                raise web.HTTPBadRequest(text="Nur geplante Ankündigungen lassen sich zurückziehen")
+            logger.info(f"Ankündigung {body['cancel']} von {user['name']} zurückgezogen")
+            return web.json_response({"ok": True})
+        text = str(body.get("text") or "").strip()
+        if not text or len(text) > 1900:
+            raise web.HTTPBadRequest(text="Text fehlt oder ist zu lang (max. 1900 Zeichen)")
+        scope = str(body.get("scope") or "main")
+        if scope not in ("main", "premium", "all"):
+            raise web.HTTPBadRequest(text="Forum: main, premium oder all")
+        try:
+            send_at = berlin_to_ts(datetime.strptime(str(body.get("at")), "%Y-%m-%dT%H:%M"))
+        except (TypeError, ValueError):
+            raise web.HTTPBadRequest(text="Zeitpunkt fehlt")
+        ann_id = await self.bridge.add_announcement(text, send_at, scope, bool(body.get("mention")), user["name"])
+        logger.info(f"Ankündigung {ann_id} von {user['name']} geplant: {scope}, {body.get('at')}")
+        return web.json_response({"ok": True, "id": ann_id})
 
     async def api_my_medals(self, request):
         user = await self._user(request)
@@ -1020,6 +1051,7 @@ def make_app(app: App) -> web.Application:
         web.get("/api/me/devices", app.api_my_devices),
         web.get("/api/admin/settings", app.api_admin_settings),
         web.post("/api/admin/settings", app.api_admin_settings),
+        web.post("/api/admin/announce", app.api_admin_announce),
         web.get("/api/admin/users", app.api_admin_users),
         web.get(r"/api/admin/user/{id:\d+}", app.api_admin_user),
         web.get("/api/admin/status", app.api_admin_status),

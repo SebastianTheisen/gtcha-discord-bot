@@ -146,6 +146,15 @@ def berlin_time(ts: float) -> datetime:
     return utc.astimezone(timezone(timedelta(hours=2 if summer else 1)))
 
 
+def berlin_to_ts(local: datetime) -> int:
+    """Deutsche Uhrzeit (ohne Zeitzone) -> Unix-Zeit (Gegenstück zu berlin_time)."""
+    for hours in (2, 1):
+        ts = int(local.replace(tzinfo=timezone(timedelta(hours=hours))).timestamp())
+        if berlin_time(ts).replace(tzinfo=None) == local.replace(second=0, microsecond=0):
+            return ts
+    return int(local.replace(tzinfo=timezone(timedelta(hours=1))).timestamp())
+
+
 STATUS_ICONS = {"running": "🎯", "endspurt": "⚡ Endspurt", "hits_out": "🔴 Hits raus"}
 
 
