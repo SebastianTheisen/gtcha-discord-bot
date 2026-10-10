@@ -179,3 +179,30 @@ def test_announcement_posted_once_at_time(tmp_path, env):
         assert rows["später"]["status"] == "cancelled"
 
     asyncio.run(run())
+
+
+def test_announcement_also_for_new_banners_until_stopped(tmp_path, env):
+    async def run():
+        db, bridge = await setup(tmp_path)
+        sent = []
+        bot = make_bot(db, bridge, sent)
+        ann = await bridge.add_announcement("Hinweis", time.time() - 1, "main", False, "Admin", also_new=True)
+        await bot._process_announcements()
+        assert sent == [(MAIN, "Hinweis")]
+        async with aiosqlite.connect(db.db_path) as conn:      # neuer Banner nach dem Zeitpunkt
+            await conn.execute("INSERT INTO banners (pack_id, is_active, category) VALUES (8, 1, 'Pokémon')")
+            await conn.execute("INSERT INTO discord_threads (banner_id, thread_id) VALUES (8, 701)")
+            await conn.commit()
+        await bot._process_announcements()
+        await bot._process_announcements()
+        assert sent == [(MAIN, "Hinweis"), (701, "Hinweis")]   # neuer Thread genau einmal
+        assert await bridge.cancel_announcement(ann)             # beenden
+        assert (await bridge.announcements())[0]["status"] == "stopped"
+        async with aiosqlite.connect(db.db_path) as conn:
+            await conn.execute("INSERT INTO banners (pack_id, is_active, category) VALUES (9, 1, 'Pokémon')")
+            await conn.execute("INSERT INTO discord_threads (banner_id, thread_id) VALUES (9, 702)")
+            await conn.commit()
+        await bot._process_announcements()
+        assert len(sent) == 2                                    # nach dem Beenden nichts mehr
+
+    asyncio.run(run())
