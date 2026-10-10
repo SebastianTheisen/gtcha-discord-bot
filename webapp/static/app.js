@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 106;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 107;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -8,7 +8,10 @@ const STATUS = {
   running: ["🎯", "Läuft"], endspurt: ["⚡", "Endspurt"], hits_out: ["🔴", "Hits raus"], upcoming: ["🕒", "Bald"],
   ended: ["🗄️", "Beendet"],
 };
-const CATEGORIES = [["Alle", "Alle"], ["Bonus", "BONUS"], ["MIX", "MIX"], ["Pokémon", "Pokémon"],
+// Besonders heiß: neue Banner, die bald starten, mit mindestens 150 % Ø Rückgabe und ohne Zuglimit pro Tag
+const HOT_MIN_PCT = 150;
+const isHotNew = (b) => b.status === "upcoming" && (b.ev_pct ?? 0) >= HOT_MIN_PCT && !b.per_day;
+const CATEGORIES = [["Heiss", "🔥 Besonders heiß"], ["Alle", "Alle"], ["Bonus", "BONUS"], ["MIX", "MIX"], ["Pokémon", "Pokémon"],
                     ["One piece", "One Piece"], ["Dragon Ball", "Dragon Ball"], ["Store", "🏪 Store"],
                     ["Wunsch", "⭐ Wunschkarten"], ["Archiv", "🗄️ Archiv"]];
 const SORTS = {
@@ -285,7 +288,7 @@ async function showList() {
   if (!view.querySelector("#search")) {
     view.innerHTML = `
       <div class="tabs">${CATEGORIES.map(([key, label]) =>
-        `<button class="tab ${key === "Bonus" ? "bonus" : ""}" data-cat="${esc(key)}">${esc(label)}</button>`).join("")}</div>
+        `<button class="tab ${key === "Bonus" ? "bonus" : key === "Heiss" ? "hot" : ""}" data-cat="${esc(key)}">${esc(label)}</button>`).join("")}</div>
       <form class="search" id="search-form" role="search">
         <input id="search" type="search" inputmode="numeric" autocomplete="off" placeholder="🔍 Banner-ID suchen, z. B. 24149">
       </form>
@@ -366,10 +369,14 @@ function drawList() {
   const active = [...state.filters].filter((k) => QUICK_FILTERS[k] && (k !== "mine" || myRank()));
   const shown = banners
     .filter((b) => (q ? matches(b, q) : archive || state.category === "Alle" || b.category === state.category
+      || (state.category === "Heiss" && isHotNew(b))
       || (state.category === "Wunsch" && state.wishBanners?.has(b.id) && canBuy(b) !== false)))
     .filter((b) => active.every((k) => QUICK_FILTERS[k][1](b)))
     .sort(sort[1]);
   view.querySelectorAll(".tab").forEach((el) => el.classList.toggle("active", !q && el.dataset.cat === state.category));
+  const hotTab = view.querySelector('.tab[data-cat="Heiss"]');
+  const hotCount = (state.listData.banners || []).filter(isHotNew).length;
+  if (hotTab) hotTab.textContent = hotCount ? `🔥 Besonders heiß (${hotCount})` : "🔥 Besonders heiß";
   view.querySelectorAll(".qf").forEach((el) => el.classList.toggle("on", active.includes(el.dataset.qf)));
   view.querySelector("#view-toggle").textContent = state.listView === "big" ? "☰ Kompakt" : "▦ Groß";
   view.querySelector("#count").textContent = q ? `${shown.length} Treffer für „${q}“` : `${shown.length} Banner`;
@@ -378,6 +385,7 @@ function drawList() {
       ? `<div class="clist">${shown.map(compactRow).join("")}</div>`
       : `<div class="list">${shown.map((b) => row(b)).join("")}</div>`)
       : `<div class="empty">${q ? "Nicht gefunden – Enter öffnet die ID"
+        : state.category === "Heiss" ? `Gerade kein neuer Banner mit ≥ ${HOT_MIN_PCT} % und ohne Zuglimit, der bald startet.`
         : state.category === "Wunsch" ? (wishList().length ? "Gerade keine Wunschkarte kaufbar."
           : "Noch keine Wunschkarten (⭐ merken).")
         : archive ? "Noch keine beendeten Banner (sie bleiben hier 30 Tage)"

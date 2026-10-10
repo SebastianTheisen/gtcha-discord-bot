@@ -9,8 +9,12 @@ import { banners, category, listView, loadWishBanners, pref, search, sort, updat
 import type { Banner } from "../types";
 import { ask } from "../ui";
 
+// Besonders heiß: neue Banner, die bald starten, mit mindestens 150 % Ø Rückgabe und ohne Zuglimit pro Tag
+export const HOT_MIN_PCT = 150;
+export const isHotNew = (b: Banner) => b.status === "upcoming" && (b.ev_pct ?? 0) >= HOT_MIN_PCT && !b.per_day;
+
 const CATEGORIES: [string, string][] = [
-  ["Alle", "Alle"], ["Bonus", "Bonus"], ["MIX", "MIX"], ["Pokémon", "Pokémon"], ["One piece", "One Piece"],
+  ["Alle", "Alle"], ["Heiss", "🔥 Besonders heiß"], ["Bonus", "Bonus"], ["MIX", "MIX"], ["Pokémon", "Pokémon"], ["One piece", "One Piece"],
   ["Dragon Ball", "Dragon Ball"], ["Store", "🏪 Store"], ["Wunsch", "⭐ Wunschkarten"], ["Archiv", "🗄️ Archiv"],
 ];
 
@@ -60,10 +64,12 @@ export function List() {
     }
   }, [isArchive]);
 
+  const hotCount = (banners.value || []).filter(isHotNew).length;
   const source = isArchive ? archive.value?.banners || [] : banners.value || [];
   const shown = source
     .filter((b) => (q ? matches(b, q)
       : isArchive || cat === "Alle" ? true
+        : cat === "Heiss" ? isHotNew(b)
         : cat === "Store" ? b.store || b.category === "Store"
           : cat === "Wunsch" ? wishBanners.value.has(b.id) && canBuy(b) !== false
             : b.category === cat))
@@ -92,6 +98,7 @@ export function List() {
   }
 
   const empty = q ? "Nicht gefunden – Enter öffnet die ID"
+    : cat === "Heiss" ? `Gerade kein neuer Banner mit ≥ ${HOT_MIN_PCT} % und ohne Zuglimit, der bald startet.`
     : cat === "Wunsch" ? (wishList.value.length ? "Gerade keine Wunschkarte kaufbar." : "Noch keine Wunschkarten (auf einer Karte ⭐ merken).")
       : isArchive ? "Noch keine beendeten Banner (sie bleiben hier 30 Tage)"
         : active.length ? "Keine Banner für diese Filter" : "Keine Banner";
@@ -112,7 +119,8 @@ export function List() {
       </form>
       <div class="chips">
         {CATEGORIES.map(([key, label]) => (
-          <button class={`chip ${cat === key && !q ? "active" : ""}`} onClick={() => { category.value = key; search.value = ""; }}>{label}</button>
+          <button class={`chip ${cat === key && !q ? "active" : ""}`} onClick={() => { category.value = key; search.value = ""; }}>
+            {key === "Heiss" && hotCount ? `${label} (${hotCount})` : label}</button>
         ))}
       </div>
       <div class="chips quick">
