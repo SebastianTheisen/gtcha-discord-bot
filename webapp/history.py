@@ -329,7 +329,9 @@ def merge_newest_first(old: List[Dict], new: List[Dict], key: tuple) -> tuple:
     Rückgabe: (zusammengeführt, Überlapp gefunden). Ohne Überlapp fehlt evtl. etwas dazwischen.
     """
     if not old:
-        return list(new), True
+        # nichts gespeichert (z. B. Konto vom Admin zurückgesetzt), aber das Lesezeichen kennt den letzten Stand
+        # noch und hat nur die neuesten Seiten geholt: älteres fehlt -> Lücke ("Komplett übertragen")
+        return list(new), False
     sig = lambda e: tuple(e.get(k) for k in key)
     new_s, old_s = [sig(e) for e in new], [sig(e) for e in old]
     for k in range(min(len(new_s), len(old_s)), 0, -1):
