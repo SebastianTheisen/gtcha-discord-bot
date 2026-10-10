@@ -34,7 +34,7 @@ export function countdown(t: number, now = Date.now() / 1000): string {
 
 // Bilder über den Zwischenspeicher des VPS (verkleinert, lange im Cache). Absoluter Pfad /img: liefert die
 // Live-App (gleicher Ursprung) - dort laden die Bilder nachweislich. Fehlt ein Bild, lädt main.tsx es direkt von GTCHA.
-const IMG_VERSION = 3;
+const IMG_VERSION = 4;
 const WIDTHS = [320, 640, 960];
 export const imgSrc = (u: string | undefined, w = 640) =>
   !u ? "" : /^https:\/\/([\w-]+\.)*gtchaxonline\.com\//.test(u)
