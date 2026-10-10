@@ -2,7 +2,7 @@
 // dasselbe Lesezeichen erzeugen. Es läuft auf gtchaxonline.com und schickt an <Ursprung>/api/import-form.
 const SYNC_PAGES = ["undecided-detail", "pending-detail", "shipped-detail", "downloaded-detail",
                     "buy-point-history", "purchase-history", "ticket-history", "change-member"];
-export const SYNC_VERSION = 7;    // mit BOOKMARKLET_VERSION in webapp/server.py und app.js der Live-App erhöhen
+export const SYNC_VERSION = 8;    // mit BOOKMARKLET_VERSION in webapp/server.py und app.js der Live-App erhöhen
 const SYNC_PARALLEL = 4;
 const SYNC_INCREMENTAL = ["buy-point-history", "shipped-detail", "ticket-history", "purchase-history", "downloaded-detail"];
 export function bookmarkletSync(token: string, full = false): string {
@@ -23,8 +23,8 @@ const CP=['undecided-detail','pending-detail','shipped-detail','downloaded-detai
 const isNum=x=>x.children.length===0&&/^\\d+$/.test(x.textContent.trim());
 const out=[];let done=0;
 const area=async(p,i)=>{
-const fr=document.createElement('iframe');fr.style.cssText='position:fixed;left:-3000px;top:0;width:420px;height:900px';document.body.appendChild(fr);
-try{await new Promise(r=>{fr.onload=r;fr.src='/'+p});await settle(fr,CP.includes(p));
+const fr=document.createElement('iframe');fr.style.cssText='position:fixed;left:0;top:0;width:420px;height:900px;opacity:0.01;pointer-events:none;border:0;z-index:2147483646';document.body.appendChild(fr);
+try{await new Promise(r=>{fr.onload=r;fr.src='/'+p});await settle(fr,CP.includes(p));if(CP.includes(p)&&fr.contentDocument&&!fr.contentDocument.querySelector('img[src*="/card/"]')){await new Promise(r=>{fr.onload=r;fr.contentWindow.location.reload()});await settle(fr,true)}
 const d=fr.contentDocument;if(!d||!d.body){out[i]={path:p,error:'kein Zugriff'};return}
 const pages=[grab(d)];const mark=!FULL&&INC.includes(p)&&M[p];let partial=false;
 const known=g=>mark&&lines(g.text).join('\\n').includes(mark);

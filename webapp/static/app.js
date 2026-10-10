@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 104;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 105;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -1339,7 +1339,7 @@ const SYNC_PAGES = ["undecided-detail", "pending-detail", "shipped-detail", "dow
 // Nur Neues: Das Lesezeichen merkt sich (im Speicher von gtchaxonline.com auf diesem Gerät) den neuesten
 // Eintrag je Verlaufsbereich und hört auf zu blättern, sobald eine Seite ihn enthält. Der VPS hängt dann
 // nur das Neue an. Alle 30 Tage (oder mit "komplett") wird wieder alles übertragen.
-const SYNC_VERSION = 7;    // mit BOOKMARKLET_VERSION in webapp/server.py erhöhen, wenn sich das Lesezeichen ändert
+const SYNC_VERSION = 8;    // mit BOOKMARKLET_VERSION in webapp/server.py erhöhen, wenn sich das Lesezeichen ändert
 const SYNC_PARALLEL = 4;   // Bereiche gleichzeitig (je ein unsichtbares Fenster)
 const SYNC_INCREMENTAL = ["buy-point-history", "shipped-detail", "ticket-history", "purchase-history", "downloaded-detail"];
 function bookmarkletSync(token, full = false) {
@@ -1360,8 +1360,8 @@ const CP=['undecided-detail','pending-detail','shipped-detail','downloaded-detai
 const isNum=x=>x.children.length===0&&/^\\d+$/.test(x.textContent.trim());
 const out=[];let done=0;
 const area=async(p,i)=>{
-const fr=document.createElement('iframe');fr.style.cssText='position:fixed;left:-3000px;top:0;width:420px;height:900px';document.body.appendChild(fr);
-try{await new Promise(r=>{fr.onload=r;fr.src='/'+p});await settle(fr,CP.includes(p));
+const fr=document.createElement('iframe');fr.style.cssText='position:fixed;left:0;top:0;width:420px;height:900px;opacity:0.01;pointer-events:none;border:0;z-index:2147483646';document.body.appendChild(fr);
+try{await new Promise(r=>{fr.onload=r;fr.src='/'+p});await settle(fr,CP.includes(p));if(CP.includes(p)&&fr.contentDocument&&!fr.contentDocument.querySelector('img[src*="/card/"]')){await new Promise(r=>{fr.onload=r;fr.contentWindow.location.reload()});await settle(fr,true)}
 const d=fr.contentDocument;if(!d||!d.body){out[i]={path:p,error:'kein Zugriff'};return}
 const pages=[grab(d)];const mark=!FULL&&INC.includes(p)&&M[p];let partial=false;
 const known=g=>mark&&lines(g.text).join('\\n').includes(mark);
