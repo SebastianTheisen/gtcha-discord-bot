@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 101;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 102;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -985,12 +985,24 @@ async function showSettings() {
     const msg = view.querySelector("#ann-msg");
     try {
       await authApi("/api/admin/announce", { text: view.querySelector("#ann-text").value,
-        at: view.querySelector("#ann-at").value, scope: view.querySelector("#ann-scope").value,
+        at: `${view.querySelector("#ann-day").value}T${view.querySelector("#ann-time").value}`, scope: view.querySelector("#ann-scope").value,
         mention: view.querySelector("#ann-mention").checked, also_new: view.querySelector("#ann-new").checked });
       haptic();
       showSettings();
     } catch (e) { msg.textContent = "Nicht geplant: " + e.message; }
   });
+  const annPreview = () => {
+    const out = view.querySelector("#ann-preview");
+    if (out) out.textContent = annWhenText(`${view.querySelector("#ann-day").value}T${view.querySelector("#ann-time").value}`);
+  };
+  view.querySelectorAll("#ann-day, #ann-time").forEach((i) => i.addEventListener("input", annPreview));
+  view.querySelectorAll("[data-ann-quick]").forEach((b) => b.addEventListener("click", () => {
+    const [d, t] = ANN_QUICK[Number(b.dataset.annQuick)][1]();
+    view.querySelector("#ann-day").value = d;
+    view.querySelector("#ann-time").value = t;
+    annPreview();
+  }));
+  annPreview();
   view.querySelectorAll("[data-ann-cancel]").forEach((b) => b.addEventListener("click", async () => {
     try { await authApi("/api/admin/announce", { cancel: Number(b.dataset.annCancel) }); showSettings(); }
     catch (e) { view.querySelector("#ann-msg").textContent = e.message; }
@@ -1484,6 +1496,25 @@ function adminSection(a) {
 }
 
 // --- Admin: Ankündigung, die der Bot einmal zur eingestellten Zeit in alle laufenden Threads postet ---
+const annPad = (n) => String(n).padStart(2, "0");
+const annIsoDay = (d) => `${d.getFullYear()}-${annPad(d.getMonth() + 1)}-${annPad(d.getDate())}`;
+const annHhmm = (d) => `${annPad(d.getHours())}:${annPad(d.getMinutes())}`;
+const annDay = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return annIsoDay(d); };
+const ANN_QUICK = [
+  ["In 1 Std", () => { const d = new Date(Date.now() + 3600e3); return [annIsoDay(d), annHhmm(d)]; }],
+  ["Heute 20:00", () => [annDay(0), "20:00"]],
+  ["Morgen 0:00", () => [annDay(1), "00:00"]],
+  ["Übermorgen 0:00", () => [annDay(2), "00:00"]],
+];
+function annWhenText(at) {
+  const d = new Date(at);
+  if (isNaN(d.getTime())) return "Bitte Datum und Uhrzeit wählen";
+  const mins = Math.round((d.getTime() - Date.now()) / 60000);
+  const rest = mins <= 0 ? "sofort (Zeitpunkt liegt in der Vergangenheit)"
+    : mins < 60 ? `in ${mins} Min` : mins < 1440 ? `in ${Math.floor(mins / 60)} Std ${mins % 60} Min`
+    : `in ${Math.floor(mins / 1440)} T ${Math.floor((mins % 1440) / 60)} Std`;
+  return `Wird gepostet: ${["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"][d.getDay()]}, ${annPad(d.getDate())}.${annPad(d.getMonth() + 1)}.${d.getFullYear()} um ${annHhmm(d)} Uhr · ${rest}`;
+}
 const ANN_SCOPES = { main: "Normale Foren", premium: "Premium-Foren", all: "Alle Foren" };
 const ANN_STATUS = { pending: "geplant", sending: "wird gepostet", sent: "gepostet", cancelled: "zurückgezogen", stopped: "beendet" };
 const annActive = (x) => x.also_new && (x.status === "sent" || x.status === "sending");
@@ -1497,8 +1528,13 @@ function announceSection(a) {
       <div class="ann">
         <label class="ann-label" for="ann-text">Text</label>
         <textarea id="ann-text" class="ann-input ann-text" maxlength="1900" placeholder="Text der Ankündigung"></textarea>
-        <label class="ann-label" for="ann-at">Zeitpunkt (deutsche Zeit)</label>
-        <input id="ann-at" class="ann-input" type="datetime-local">
+        <label class="ann-label" for="ann-day">Zeitpunkt (deutsche Zeit)</label>
+        <div class="ann-when">
+          <input id="ann-day" class="ann-input" type="date" value="${annDay(1)}" aria-label="Datum">
+          <input id="ann-time" class="ann-input" type="time" value="00:00" aria-label="Uhrzeit">
+        </div>
+        <div class="ann-quick">${ANN_QUICK.map(([label], i) => `<button type="button" class="btn" data-ann-quick="${i}">${label}</button>`).join("")}</div>
+        <div class="ann-preview" id="ann-preview"></div>
         <label class="ann-label" for="ann-scope">Forum</label>
         <select id="ann-scope" class="ann-input">${Object.entries(ANN_SCOPES).filter(([k]) => a.premium || k === "main")
           .map(([k, label]) => `<option value="${k}">${label}</option>`).join("")}</select>

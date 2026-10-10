@@ -394,3 +394,6 @@ select.ann-input { background-image: linear-gradient(45deg, transparent 50%, var
 .ann .toggle:first-of-type { margin-top: 6px; }
 .ann-item { align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
 .ann-item small { display: block; margin-top: 2px; }
+.ann-when { display: grid; grid-template-columns: 1.4fr 1fr; gap: 8px; }
+.ann-quick { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.ann-preview { font-size: 14px; color: var(--accent); margin: 4px 0 0; }

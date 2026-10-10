@@ -516,3 +516,7 @@ details.section > summary small { font-size: 13px; color: var(--muted); font-wei
 .ann-check { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0;
   border-top: 1px solid var(--line); font-size: 14px; }
 .ann-check input { width: 20px; height: 20px; }
+.ann-when { display: grid; grid-template-columns: 1.4fr 1fr; gap: 8px; }
+.ann-quick { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.ann-quick .btn { padding: 6px 10px; font-size: 13px; }
+.ann-preview { font-size: 14px; color: var(--blue); font-weight: 600; margin-top: 4px; }

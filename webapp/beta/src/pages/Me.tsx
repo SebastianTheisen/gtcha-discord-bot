@@ -322,7 +322,9 @@ const ANN_STATUS: Record<string, string> = { pending: "geplant", sending: "wird 
 const annActive = (x: any) => x.also_new && (x.status === "sent" || x.status === "sending");
 function Announce({ a, reload }: { a: any; reload: () => void }) {
   const [text, setText] = useState("");
-  const [at, setAt] = useState("");
+  const [day, setDay] = useState(() => isoDay(addDays(new Date(), 1)));
+  const [clock, setClock] = useState("00:00");
+  const at = `${day}T${clock}`;
   const [scope, setScope] = useState("main");
   const [mention, setMention] = useState(false);
   const [alsoNew, setAlsoNew] = useState(false);
@@ -334,7 +336,14 @@ function Announce({ a, reload }: { a: any; reload: () => void }) {
         <textarea class="ann-input ann-text" maxLength={1900} placeholder="Text der Ankündigung"
           value={text} onInput={(e) => setText((e.target as HTMLTextAreaElement).value)} />
         <label class="ann-label">Zeitpunkt (deutsche Zeit)</label>
-        <input class="ann-input" type="datetime-local" value={at} onInput={(e) => setAt((e.target as HTMLInputElement).value)} />
+        <div class="ann-when">
+          <input class="ann-input" type="date" value={day} onInput={(e) => setDay((e.target as HTMLInputElement).value)} aria-label="Datum" />
+          <input class="ann-input" type="time" value={clock} onInput={(e) => setClock((e.target as HTMLInputElement).value)} aria-label="Uhrzeit" />
+        </div>
+        <div class="ann-quick">
+          {QUICK.map(([label, fn]) => <button type="button" class="chip" onClick={() => { const [d, c] = fn(); setDay(d); setClock(c); }}>{label}</button>)}
+        </div>
+        <p class="ann-preview">{whenText(at)}</p>
         <label class="ann-label">Forum</label>
         <select class="ann-input" value={scope} onChange={(e) => setScope((e.target as HTMLSelectElement).value)}>
           {scopes.map(([k, label]) => <option value={k} selected={k === scope}>{label}</option>)}
@@ -360,4 +369,26 @@ function Announce({ a, reload }: { a: any; reload: () => void }) {
       ))}
     </Section>
   );
+}
+
+// Zeit-Wähler der Ankündigung: Datum + Uhrzeit getrennt, Schnellwahl und Klartext-Vorschau (Uhrzeit des Handys)
+const pad = (n: number) => String(n).padStart(2, "0");
+const isoDay = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const hhmm = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+function addDays(d: Date, n: number) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
+const QUICK: [string, () => [string, string]][] = [
+  ["In 1 Std", () => { const d = new Date(Date.now() + 3600e3); return [isoDay(d), hhmm(d)]; }],
+  ["Heute 20:00", () => [isoDay(new Date()), "20:00"]],
+  ["Morgen 0:00", () => [isoDay(addDays(new Date(), 1)), "00:00"]],
+  ["Übermorgen 0:00", () => [isoDay(addDays(new Date(), 2)), "00:00"]],
+];
+const WEEKDAYS = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
+function whenText(at: string): string {
+  const d = new Date(at);
+  if (isNaN(d.getTime())) return "Bitte Datum und Uhrzeit wählen";
+  const mins = Math.round((d.getTime() - Date.now()) / 60000);
+  const rest = mins <= 0 ? "sofort (Zeitpunkt liegt in der Vergangenheit)"
+    : mins < 60 ? `in ${mins} Min` : mins < 1440 ? `in ${Math.floor(mins / 60)} Std ${mins % 60} Min`
+    : `in ${Math.floor(mins / 1440)} T ${Math.floor((mins % 1440) / 60)} Std`;
+  return `Wird gepostet: ${WEEKDAYS[d.getDay()]}, ${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} um ${hhmm(d)} Uhr · ${rest}`;
 }
