@@ -24,6 +24,7 @@ export interface Banner {
   hits_open?: number | null;
   hits_total?: number | null;
   tracked_hits?: boolean;
+  many_hits?: boolean;   // Karten mehrfach / Hits bis T50: Zähler über alle Karten ab Packpreis
   cost_to_hit?: number | null;
   unsure?: boolean;
   pool_value?: number | null;

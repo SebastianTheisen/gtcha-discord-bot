@@ -22,7 +22,7 @@ export function verdict(b: Banner): [Tone, string] {
 }
 
 export const hitsText = (b: Banner) =>
-  b.hits_open == null ? "–" : b.tracked_hits ? `${b.hits_open}/${b.hits_total}` : `Top 3: ${b.hits_open}`;
+  b.hits_open == null ? "–" : b.tracked_hits || b.many_hits ? `${b.hits_open}/${b.hits_total}` : `Top 3: ${b.hits_open}`;
 
 // Kaufbedingungen und gemerkte Wunschkarten als kleine Hinweise über der Karte
 export function Flags({ b }: { b: Banner }) {

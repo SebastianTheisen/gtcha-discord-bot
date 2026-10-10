@@ -607,3 +607,29 @@ def test_second_batch_with_value_of_already_shipped_hit():
     names = {u["key"]: u["name"] for u in tracked_units(pool)}
     res = match_shipment_history(pool, [[1, 16600, 1000], [1, 16600, 2000]])
     assert sorted(names[k] for k in res["certain"]) == ["Gardevoir", "Magikarp"] and res["off_value"] == [1]
+
+
+def test_many_hits_when_top_card_exists_several_times():
+    """24167: Glurak 5x, Hits bis T50 - T1-T3 raus heißt nicht "Hits raus"."""
+    from utils.card_pool import many_hits, open_claimable, summarize_cards, tier_keys
+    from webapp.view import BannerView
+    pool = summarize_cards([
+        {"id": 1, "name": "Glurak", "buy_point": 47300, "duplication": 5, "action_type": 0},
+        {"id": 2, "name": "Lugia", "buy_point": 43340, "duplication": 5, "action_type": 0},
+        {"id": 3, "name": "Pikachu", "buy_point": 5000, "duplication": 8, "action_type": 0},
+        {"id": 9, "name": "Normal", "buy_point": 300, "duplication": 982, "action_type": 0},
+    ])
+    price = 2222
+    assert many_hits(pool, price)
+    keys = tier_keys(pool)
+    top3 = {keys["T1"], keys["T2"], keys["T3"]}
+    assert open_claimable(pool, price, top3) == (15, 18)
+    stats = {"tracked_hits": False, "open_tiers": [], "hits_total": 3, "hits_open": 0}
+    row = {"price_coins": price}
+    assert BannerView._status(row, {}, stats, pool, set(), {k: 1 for k in top3}) == "running"
+    everything = {u for u in keys.values()}
+    assert BannerView._status(row, {}, stats, pool, everything, {}) == "hits_out"
+    # klassischer Banner (nur T1-T3 ab Packpreis): wie bisher
+    small = summarize_cards([{"id": 1, "name": "A", "buy_point": 9000, "duplication": 1, "action_type": 0},
+                             {"id": 9, "name": "N", "buy_point": 300, "duplication": 99, "action_type": 0}])
+    assert not many_hits(small, 1000)

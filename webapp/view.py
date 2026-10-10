@@ -15,6 +15,7 @@ from utils.banner_info import RANK_ORDER, format_conditions, format_shipping, sa
 from utils.card_pool import (
     batch_deadlines, card_value, estimate, explain_batch, out_of_banner_value, fmt_coins, pool_minimum, relevant_units, resolve_pulled, tier_keys,
     tracked_units, claimable_units, medal_units, coin_base_drawn, is_coin_mixed_pool, is_coin_pool,
+    many_hits, open_claimable,
 )
 from utils import ship_odds
 from utils.translate import set_cache as set_translations, to_german
@@ -139,7 +140,10 @@ class BannerView:
                 if all(u['key'] in sure or u['key'] in winners for u in relevant_units(pool, price)):
                     return "hits_out"
             elif not stats['tracked_hits'] and not stats['open_tiers']:
-                return "hits_out"
+                price = to_int(row.get('price_coins')) or None
+                # Karten mehrfach / Hits bis T50: erst raus, wenn alle Karten ab Packpreis raus sind
+                if not many_hits(pool, price) or not open_claimable(pool, price, set(sure) | set(winners))[0]:
+                    return "hits_out"
         if thread.get('endspurt_sent'):
             return "endspurt"
         return "running"
@@ -214,6 +218,10 @@ class BannerView:
             "medal_thread": medal_thread or None,
             **self._out(pool, sure, winners, open_groups),
         }
+        if stats and many_hits(pool, price or None):
+            # Hits bis T50 (Karten mehrfach): alle Karten ab Packpreis zählen, nicht nur die Top 3
+            data["hits_open"], data["hits_total"] = open_claimable(pool, price or None, set(pulled) | set(winners))
+            data["many_hits"] = True
         if pool and remaining == 0 and total and data["hits_open"] is None:
             # leer gezogen: keine Schätzung mehr nötig - alle Hits sind raus
             data["tracked_hits"] = bool(pool.get('hits'))
