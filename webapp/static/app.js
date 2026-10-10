@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 109;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 110;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -1995,7 +1995,7 @@ document.addEventListener("touchmove", (e) => {
   const t = e.touches[0];
   touch.dx = t.clientX - touch.x;
   touch.dy = t.clientY - touch.y;
-  if (touch.edge && touch.dx > 0 && Math.abs(touch.dx) > Math.abs(touch.dy)) {
+  if (touch.edge && touch.dx > 12 && Math.abs(touch.dx) > Math.abs(touch.dy) * 1.5) {
     view.style.transform = `translateX(${Math.min(touch.dx, 160)}px)`;
   } else if (touch.top && touch.dy > 0 && touch.dy > Math.abs(touch.dx)) {
     const d = Math.min(touch.dy, 120);
@@ -2003,13 +2003,28 @@ document.addEventListener("touchmove", (e) => {
     ptr.classList.toggle("ready", d >= 80);
   }
 }, { passive: true });
+// iOS bricht Berührungen ab (Systemgeste, Mitteilung): zurücksetzen, sonst bleibt die Seite verschoben hängen
+document.addEventListener("touchcancel", () => {
+  touch = null;
+  view.style.transform = "";
+  ptr.style.transform = "";
+  ptr.classList.remove("ready");
+});
+// Nach dem Zurück-Wischen wertet iOS dieselbe Berührung noch als Antippen - das träfe einen Banner in der
+// Liste und öffnete ihn ("springt woanders hin"). Diesen einen Klick kurz danach verschlucken.
+let swallowClickUntil = 0;
+document.addEventListener("click", (e) => {
+  if (Date.now() < swallowClickUntil) { e.preventDefault(); e.stopPropagation(); }
+}, true);
 document.addEventListener("touchend", async () => {
   if (!touch) return;
   const { edge, top, dx, dy } = touch;
   touch = null;
   view.style.transform = "";
-  if (edge && dx > 90 && location.hash.startsWith("#/banner/")) {
+  // nur eine klar waagrechte Wischbewegung vom linken Rand ist "zurück" - nicht schräges Scrollen
+  if (edge && dx > 90 && dx > Math.abs(dy) * 1.5 && location.hash.startsWith("#/banner/")) {
     haptic();
+    swallowClickUntil = Date.now() + 600;
     goBack();
   } else if (top && dy >= 80 && state.current) {
     haptic();

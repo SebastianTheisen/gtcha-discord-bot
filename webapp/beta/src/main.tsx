@@ -126,14 +126,22 @@ document.addEventListener("touchcancel", () => {
   ptr.style.transform = "";
   ptr.classList.remove("ready");
 });
+// Nach dem Zurück-Wischen wertet iOS dieselbe Berührung noch als Antippen - das träfe einen Banner in der
+// Liste und öffnete ihn ("springt woanders hin"). Diesen einen Klick kurz danach verschlucken.
+let swallowClickUntil = 0;
+document.addEventListener("click", (e) => {
+  if (Date.now() < swallowClickUntil) { e.preventDefault(); e.stopPropagation(); }
+}, true);
 document.addEventListener("touchend", async () => {
   if (!touch) return;
   const { edge, top, dx, dy } = touch;
   touch = null;
   const page = document.querySelector<HTMLElement>(".page");
   if (page) page.style.transform = "";
-  if (edge && dx > 90 && location.hash.startsWith("#/banner/")) {
+  // nur eine klar waagrechte Wischbewegung vom linken Rand ist "zurück" - nicht schräges Scrollen
+  if (edge && dx > 90 && dx > Math.abs(dy) * 1.5 && location.hash.startsWith("#/banner/")) {
     haptic();
+    swallowClickUntil = Date.now() + 600;
     if (history.length > 1) history.back();
     else location.hash = "#/";
   } else if (top && dy >= 80) {
