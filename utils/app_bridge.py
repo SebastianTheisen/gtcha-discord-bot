@@ -32,6 +32,11 @@ CREATE TABLE IF NOT EXISTS user_imports (
 CREATE TABLE IF NOT EXISTS user_history (
     discord_user_id TEXT, area TEXT, data TEXT, updated_at TEXT, PRIMARY KEY (discord_user_id, area));
 CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT);
+-- Ankündigungen des Admins: der Bot postet sie einmal zur eingestellten Zeit in alle laufenden Threads
+-- scope: "main" (normale Foren), "premium", "all"; status: pending -> sending -> sent / cancelled
+CREATE TABLE IF NOT EXISTS announcements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT, send_at INTEGER, scope TEXT, mention INTEGER DEFAULT 0,
+    created_by TEXT, created_at TEXT, status TEXT DEFAULT 'pending', posted TEXT DEFAULT '[]', sent_at TEXT);
 CREATE TABLE IF NOT EXISTS app_admins (discord_user_id TEXT PRIMARY KEY, added_at TEXT);
 CREATE TABLE IF NOT EXISTS blocked_users (discord_user_id TEXT PRIMARY KEY, discord_name TEXT, blocked_at TEXT);
 CREATE TABLE IF NOT EXISTS sync_marks (discord_user_id TEXT PRIMARY KEY, synced_at TEXT);
@@ -496,6 +501,49 @@ class AppBridge:
         return (await self.sync_overview()).get(str(user_id)) or {"expected": 1, "accounts": []}
 
     # --- Medaillen-Meldungen (App legt an, Bot arbeitet ab) ---
+    # --- Ankündigungen (Admin) ---
+    async def add_announcement(self, text: str, send_at: int, scope: str, mention: bool, by: str) -> int:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute(
+                "INSERT INTO announcements (text, send_at, scope, mention, created_by, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)", (text, int(send_at), scope, 1 if mention else 0, by, _now()))
+            await db.commit()
+            return cur.lastrowid
+
+    async def announcements(self, limit: int = 20) -> List[Dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT * FROM announcements ORDER BY id DESC LIMIT ?", (limit,))
+            rows = [dict(r) for r in await cur.fetchall()]
+        for r in rows:
+            r["posted"] = len(json.loads(r.get("posted") or "[]"))
+        return rows
+
+    async def cancel_announcement(self, ann_id: int) -> bool:
+        """Nur geplante (noch nicht gestartete) lassen sich zurückziehen."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("UPDATE announcements SET status = 'cancelled' WHERE id = ? AND status = 'pending'",
+                                   (ann_id,))
+            await db.commit()
+            return cur.rowcount > 0
+
+    async def due_announcements(self, now: float) -> List[Dict]:
+        """Fällige (auch angefangene, z. B. nach einem Neustart des Bots mitten im Posten)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT * FROM announcements WHERE status IN ('pending', 'sending') "
+                                   "AND send_at <= ? ORDER BY id", (int(now),))
+            rows = [dict(r) for r in await cur.fetchall()]
+        for r in rows:
+            r["posted"] = json.loads(r.get("posted") or "[]")
+        return rows
+
+    async def announcement_progress(self, ann_id: int, posted: List[int], done: bool):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE announcements SET posted = ?, status = ?, sent_at = ? WHERE id = ?",
+                             (json.dumps(posted), "sent" if done else "sending", _now() if done else None, ann_id))
+            await db.commit()
+
     async def add_request(self, pack_id: int, tier: str, user: Dict, action: str) -> int:
         async with aiosqlite.connect(self.db_path) as db:
             cur = await db.execute(

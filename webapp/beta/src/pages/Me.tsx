@@ -83,6 +83,7 @@ export function Me() {
       <PushPanel push={push} onChange={() => pushState().then(setPush)} />
       <Section id="guide" title="📖 Anleitung"><Guide /></Section>
       {admin && <AdminSettings a={admin} />}
+      {admin && <Announce a={admin} reload={() => authApi("api/admin/settings").then(setAdmin).catch(() => {})} />}
       <Section id="look" title="🎨 Darstellung & Links">
         <div class="chips">{THEMES.map(([k, l]) => <button class={`chip ${theme.value === k ? "active" : ""}`} onClick={() => (theme.value = k)}>{l}</button>)}</div>
         <label class="small muted" style={{ display: "block", margin: "10px 0 4px" }}>🔗 GTCHA-Seite öffnen in (für „Öffnen ↗“)</label>
@@ -311,6 +312,44 @@ function AdminSettings({ a }: { a: any }) {
         try { await authApi("api/admin/settings", { mode, delay_minutes: Number(delay) || 0, premium_mode: a.premium ? premium : "" }); showToast("Gespeichert ✓"); haptic(); }
         catch (e) { showToast(`Nicht gespeichert: ${(e as Error).message}`); }
       }}>Speichern</button>
+    </Section>
+  );
+}
+
+// Admin: Ankündigung, die der Bot einmal zur eingestellten Zeit (deutsche Zeit) in alle laufenden Threads postet
+const ANN_SCOPES: Record<string, string> = { main: "Normale Foren", premium: "Premium-Foren", all: "Alle Foren" };
+const ANN_STATUS: Record<string, string> = { pending: "geplant", sending: "wird gepostet", sent: "gepostet", cancelled: "zurückgezogen" };
+function Announce({ a, reload }: { a: any; reload: () => void }) {
+  const [text, setText] = useState("");
+  const [at, setAt] = useState("");
+  const [scope, setScope] = useState("main");
+  const [mention, setMention] = useState(false);
+  const scopes = Object.entries(ANN_SCOPES).filter(([k]) => a.premium || k === "main");
+  return (
+    <Section id="announce" title="📢 Ankündigung" extra="Admin">
+      <textarea class="field code" style="font-size:15px;font-family:inherit" maxLength={1900} placeholder="Text der Ankündigung"
+        value={text} onInput={(e) => setText((e.target as HTMLTextAreaElement).value)} />
+      <div class="row">
+        <input class="field left" type="datetime-local" value={at} onInput={(e) => setAt((e.target as HTMLInputElement).value)} aria-label="Zeitpunkt (deutsche Zeit)" />
+        <select class="select wide" value={scope} onChange={(e) => setScope((e.target as HTMLSelectElement).value)} aria-label="Forum">
+          {scopes.map(([k, label]) => <option value={k}>{label}</option>)}
+        </select>
+      </div>
+      <label class="muted small"><input type="checkbox" checked={mention} onChange={(e) => setMention((e.target as HTMLInputElement).checked)} /> mit @everyone</label>
+      <p class="muted small">Wird einmal zur Zeit (deutsche Zeit) in jeden laufenden Thread gepostet.</p>
+      <button class="btn primary" onClick={async () => {
+        try { await authApi("api/admin/announce", { text, at, scope, mention }); showToast("Geplant ✓"); haptic(); setText(""); reload(); }
+        catch (e) { showToast(`Nicht geplant: ${(e as Error).message}`); }
+      }}>Planen</button>
+      {(a.announcements || []).map((x: any) => (
+        <div class="line">
+          <span>{x.at} · {ANN_SCOPES[x.scope] || x.scope} · {ANN_STATUS[x.status] || x.status}{x.posted ? ` (${x.posted} Threads)` : ""}
+            <br /><small class="muted">{x.text.length > 80 ? x.text.slice(0, 80) + "…" : x.text}</small></span>
+          {x.status === "pending" && <button class="btn" onClick={async () => {
+            try { await authApi("api/admin/announce", { cancel: x.id }); reload(); } catch (e) { showToast((e as Error).message); }
+          }}>Zurückziehen</button>}
+        </div>
+      ))}
     </Section>
   );
 }

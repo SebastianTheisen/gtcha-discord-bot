@@ -151,3 +151,31 @@ def test_medal_in_premium_thread_counts_for_both(tmp_path, env):
         assert isinstance(Message.channel, discord.Thread)
 
     asyncio.run(run())
+
+
+def test_announcement_posted_once_at_time(tmp_path, env):
+    from datetime import datetime
+
+    from utils.banner_info import berlin_time, berlin_to_ts
+
+    local = datetime(2026, 10, 12, 0, 14)
+    assert berlin_time(berlin_to_ts(local)).strftime("%d.%m. %H:%M") == "12.10. 00:14"   # Sommerzeit
+    assert berlin_time(berlin_to_ts(datetime(2026, 12, 1, 0, 14))).strftime("%H:%M") == "00:14"   # Winterzeit
+
+    async def run():
+        db, bridge = await setup(tmp_path)
+        await db.save_premium_thread(7, PREMIUM, 555, PREMIUM)
+        sent = []
+        bot = make_bot(db, bridge, sent)
+        later = await bridge.add_announcement("später", time.time() + 3600, "main", False, "Admin")
+        await bridge.add_announcement("Hinweis", time.time() - 1, "main", False, "Admin")
+        await bot._process_announcements()
+        assert sent == [(MAIN, "Hinweis")]                   # nur normales Forum, nur die fällige
+        await bot._process_announcements()
+        assert sent == [(MAIN, "Hinweis")]                   # nur einmal
+        assert await bridge.cancel_announcement(later)
+        rows = {r["text"]: r for r in await bridge.announcements()}
+        assert rows["Hinweis"]["status"] == "sent" and rows["Hinweis"]["posted"] == 1
+        assert rows["später"]["status"] == "cancelled"
+
+    asyncio.run(run())

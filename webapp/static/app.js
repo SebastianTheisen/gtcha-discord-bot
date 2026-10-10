@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 98;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 99;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -981,6 +981,20 @@ async function showSettings() {
       haptic();
     } catch (e) { msg.textContent = "Nicht gespeichert: " + e.message; }
   });
+  view.querySelector("#ann-save")?.addEventListener("click", async () => {
+    const msg = view.querySelector("#ann-msg");
+    try {
+      await authApi("/api/admin/announce", { text: view.querySelector("#ann-text").value,
+        at: view.querySelector("#ann-at").value, scope: view.querySelector("#ann-scope").value,
+        mention: view.querySelector("#ann-mention").checked });
+      haptic();
+      showSettings();
+    } catch (e) { msg.textContent = "Nicht geplant: " + e.message; }
+  });
+  view.querySelectorAll("[data-ann-cancel]").forEach((b) => b.addEventListener("click", async () => {
+    try { await authApi("/api/admin/announce", { cancel: Number(b.dataset.annCancel) }); showSettings(); }
+    catch (e) { view.querySelector("#ann-msg").textContent = e.message; }
+  }));
   view.querySelector("#speed")?.addEventListener("click", () => speedTest(view.querySelector("#speed-out")));
   view.querySelector("#my-rank")?.addEventListener("change", (e) => save("myRank", e.target.value));
   view.querySelector("#my-charge")?.addEventListener("change", (e) => save("myCharge", String(Number(e.target.value.replace(/\D/g, "")) || 0)));
@@ -1465,6 +1479,30 @@ function adminSection(a) {
       <button class="btn primary" id="admin-save">Speichern</button>
       <div class="hint">Admin: ${(a.admins || []).map((x) => esc(x.name || "–")).join(", ") || "–"}</div>
       <div class="hint" id="admin-msg"></div>
+    </div>
+    ${announceSection(a)}`;
+}
+
+// --- Admin: Ankündigung, die der Bot einmal zur eingestellten Zeit in alle laufenden Threads postet ---
+const ANN_SCOPES = { main: "Normale Foren", premium: "Premium-Foren", all: "Alle Foren" };
+const ANN_STATUS = { pending: "geplant", sending: "wird gepostet", sent: "gepostet", cancelled: "zurückgezogen" };
+function announceSection(a) {
+  const rows = (a.announcements || []).map((x) => `<div class="line"><span>${esc(x.at)} · ${ANN_SCOPES[x.scope] || x.scope}
+      · ${ANN_STATUS[x.status] || x.status}${x.posted ? ` (${x.posted} Threads)` : ""}<br><small>${esc(x.text.slice(0, 80))}${x.text.length > 80 ? "…" : ""}</small></span>
+      ${x.status === "pending" ? `<button class="btn" data-ann-cancel="${x.id}">Zurückziehen</button>` : ""}</div>`).join("");
+  return `<h2>📢 Ankündigung <small>Admin</small></h2>
+    <div class="panel">
+      <textarea id="ann-text" class="bm-code" maxlength="1900" placeholder="Text der Ankündigung"></textarea>
+      <div class="add-watch">
+        <input id="ann-at" class="code-input plain" type="datetime-local" aria-label="Zeitpunkt (deutsche Zeit)">
+        <select id="ann-scope" aria-label="Forum">${Object.entries(ANN_SCOPES).filter(([k]) => a.premium || k === "main")
+          .map(([k, label]) => `<option value="${k}">${label}</option>`).join("")}</select>
+      </div>
+      <label class="hint"><input type="checkbox" id="ann-mention"> mit @everyone</label>
+      <div class="hint">Wird einmal zur Zeit (deutsche Zeit) in jeden laufenden Thread gepostet.</div>
+      <button class="btn primary" id="ann-save">Planen</button>
+      <div class="hint" id="ann-msg"></div>
+      ${rows ? `<div class="rows">${rows}</div>` : ""}
     </div>`;
 }
 
