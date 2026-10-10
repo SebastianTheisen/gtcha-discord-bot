@@ -5,7 +5,7 @@ import { BannerCard, BannerSkeleton, CompactRow } from "../components/BannerCard
 import { dateTime } from "../format";
 import { canBuy, myRank, wishList } from "../local";
 import { watchIds } from "../push";
-import { banners, category, listView, loadWishBanners, pref, search, sort, updated, wishBanners } from "../store";
+import { banners, category, listView, loadWishBanners, pref, manualRefresh, search, sort, updated, wishBanners } from "../store";
 import type { Banner } from "../types";
 import { ask } from "../ui";
 
@@ -34,6 +34,7 @@ const QUICK: Record<string, [string, (b: Banner) => boolean]> = {
 };
 
 const filters = pref<string>("filters", "[]");
+const order: { key: string; ids: Map<number, number> } = { key: "", ids: new Map() };
 const archive = signal<{ banners: Banner[]; updated: number } | null>(null);
 
 // Suche: Banner-ID (Teil reicht) oder Titel; über alle Kategorien
@@ -75,6 +76,16 @@ export function List() {
             : b.category === cat))
     .filter((b) => active.every((k) => QUICK[k][1](b)))
     .sort((SORTS[sort.value] || SORTS.ev)[1]);
+  // Reihenfolge festhalten: Live-Aktualisierungen ändern Werte, aber die Liste springt nicht unter dem Finger
+  // umher. Neu sortiert wird beim Wechsel von Sortierung, Kategorie, Filtern, Suche oder beim Aktualisieren.
+  const orderKey = `${sort.value}|${cat}|${q}|${active.join(",")}|${manualRefresh.value}`;
+  if (order.key !== orderKey) {
+    order.key = orderKey;
+    order.ids = new Map(shown.map((b, i) => [b.id, i]));
+  } else {
+    const pos = (b: Banner) => order.ids.get(b.id) ?? -1;   // neue Banner oben
+    shown.sort((a, b) => pos(a) - pos(b));
+  }
 
   async function toggleQuick(k: string) {
     if (k === "mine" && !myRank.value) {
