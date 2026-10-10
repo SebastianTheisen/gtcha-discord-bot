@@ -52,6 +52,23 @@ def test_parse_cards_blocks_and_images():
     assert "image" not in parse_cards([{"text": SHIPPED, "images": [IMG.format(7)]}])[0]
 
 
+def test_parse_cards_chrome_android_without_blank_lines():
+    """Chrome auf Android: kein Leerzeichen zwischen den Artikeln, je Artikel Name / Rarität / Nummer."""
+    text = (HEAD + "Liste der versendeten Artikel: 2026/02/20\nSendungsnummer: 889\n"
+            "Buby\nAR\nSV4K068-066\nMega Sharpedo ex\nSAR\nM2113-080\n"
+            "Liste der versendeten Artikel: 2026/02/19\nSendungsnummer: 870\n"
+            "Roar of Fury\nFactory-Sealed Box\nDragon Ball\n"
+            "Xero Place Co., Ltd.\n〒330-0854\nTEL : +81 00\nMy Page")
+    cards = parse_cards([{"text": text, "images": [IMG.format(i) for i in (1, 2, 3)]}])
+    assert [(c["name"], c["rarity"], c["number"], c["date"], c["tracking"]) for c in cards] == [
+        ("Buby", "AR", "SV4K068-066", "2026-02-20", "889"),
+        ("Mega Sharpedo ex", "SAR", "M2113-080", "2026-02-20", "889"),
+        ("Roar of Fury", "Factory-Sealed Box", "Dragon Ball", "2026-02-19", "870")]
+    assert [c["card_id"] for c in cards] == ["1", "2", "3"]
+    pending = HEAD + "Anfragedatum: 2026/09/28\n【30th】Pikachu ex\nSAR\nM6a126-103\nBuggy\nSP\nP-084\n" + FOOT.replace("\n\n", "\n")
+    assert [c["name"] for c in parse_cards([{"text": pending}])] == ["【30th】Pikachu ex", "Buggy"]
+
+
 def test_parse_member_month_spending():
     info = parse_member([{"text": "949\n1\nAusgaben in diesem Monat\n8.000円\nCoin"}])
     assert info == {"coins": 949, "spent_month_yen": 8000}
