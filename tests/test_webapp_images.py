@@ -157,3 +157,14 @@ def test_history_card_images_are_kept(tmp_path):
         assert sorted(await bridge.history_images()) == ["/card/2_small.jpg", "https://gtchaxonline.com/card/1_small.jpg"]
 
     asyncio.run(run())
+
+
+def test_prepare_makes_resized_copies_in_advance(tmp_path):
+    from PIL import Image
+    from webapp.images import ImageCache
+    cache = ImageCache(str(tmp_path))
+    url = "https://gtchaxonline.com/card/9.png"
+    Image.new("RGB", (1000, 1400), (10, 20, 30)).save(cache.dir / cache_name(url))
+    assert cache.prepare([url, url, "https://evil.example/x.png"]) == 2
+    assert {p.name.split(".", 1)[1] for p in cache.dir.glob("*.w*.webp")} == {"w320.webp", "w640.webp"}
+    assert cache.prepare([url]) == 0     # nur einmal
