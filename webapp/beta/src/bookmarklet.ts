@@ -2,7 +2,7 @@
 // dasselbe Lesezeichen erzeugen. Es läuft auf gtchaxonline.com und schickt an <Ursprung>/api/import-form.
 const SYNC_PAGES = ["undecided-detail", "pending-detail", "shipped-detail", "downloaded-detail",
                     "buy-point-history", "purchase-history", "ticket-history", "change-member"];
-export const SYNC_VERSION = 6;    // mit BOOKMARKLET_VERSION in webapp/server.py und app.js der Live-App erhöhen
+export const SYNC_VERSION = 7;    // mit BOOKMARKLET_VERSION in webapp/server.py und app.js der Live-App erhöhen
 const SYNC_PARALLEL = 4;
 const SYNC_INCREMENTAL = ["buy-point-history", "shipped-detail", "ticket-history", "purchase-history", "downloaded-detail"];
 export function bookmarkletSync(token: string, full = false): string {
@@ -19,12 +19,12 @@ const say=t=>{box.textContent='GTCHA Tracker: '+t};
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const keep=/[¥￥円]|coin|münz|ausgaben|rang|rank|20\\d{2}[\\/.-]\\d{1,2}[\\/.-]\\d{1,2}|^[\\d.,]{1,9}$/i;
 const grab=d=>({text:(d.location.pathname.includes('change-member')?d.body.innerText.split('\\n').filter(l=>keep.test(l)).join('\\n'):d.body.innerText).slice(0,40000),images:[...d.querySelectorAll('img')].map(i=>i.getAttribute('src')).filter(s=>s&&s.includes('/card/')).slice(0,400)});
-const settle=async fr=>{let last='',same=0;for(let i=0;i<40;i++){await sleep(400);const d=fr.contentDocument;const t=d&&d.body?d.body.innerText:'';if(t&&t===last){if(++same>=6)return}else same=0;last=t}};
+const CP=['undecided-detail','pending-detail','shipped-detail','downloaded-detail'];const settle=async(fr,want)=>{let last='',same=0;for(let i=0;i<80;i++){await sleep(400);const d=fr.contentDocument;const t=d&&d.body?d.body.innerText:'';const ready=!want||i>=38||!!(d&&d.querySelector('img[src*="/card/"]'));if(t&&t===last&&ready){if(++same>=6)return}else same=0;last=t}};
 const isNum=x=>x.children.length===0&&/^\\d+$/.test(x.textContent.trim());
 const out=[];let done=0;
 const area=async(p,i)=>{
 const fr=document.createElement('iframe');fr.style.cssText='position:fixed;left:-3000px;top:0;width:420px;height:900px';document.body.appendChild(fr);
-try{await new Promise(r=>{fr.onload=r;fr.src='/'+p});await settle(fr);
+try{await new Promise(r=>{fr.onload=r;fr.src='/'+p});await settle(fr,CP.includes(p));
 const d=fr.contentDocument;if(!d||!d.body){out[i]={path:p,error:'kein Zugriff'};return}
 const pages=[grab(d)];const mark=!FULL&&INC.includes(p)&&M[p];let partial=false;
 const known=g=>mark&&lines(g.text).join('\\n').includes(mark);
@@ -33,7 +33,7 @@ if(known(pages[0]))partial=true;
 for(let n=2;n<=40&&!partial;n++){
 const btn=[...d.querySelectorAll('a,button,li,span,div')].find(e=>isNum(e)&&e.textContent.trim()===String(n)&&[...((e.parentElement&&e.parentElement.parentElement)||e).querySelectorAll('*')].filter(isNum).length>=3);
 if(!btn)break;const before=d.body.innerText;btn.click();
-let g=null;for(let w=0;w<30;w++){await sleep(500);if(d.body.innerText!==before){await settle(fr);g=grab(d);break}}
+let g=null;for(let w=0;w<30;w++){await sleep(500);if(d.body.innerText!==before){await settle(fr,CP.includes(p));g=grab(d);break}}
 if(!g)break;pages.push(g);if(known(g))partial=true}
 out[i]={path:p,pages,partial}}finally{fr.remove();say((++done)+' von '+P.length+' Bereichen geladen …')}};
 say('lade '+P.length+' Bereiche gleichzeitig …');
