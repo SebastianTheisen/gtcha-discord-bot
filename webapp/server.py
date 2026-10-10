@@ -424,6 +424,7 @@ class App:
     def _announcement_out(a: Dict) -> Dict:
         return {"id": a["id"], "text": a["text"], "scope": a["scope"], "mention": bool(a["mention"]),
                 "status": a["status"], "posted": a["posted"], "by": a.get("created_by"),
+                "also_new": bool(a.get("also_new")),
                 "at": berlin_time(a["send_at"]).strftime("%d.%m.%Y %H:%M")}
 
     async def api_admin_announce(self, request):
@@ -433,7 +434,7 @@ class App:
         body = await request.json()
         if body.get("cancel"):
             if not await self.bridge.cancel_announcement(int(body["cancel"])):
-                raise web.HTTPBadRequest(text="Nur geplante Ankündigungen lassen sich zurückziehen")
+                raise web.HTTPBadRequest(text="Diese Ankündigung lässt sich nicht mehr zurückziehen")
             logger.info(f"Ankündigung {body['cancel']} von {user['name']} zurückgezogen")
             return web.json_response({"ok": True})
         text = str(body.get("text") or "").strip()
@@ -446,7 +447,8 @@ class App:
             send_at = berlin_to_ts(datetime.strptime(str(body.get("at")), "%Y-%m-%dT%H:%M"))
         except (TypeError, ValueError):
             raise web.HTTPBadRequest(text="Zeitpunkt fehlt")
-        ann_id = await self.bridge.add_announcement(text, send_at, scope, bool(body.get("mention")), user["name"])
+        ann_id = await self.bridge.add_announcement(text, send_at, scope, bool(body.get("mention")), user["name"],
+                                                    also_new=bool(body.get("also_new")))
         logger.info(f"Ankündigung {ann_id} von {user['name']} geplant: {scope}, {body.get('at')}")
         return web.json_response({"ok": True, "id": ann_id})
 

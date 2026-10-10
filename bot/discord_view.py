@@ -203,7 +203,8 @@ class DiscordViewMixin:
     # --- Ankündigungen aus dem Admin-Bereich der App ---
     async def _process_announcements(self):
         """Fällige Ankündigungen einmal in alle laufenden Threads posten (läuft alle 30 s). Jeder gepostete Thread
-        wird sofort gemerkt - nach einem Neustart geht es dort weiter, ohne doppelt zu posten."""
+        wird sofort gemerkt - nach einem Neustart geht es dort weiter, ohne doppelt zu posten. Mit "auch bei neuen
+        Bannern" kommen danach neue Threads dazu, bis der Admin die Ankündigung beendet."""
         try:
             await self.app_bridge.init()
             due = await self.app_bridge.due_announcements(time.time())
@@ -212,9 +213,11 @@ class DiscordViewMixin:
             pids = list(await self.db.get_active_banners())
             for ann in due:
                 posted = list(ann["posted"])
+                before = len(posted)
                 text = ("@everyone\n" if ann.get("mention") else "") + ann["text"]
                 mentions = discord.AllowedMentions(everyone=bool(ann.get("mention")), users=False, roles=False)
-                logger.info(f"[ANKÜNDIGUNG] {ann['id']}: poste in {ann['scope']} ({len(pids)} Banner)")
+                if ann["status"] != "sent":
+                    logger.info(f"[ANKÜNDIGUNG] {ann['id']}: poste in {ann['scope']} ({len(pids)} Banner)")
                 for pid in pids:
                     for thread_data, scope in await self._banner_threads(pid):
                         tid = int(thread_data["thread_id"])
@@ -231,8 +234,11 @@ class DiscordViewMixin:
                             continue
                         posted.append(tid)
                         await self.app_bridge.announcement_progress(ann["id"], posted, done=False)
+                if ann["status"] == "sent" and len(posted) == before:
+                    continue   # "auch bei neuen Bannern": kein neuer Thread dazugekommen
                 await self.app_bridge.announcement_progress(ann["id"], posted, done=True)
-                logger.info(f"[ANKÜNDIGUNG] {ann['id']}: in {len(posted)} Threads gepostet")
+                logger.info(f"[ANKÜNDIGUNG] {ann['id']}: in {len(posted) - before} Threads gepostet "
+                            f"({len(posted)} insgesamt)")
         except Exception as e:
             logger.warning(f"[ANKÜNDIGUNG] nicht abgearbeitet: {e}")
 

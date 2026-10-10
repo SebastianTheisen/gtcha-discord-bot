@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 99;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 100;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -986,7 +986,7 @@ async function showSettings() {
     try {
       await authApi("/api/admin/announce", { text: view.querySelector("#ann-text").value,
         at: view.querySelector("#ann-at").value, scope: view.querySelector("#ann-scope").value,
-        mention: view.querySelector("#ann-mention").checked });
+        mention: view.querySelector("#ann-mention").checked, also_new: view.querySelector("#ann-new").checked });
       haptic();
       showSettings();
     } catch (e) { msg.textContent = "Nicht geplant: " + e.message; }
@@ -1485,11 +1485,13 @@ function adminSection(a) {
 
 // --- Admin: Ankündigung, die der Bot einmal zur eingestellten Zeit in alle laufenden Threads postet ---
 const ANN_SCOPES = { main: "Normale Foren", premium: "Premium-Foren", all: "Alle Foren" };
-const ANN_STATUS = { pending: "geplant", sending: "wird gepostet", sent: "gepostet", cancelled: "zurückgezogen" };
+const ANN_STATUS = { pending: "geplant", sending: "wird gepostet", sent: "gepostet", cancelled: "zurückgezogen", stopped: "beendet" };
+const annActive = (x) => x.also_new && (x.status === "sent" || x.status === "sending");
 function announceSection(a) {
   const rows = (a.announcements || []).map((x) => `<div class="line"><span>${esc(x.at)} · ${ANN_SCOPES[x.scope] || x.scope}
-      · ${ANN_STATUS[x.status] || x.status}${x.posted ? ` (${x.posted} Threads)` : ""}<br><small>${esc(x.text.slice(0, 80))}${x.text.length > 80 ? "…" : ""}</small></span>
-      ${x.status === "pending" ? `<button class="btn" data-ann-cancel="${x.id}">Zurückziehen</button>` : ""}</div>`).join("");
+      · ${ANN_STATUS[x.status] || x.status}${x.posted ? ` (${x.posted} Threads)` : ""}${annActive(x) ? " · läuft für neue Banner" : x.also_new && x.status === "pending" ? " · auch neue Banner" : ""}<br><small>${esc(x.text.slice(0, 80))}${x.text.length > 80 ? "…" : ""}</small></span>
+      ${x.status === "pending" ? `<button class="btn" data-ann-cancel="${x.id}">Zurückziehen</button>`
+        : annActive(x) ? `<button class="btn" data-ann-cancel="${x.id}">Beenden</button>` : ""}</div>`).join("");
   return `<h2>📢 Ankündigung <small>Admin</small></h2>
     <div class="panel">
       <textarea id="ann-text" class="bm-code" maxlength="1900" placeholder="Text der Ankündigung"></textarea>
@@ -1499,7 +1501,8 @@ function announceSection(a) {
           .map(([k, label]) => `<option value="${k}">${label}</option>`).join("")}</select>
       </div>
       <label class="hint"><input type="checkbox" id="ann-mention"> mit @everyone</label>
-      <div class="hint">Wird einmal zur Zeit (deutsche Zeit) in jeden laufenden Thread gepostet.</div>
+      <label class="hint"><input type="checkbox" id="ann-new"> danach auch bei jedem neuen Banner</label>
+      <div class="hint">Wird einmal zur Zeit (deutsche Zeit) in jeden laufenden Thread gepostet – mit Häkchen danach auch in jeden neuen, bis du „Beenden“ tippst.</div>
       <button class="btn primary" id="ann-save">Planen</button>
       <div class="hint" id="ann-msg"></div>
       ${rows ? `<div class="rows">${rows}</div>` : ""}

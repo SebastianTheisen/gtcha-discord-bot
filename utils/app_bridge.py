@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS user_history (
 CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT);
 -- Ankündigungen des Admins: der Bot postet sie einmal zur eingestellten Zeit in alle laufenden Threads
 -- scope: "main" (normale Foren), "premium", "all"; status: pending -> sending -> sent / cancelled
+-- also_new: nach dem Zeitpunkt auch in jeden neuen Thread, bis der Admin sie beendet (status stopped)
 CREATE TABLE IF NOT EXISTS announcements (
     id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT, send_at INTEGER, scope TEXT, mention INTEGER DEFAULT 0,
     created_by TEXT, created_at TEXT, status TEXT DEFAULT 'pending', posted TEXT DEFAULT '[]', sent_at TEXT);
@@ -114,6 +115,10 @@ class AppBridge:
                     await db.execute(f"ALTER TABLE devices ADD COLUMN {column}")
                 except aiosqlite.OperationalError:
                     pass
+            try:   # Ankündigung auch in neuen Bannern (nach dem Zeitpunkt), bis der Admin sie beendet
+                await db.execute("ALTER TABLE announcements ADD COLUMN also_new INTEGER DEFAULT 0")
+            except aiosqlite.OperationalError:
+                pass
             try:   # Push zum Ergebnis automatischer Medaillen - bisherige gelten als erledigt
                 await db.execute("ALTER TABLE auto_claims ADD COLUMN notified INTEGER DEFAULT 0")
                 await db.execute("UPDATE auto_claims SET notified = 1")
@@ -502,11 +507,13 @@ class AppBridge:
 
     # --- Medaillen-Meldungen (App legt an, Bot arbeitet ab) ---
     # --- Ankündigungen (Admin) ---
-    async def add_announcement(self, text: str, send_at: int, scope: str, mention: bool, by: str) -> int:
+    async def add_announcement(self, text: str, send_at: int, scope: str, mention: bool, by: str,
+                               also_new: bool = False) -> int:
         async with aiosqlite.connect(self.db_path) as db:
             cur = await db.execute(
-                "INSERT INTO announcements (text, send_at, scope, mention, created_by, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)", (text, int(send_at), scope, 1 if mention else 0, by, _now()))
+                "INSERT INTO announcements (text, send_at, scope, mention, created_by, created_at, also_new) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)", (text, int(send_at), scope, 1 if mention else 0, by, _now(),
+                                                 1 if also_new else 0))
             await db.commit()
             return cur.lastrowid
 
@@ -520,19 +527,21 @@ class AppBridge:
         return rows
 
     async def cancel_announcement(self, ann_id: int) -> bool:
-        """Nur geplante (noch nicht gestartete) lassen sich zurückziehen."""
+        """Geplante zurückziehen; laufende "auch bei neuen Bannern" beenden (bisherige Posts bleiben)."""
         async with aiosqlite.connect(self.db_path) as db:
-            cur = await db.execute("UPDATE announcements SET status = 'cancelled' WHERE id = ? AND status = 'pending'",
-                                   (ann_id,))
+            cur = await db.execute(
+                "UPDATE announcements SET status = CASE WHEN status = 'pending' THEN 'cancelled' ELSE 'stopped' END "
+                "WHERE id = ? AND (status = 'pending' OR (also_new = 1 AND status IN ('sending', 'sent')))", (ann_id,))
             await db.commit()
             return cur.rowcount > 0
 
     async def due_announcements(self, now: float) -> List[Dict]:
-        """Fällige (auch angefangene, z. B. nach einem Neustart des Bots mitten im Posten)."""
+        """Fällige (auch angefangene, z. B. nach einem Neustart des Bots mitten im Posten) und gepostete mit
+        "auch bei neuen Bannern" (für Threads, die es beim ersten Posten noch nicht gab)."""
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
-            cur = await db.execute("SELECT * FROM announcements WHERE status IN ('pending', 'sending') "
-                                   "AND send_at <= ? ORDER BY id", (int(now),))
+            cur = await db.execute("SELECT * FROM announcements WHERE send_at <= ? AND (status IN ('pending', 'sending') "
+                                   "OR (status = 'sent' AND also_new = 1)) ORDER BY id", (int(now),))
             rows = [dict(r) for r in await cur.fetchall()]
         for r in rows:
             r["posted"] = json.loads(r.get("posted") or "[]")
@@ -540,7 +549,8 @@ class AppBridge:
 
     async def announcement_progress(self, ann_id: int, posted: List[int], done: bool):
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("UPDATE announcements SET posted = ?, status = ?, sent_at = ? WHERE id = ?",
+            await db.execute("UPDATE announcements SET posted = ?, status = ?, "
+                             "sent_at = COALESCE(sent_at, ?) WHERE id = ? AND status != 'stopped'",
                              (json.dumps(posted), "sent" if done else "sending", _now() if done else None, ann_id))
             await db.commit()
 

@@ -318,12 +318,14 @@ function AdminSettings({ a }: { a: any }) {
 
 // Admin: Ankündigung, die der Bot einmal zur eingestellten Zeit (deutsche Zeit) in alle laufenden Threads postet
 const ANN_SCOPES: Record<string, string> = { main: "Normale Foren", premium: "Premium-Foren", all: "Alle Foren" };
-const ANN_STATUS: Record<string, string> = { pending: "geplant", sending: "wird gepostet", sent: "gepostet", cancelled: "zurückgezogen" };
+const ANN_STATUS: Record<string, string> = { pending: "geplant", sending: "wird gepostet", sent: "gepostet", cancelled: "zurückgezogen", stopped: "beendet" };
+const annActive = (x: any) => x.also_new && (x.status === "sent" || x.status === "sending");
 function Announce({ a, reload }: { a: any; reload: () => void }) {
   const [text, setText] = useState("");
   const [at, setAt] = useState("");
   const [scope, setScope] = useState("main");
   const [mention, setMention] = useState(false);
+  const [alsoNew, setAlsoNew] = useState(false);
   const scopes = Object.entries(ANN_SCOPES).filter(([k]) => a.premium || k === "main");
   return (
     <Section id="announce" title="📢 Ankündigung" extra="Admin">
@@ -336,18 +338,19 @@ function Announce({ a, reload }: { a: any; reload: () => void }) {
         </select>
       </div>
       <label class="muted small"><input type="checkbox" checked={mention} onChange={(e) => setMention((e.target as HTMLInputElement).checked)} /> mit @everyone</label>
-      <p class="muted small">Wird einmal zur Zeit (deutsche Zeit) in jeden laufenden Thread gepostet.</p>
+      <label class="muted small"><input type="checkbox" checked={alsoNew} onChange={(e) => setAlsoNew((e.target as HTMLInputElement).checked)} /> danach auch bei jedem neuen Banner</label>
+      <p class="muted small">Wird einmal zur Zeit (deutsche Zeit) in jeden laufenden Thread gepostet – mit Häkchen danach auch in jeden neuen, bis du „Beenden“ tippst.</p>
       <button class="btn primary" onClick={async () => {
-        try { await authApi("api/admin/announce", { text, at, scope, mention }); showToast("Geplant ✓"); haptic(); setText(""); reload(); }
+        try { await authApi("api/admin/announce", { text, at, scope, mention, also_new: alsoNew }); showToast("Geplant ✓"); haptic(); setText(""); reload(); }
         catch (e) { showToast(`Nicht geplant: ${(e as Error).message}`); }
       }}>Planen</button>
       {(a.announcements || []).map((x: any) => (
         <div class="line">
-          <span>{x.at} · {ANN_SCOPES[x.scope] || x.scope} · {ANN_STATUS[x.status] || x.status}{x.posted ? ` (${x.posted} Threads)` : ""}
+          <span>{x.at} · {ANN_SCOPES[x.scope] || x.scope} · {ANN_STATUS[x.status] || x.status}{x.posted ? ` (${x.posted} Threads)` : ""}{annActive(x) ? " · läuft für neue Banner" : x.also_new && x.status === "pending" ? " · auch neue Banner" : ""}
             <br /><small class="muted">{x.text.length > 80 ? x.text.slice(0, 80) + "…" : x.text}</small></span>
-          {x.status === "pending" && <button class="btn" onClick={async () => {
+          {(x.status === "pending" || annActive(x)) && <button class="btn" onClick={async () => {
             try { await authApi("api/admin/announce", { cancel: x.id }); reload(); } catch (e) { showToast((e as Error).message); }
-          }}>Zurückziehen</button>}
+          }}>{x.status === "pending" ? "Zurückziehen" : "Beenden"}</button>}
         </div>
       ))}
     </Section>
