@@ -122,9 +122,16 @@ let poll: number | undefined;
 let pending: number | undefined;
 let retry: number | undefined;
 
+// Nicht während des Scrollens neu zeichnen: iOS verschiebt sonst manchmal die festen Leisten (Kopf/Navigation
+// mitten im Bild), wenn sich die Liste unter dem schwungvoll scrollenden Finger ändert
+let lastScroll = 0;
+window.addEventListener("scroll", () => { lastScroll = Date.now(); }, { passive: true });
+window.addEventListener("touchmove", () => { lastScroll = Date.now(); }, { passive: true });
+
 function scheduleLoad(tick: boolean) {
   clearTimeout(pending);
   pending = window.setTimeout(() => {
+    if (Date.now() - lastScroll < 800) return scheduleLoad(tick);   // erst, wenn das Scrollen zur Ruhe kommt
     if (tick) refreshTick.value++;
     loadBanners();
   }, 300);
