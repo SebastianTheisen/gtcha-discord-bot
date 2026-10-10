@@ -109,7 +109,7 @@ document.addEventListener("touchmove", (e) => {
   touch.dx = t.clientX - touch.x;
   touch.dy = t.clientY - touch.y;
   const page = document.querySelector<HTMLElement>(".page");
-  if (touch.edge && touch.dx > 0 && Math.abs(touch.dx) > Math.abs(touch.dy)) {
+  if (touch.edge && touch.dx > 12 && Math.abs(touch.dx) > Math.abs(touch.dy) * 1.5) {
     if (page) page.style.transform = `translateX(${Math.min(touch.dx, 160)}px)`;
   } else if (touch.top && touch.dy > 0 && touch.dy > Math.abs(touch.dx)) {
     const d = Math.min(touch.dy, 120);
@@ -117,6 +117,15 @@ document.addEventListener("touchmove", (e) => {
     ptr.classList.toggle("ready", d >= 80);
   }
 }, { passive: true });
+// iOS bricht Berührungen ab (Systemgeste, Mitteilung, Anruf): dann nichts auslösen, aber alles zurücksetzen -
+// sonst bleibt die Seite verschoben hängen und reagiert nicht mehr richtig
+document.addEventListener("touchcancel", () => {
+  touch = null;
+  const page = document.querySelector<HTMLElement>(".page");
+  if (page) page.style.transform = "";
+  ptr.style.transform = "";
+  ptr.classList.remove("ready");
+});
 document.addEventListener("touchend", async () => {
   if (!touch) return;
   const { edge, top, dx, dy } = touch;

@@ -16,6 +16,8 @@ export const changedIds = signal<Set<number>>(new Set());
 export const wishBanners = signal<Map<number, string[]>>(new Map());
 // Zähler: erhöht sich bei jedem Live-Update oder "Ziehen zum Aktualisieren" - Seiten laden dann ihre Daten neu
 export const refreshTick = signal(0);
+// nur beim Aktualisieren von Hand (nach unten ziehen): Liste neu sortieren
+export const manualRefresh = signal(0);
 export const route = signal(location.hash.slice(1) || "/");
 
 addEventListener("hashchange", () => {
@@ -112,6 +114,7 @@ export async function loadMe() {
 
 export function refreshAll() {
   refreshTick.value++;
+  manualRefresh.value++;
   return loadBanners();
 }
 
