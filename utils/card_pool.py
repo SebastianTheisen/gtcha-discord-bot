@@ -164,6 +164,18 @@ def claimable_units(pool: Dict, price: Optional[int]) -> List[Dict]:
     return [u for u in units if not price or u["value"] >= price]
 
 
+def many_hits(pool: Optional[Dict], price: Optional[int]) -> bool:
+    """Banner ohne Versand-Hits, bei dem mehr als T1-T3 ab Packpreis drin sind (z. B. die teuerste Karte 5x,
+    Hits bis T50): dann zählen alle Karten ab Packpreis als Hits, nicht nur die Top 3."""
+    return bool(pool) and not pool.get("hits") and len(claimable_units(pool, price)) > len(TIERS)
+
+
+def open_claimable(pool: Dict, price: Optional[int], pulled_keys: Set[str]) -> tuple:
+    """(noch drin, gesamt) der Karten ab Packpreis (Medaille oder erkannt = raus)."""
+    units = claimable_units(pool, price)
+    return sum(1 for u in units if u["key"] not in pulled_keys), len(units)
+
+
 def tier_keys(pool: Dict) -> Dict[str, str]:
     """Zuordnung T1-T50 -> Schlüssel (Platz in der Hit-Liste, nach Wert)."""
     return {unit["tier"]: unit["key"] for unit in medal_units(pool)}

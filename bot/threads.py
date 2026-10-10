@@ -426,6 +426,13 @@ class ThreadsMixin:
                 if all(u['key'] in sure or u['key'] in winners for u in relevant_units(pool, price)):
                     return "hits_out"
             elif not stats['tracked_hits'] and not stats['open_tiers']:
+                # Karten mehrfach / Hits bis T50: erst raus, wenn alle Karten ab Packpreis raus sind
+                pool = await self.db.get_card_pool(row['pack_id'])
+                price = _int(row.get('price_coins')) or None
+                if many_hits(pool, price):
+                    pulled, _, _, _ = await self._pulled_cards(int(thread_data['thread_id']), row['pack_id'], pool)
+                    if open_claimable(pool, price, set(pulled))[0]:
+                        return "endspurt" if thread_data.get('endspurt_sent') else "running"
                 return "hits_out"
         if thread_data.get('endspurt_sent'):
             return "endspurt"

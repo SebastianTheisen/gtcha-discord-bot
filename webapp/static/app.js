@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 108;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 109;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -143,7 +143,7 @@ function lockHtml(info) {
 
 function hitsText(b) {
   if (b.hits_open == null) return "";
-  return b.tracked_hits ? `${b.hits_open}/${b.hits_total} Hits` : `Top 3: ${b.hits_open}`;
+  return b.tracked_hits || b.many_hits ? `${b.hits_open}/${b.hits_total} Hits` : `Top 3: ${b.hits_open}`;
 }
 
 function flags(b) {
