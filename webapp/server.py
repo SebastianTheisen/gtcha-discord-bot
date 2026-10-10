@@ -210,6 +210,9 @@ class App:
             urls = await self.view.image_urls()
             if not urls:
                 return   # keine aktiven Banner gelesen - lieber nichts löschen
+            # Kartenbilder aus "Mein Verlauf" aller Personen ebenfalls dauerhaft auf dem VPS
+            urls += [u if u.startswith("http") else "https://gtchaxonline.com" + u
+                     for u in await self.bridge.history_images() if u.startswith(("http", "/"))]
             loaded = await self.images.warm(urls)
             removed = self.images.cleanup(urls)
             if loaded or removed:

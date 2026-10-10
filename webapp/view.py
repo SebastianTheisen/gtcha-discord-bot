@@ -355,14 +355,15 @@ class BannerView:
         return result
 
     async def image_urls(self) -> List[str]:
-        """Alle Bilder der aktiven Banner: Banner zuerst, dann Hits, dann alle übrigen Karten."""
+        """Alle Bilder der aktiven und archivierten Banner: Banner zuerst, dann Hits, dann alle übrigen Karten."""
         rows = list((await self.db.get_active_banners()).values()) + list((await self.db.get_store_banners()).values())
         banners, hits, cards = [], [], []
-        # Archiv: Bannerbild und Hits behalten (übrige Karten lädt die Detailseite bei Bedarf)
+        # Archiv: alles behalten (Platz ist da) - die Detailseite soll auch dort sofort Bilder zeigen
         for row in (await self.db.get_ended_banners()).values():
             pool = json.loads(row['card_pool']) if row.get('card_pool') else {}
             banners.append(row.get('image_url'))
-            hits += [h.get('image') for h in pool.get('hits') or []]
+            hits += [h.get('image') for h in pool.get('hits') or []] + [c.get('image') for c in pool.get('top') or []]
+            cards += [c.get('image') for c in pool.get('cards') or []]
         for row in rows:
             banners.append(row.get('image_url'))
             pool = json.loads(row['card_pool']) if row.get('card_pool') else {}

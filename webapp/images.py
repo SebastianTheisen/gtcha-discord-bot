@@ -20,7 +20,9 @@ from loguru import logger
 
 ALLOWED_HOST = "gtchaxonline.com"
 MAX_BYTES = 8 * 1024 * 1024
-KEEP_UNUSED_SECONDS = 600   # gerade angesehene Bilder nicht verwaister Banner kurz behalten
+# Bilder, die zu keinem Banner/Verlauf mehr gehören, erst nach so langer Zeit ohne Abruf löschen (Platz ist da)
+KEEP_UNUSED_SECONDS = 30 * 24 * 3600
+TOUCH_SECONDS = 24 * 3600   # Abruf höchstens einmal am Tag an der Datei vermerken
 TIMEOUT = aiohttp.ClientTimeout(total=30)
 # Bildtyp selbst festlegen: im schlanken Container kennt Python ".webp" nicht (keine /etc/mime.types),
 # und mit "nosniff" zeigt Safari Dateien ohne Bildtyp nicht an
@@ -91,12 +93,21 @@ class ImageCache:
         path = self.dir / cache_name(url)
         return path if path.exists() else None
 
+    def touch(self, path: Path):
+        """Abruf vermerken (Änderungszeit), damit cleanup gerade genutzte Bilder behält."""
+        try:
+            if time.time() - path.stat().st_mtime > TOUCH_SECONDS:
+                os.utime(path)
+        except OSError:
+            pass
+
     async def get(self, url: str) -> Optional[Path]:
         """Pfad zur lokalen Kopie; lädt das Bild beim ersten Mal von GTCHA."""
         if not allowed(url):
             return None
         path = self.cached(url)
         if path:
+            self.touch(path)
             return path
         lock = self._locks.setdefault(url, asyncio.Lock())
         async with lock:
