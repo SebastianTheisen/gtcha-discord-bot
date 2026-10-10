@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 103;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 104;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -1668,8 +1668,11 @@ async function showUsers() {
         const a = h.sync.accounts[Number(btn.dataset.acc)];
         if (await ask("Konto zurücksetzen?", `${esc(a.label)} wird vergessen und muss neu übertragen werden.`,
           ["Abbrechen", "Zurücksetzen"]) !== "Zurücksetzen") return;
-        await authApi("/api/admin/accounts", { user_id: u.user_id, remove: a.account });
-        haptic(); showUsers();
+        try {
+          await authApi("/api/admin/accounts", { user_id: u.user_id, remove: a.account });
+          haptic(); showUsers();
+          ask("Zurückgesetzt ✓", `${esc(a.label)} muss neu übertragen werden.`, ["OK"]);
+        } catch (e) { ask("Nicht zurückgesetzt", esc(e.message), ["OK"]); }
       }));
       body.querySelector("[data-block]")?.addEventListener("click", async (e) => {
         const block = e.target.dataset.block === "1";

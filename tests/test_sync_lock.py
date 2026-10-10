@@ -121,3 +121,21 @@ def test_reset_removes_legacy_account_for_good(tmp_path):
         assert sync_rule(await bridge2.sync_state("7"))["reason"] == "sync"
 
     asyncio.run(run())
+
+
+def test_reset_account_forgets_its_data(tmp_path):
+    import asyncio
+
+    from utils.app_bridge import AppBridge
+
+    async def run():
+        bridge = AppBridge(str(tmp_path / "w.db"))
+        await bridge.init()
+        await bridge.mark_synced("7", "id:1")
+        await bridge.set_history("7", {"shipped": {"items": [{"name": "A"}], "gap": False}}, "id:1")
+        await bridge.set_history("7", {"shipped": {"items": [{"name": "B"}], "gap": False}}, "id:2")
+        await bridge.remove_account("7", "id:1")
+        assert [a["account"] for a in (await bridge.sync_state("7"))["accounts"]] == []
+        assert [c["name"] for c in (await bridge.get_history("7"))["shipped"]["items"]] == ["B"]   # nur Konto 1 weg
+
+    asyncio.run(run())

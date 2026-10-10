@@ -483,9 +483,17 @@ class AppBridge:
             await db.commit()
 
     async def remove_account(self, user_id: str, account: str) -> None:
+        """Konto zurücksetzen: Pflicht-Markierung und übertragene Daten dieses Kontos vergessen
+        (die Person muss es neu übertragen)."""
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("DELETE FROM sync_accounts WHERE discord_user_id = ? AND account = ?",
                              (str(user_id), account))
+            if account == "default":   # altes Lesezeichen ohne Kennung: Bereiche ohne Zusatz im Namen
+                await db.execute("DELETE FROM user_history WHERE discord_user_id = ? AND area NOT LIKE '%@%'",
+                                 (str(user_id),))
+            else:
+                await db.execute("DELETE FROM user_history WHERE discord_user_id = ? AND area LIKE ?",
+                                 (str(user_id), f"%@{account}"))
             await db.commit()
 
     async def last_syncs(self) -> Dict[str, str]:

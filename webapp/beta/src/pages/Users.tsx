@@ -147,9 +147,13 @@ function UserCard({ u, all, onChange }: { u: any; all: any[]; onChange: () => vo
                   {a.gtcha_id ? <b> · ID {a.gtcha_id}</b> : null}</span>
                   <button class="btn small-btn" onClick={async () => {
                     if (await ask("Konto zurücksetzen?", `${a.label} wird vergessen und muss neu übertragen werden.`, ["Abbrechen", "Zurücksetzen"]) !== "Zurücksetzen") return;
-                    await authApi("api/admin/accounts", { user_id: u.user_id, remove: a.account });
-                    haptic();
-                    onChange();
+                    try {
+                      await authApi("api/admin/accounts", { user_id: u.user_id, remove: a.account });
+                      setH(await authApi(`api/admin/user/${u.user_id}`));   // aufgeklappte Ansicht neu laden
+                      showToast("Zurückgesetzt ✓ – muss neu übertragen werden");
+                      haptic();
+                      onChange();
+                    } catch (e) { showToast(`Nicht zurückgesetzt: ${(e as Error).message}`); }
                   }}>zurücksetzen</button></div>
               ))}
               {h.sync?.missing ? <div class="line muted small">❌ {h.sync.missing} Konto/Konten noch nie übertragen</div> : null}
