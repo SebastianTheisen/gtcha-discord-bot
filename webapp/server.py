@@ -214,6 +214,9 @@ class App:
             urls += [u if u.startswith("http") else "https://gtchaxonline.com" + u
                      for u in await self.bridge.history_images() if u.startswith(("http", "/"))]
             loaded = await self.images.warm(urls)
+            made = await asyncio.get_running_loop().run_in_executor(None, self.images.prepare, urls)
+            if made:
+                logger.info(f"Bilder: {made} verkleinerte Kopien vorab erzeugt")
             removed = self.images.cleanup(urls)
             if loaded or removed:
                 count, size = self.images.stats()

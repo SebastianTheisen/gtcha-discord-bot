@@ -22,7 +22,8 @@ ALLOWED_HOST = "gtchaxonline.com"
 MAX_BYTES = 8 * 1024 * 1024
 # Bilder, die zu keinem Banner/Verlauf mehr gehören, erst nach so langer Zeit ohne Abruf löschen (Platz ist da)
 KEEP_UNUSED_SECONDS = 30 * 24 * 3600
-TOUCH_SECONDS = 24 * 3600   # Abruf höchstens einmal am Tag an der Datei vermerken
+TOUCH_SECONDS = 24 * 3600
+PREPARE_WIDTHS = (320, 640)   # Karten 320, Banner 640 - die Größen, die beide Apps anfordern   # Abruf höchstens einmal am Tag an der Datei vermerken
 TIMEOUT = aiohttp.ClientTimeout(total=30)
 # Bildtyp selbst festlegen: im schlanken Container kennt Python ".webp" nicht (keine /etc/mime.types),
 # und mit "nosniff" zeigt Safari Dateien ohne Bildtyp nicht an
@@ -152,6 +153,25 @@ class ImageCache:
         tmp.write_bytes(data)
         tmp.replace(path)
         return path
+
+    def prepare(self, urls, widths=PREPARE_WIDTHS) -> int:
+        """Verkleinerte Kopien im Voraus erzeugen (sonst entstehen sie erst beim ersten Abruf - spürbare
+        Verzögerung beim Öffnen eines Banners). Läuft im Hintergrund-Thread."""
+        made = 0
+        for url in dict.fromkeys(urls):
+            path = self.cached(url) if url and allowed(url) else None
+            if not path:
+                continue
+            for width in widths:
+                if path.with_name(f"{path.stem}.w{width}.webp").exists():
+                    continue
+                try:
+                    self.resized(path, width)
+                    made += 1
+                except Exception as e:
+                    logger.debug(f"Bild nicht verkleinert ({url}): {e}")
+                    break
+        return made
 
     def repair(self) -> int:
         """Abgeschnittene Bilder (und ihre verkleinerten Kopien) löschen, damit sie neu geladen werden."""
