@@ -83,6 +83,20 @@ def parse_coins(pages: List[Dict]) -> List[Dict]:
     return events
 
 
+def _without_blank_lines(lines: List[str]) -> bool:
+    """Ab der ersten Kopfzeile (Datum/Sendungsnummer) keine einzige Leerzeile bis zum Seitenende?"""
+    started = False
+    for raw in lines:
+        line = raw.strip()
+        if line.startswith("Xero Place"):
+            break
+        if HEADER.match(line) or TRACKING.match(line) or (DATE.search(line) and len(line) <= 60):
+            started = True
+        elif started and not line:
+            return False
+    return started
+
+
 def parse_cards(pages: List[Dict]) -> List[Dict]:
     """Karten aus pending/shipped: [{date, name, rarity, number, tracking, image}]."""
     """Jeder Artikel ist ein durch Leerzeilen getrennter Block (meist Name, Rarität, Nummer);
@@ -91,12 +105,23 @@ def parse_cards(pages: List[Dict]) -> List[Dict]:
     for page in _unique(pages):
         images = [src for src in page.get("images") or [] if "/card/" in (src or "")]
         items, block, date, tracking, started = [], None, None, None, False
+        raw_lines = (page.get("text") or "").split("\n")
+        # Chrome (Android) liefert den Text ohne Leerzeilen zwischen den Artikeln: dann zählt jeder Artikel als drei
+        # Zeilen (Name, Rarität, Nummer) direkt nach den Kopfzeilen
+        no_blanks = _without_blank_lines(raw_lines)
 
         def close():
-            if block:
+            if not block:
+                return
+            if no_blanks and len(block) > 3:
+                for i in range(0, len(block) - len(block) % 3, 3):
+                    items.append({"date": date, "tracking": tracking, "lines": block[i:i + 3]})
+                if len(block) % 3:
+                    items.append({"date": date, "tracking": tracking, "lines": block[len(block) - len(block) % 3:]})
+            else:
                 items.append({"date": date, "tracking": tracking, "lines": list(block)})
 
-        for raw in (page.get("text") or "").split("\n"):
+        for raw in raw_lines:
             line = raw.strip()
             if line.startswith("Xero Place"):
                 break
@@ -104,7 +129,7 @@ def parse_cards(pages: List[Dict]) -> List[Dict]:
             if header:
                 started = True
                 close()
-                block = None
+                block = [] if no_blanks else None
                 if TRACKING.match(line):
                     tracking = re.split(r"[:：]", line, 1)[-1].strip()
                 elif DATE.search(line):
