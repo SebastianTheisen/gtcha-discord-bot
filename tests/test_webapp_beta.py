@@ -64,7 +64,7 @@ def test_beta_bookmarklet_matches_live_app():
     def const(src, name):
         return re.search(rf"^(?:export )?const {name} = (.+?);", src, re.M).group(1).split("  //")[0].strip()
 
-    for name in ("SYNC_CODE", "SYNC_VERSION"):
+    for name in ("SYNC_CODE", "DIAG_CODE", "SYNC_VERSION"):
         assert const(live, name) == const(beta, name), name
 
 

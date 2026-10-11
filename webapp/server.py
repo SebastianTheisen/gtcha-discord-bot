@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Optional
 
+import aiohttp
 import aiosqlite
 from aiohttp import web
 from loguru import logger
@@ -67,6 +68,24 @@ a.alt{{background:#232a40;color:#e8ebf5}}h1{{color:{dark_color}}}td,th{{border-t
 AREA_NAMES = {"undecided-detail": "Gacha – unentschieden", "pending-detail": "Gacha – angefordert",
               "shipped-detail": "Versand", "downloaded-detail": "Downloads", "buy-point-history": "Münzen",
               "purchase-history": "Käufe", "ticket-history": "Tickets", "change-member": "Kontoseite (Rang, ¥)"}
+
+
+async def post_admin_file(path, content: str) -> bool:
+    """Datei über den Bot-Zugang in den Admin-Kanal von Discord (DISCORD_TOKEN, ADMIN_CHANNEL_ID aus .env)."""
+    token, channel = os.getenv("DISCORD_TOKEN", ""), os.getenv("ADMIN_CHANNEL_ID", "")
+    if not token or not channel.isdigit():
+        return False
+    try:
+        form = aiohttp.FormData()
+        form.add_field("payload_json", json.dumps({"content": content}))
+        form.add_field("files[0]", Path(path).read_bytes(), filename=Path(path).name, content_type="text/plain")
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+            async with session.post(f"https://discord.com/api/v10/channels/{channel}/messages", data=form,
+                                    headers={"Authorization": f"Bot {token}"}) as r:
+                return r.status < 300
+    except Exception as e:
+        logger.warning(f"Datei nicht nach Discord: {e}")
+        return False
 
 
 def import_result_page(lines: list, ok: bool = True, report: list = None) -> web.Response:
@@ -495,6 +514,29 @@ class App:
             (folder / f"{user['user_id']}-{path}.txt").write_text(text, encoding="utf-8")
         except Exception as e:
             logger.debug(f"Seite nicht abgelegt: {e}")
+
+    async def api_import_diag(self, request):
+        """Diagnose-Lesezeichen (nur Admins): Aufbau der Verlaufs-Daten der Seite - als Datei in data/ und in den
+        Admin-Kanal von Discord, damit "Alles übertragen" diese Daten künftig direkt lesen kann."""
+        form = await request.post()
+        try:
+            data = json.loads(form.get("d", ""))
+        except ValueError:
+            raise web.HTTPBadRequest(text="Ungültige Daten")
+        user = await self.bridge.device(str(data.get("t", "")))
+        if not user or not is_admin(user["user_id"]):
+            return import_result_page(["⚠️ Die Diagnose ist nur für Admins."], ok=False)
+        areas = data.get("areas") if isinstance(data.get("areas"), dict) else {}
+        text = f"GTCHA Diagnose {datetime.now():%d.%m.%Y %H:%M} von {user['name']}\n"
+        for area, info in areas.items():
+            text += f"\n=== {str(area)[:60]}\n{json.dumps(info, ensure_ascii=False, indent=1)[:20000]}\n"
+        path = Path(self.data_dir) / "api_diag.txt"
+        path.write_text(text, encoding="utf-8")
+        sent = await post_admin_file(path, "🔎 Diagnose: Verlaufs-Daten der Seite (api_diag)")
+        logger.info(f"Diagnose von {user['name']}: {len(areas)} Bereiche, Discord {'ok' if sent else 'nicht gesendet'}")
+        lines = [f"✅ Diagnose übertragen: {len(areas)} Bereiche."]
+        lines.append("Die Datei liegt im Admin-Kanal von Discord." if sent else "Die Datei liegt auf dem Server in data/api_diag.txt.")
+        return import_result_page(lines)
 
     async def api_import_form(self, request):
         """"Alles übertragen"-Lesezeichen: Formular-POST von gtchaxonline.com (kein CORS nötig).
@@ -1136,6 +1178,7 @@ def make_app(app: App) -> web.Application:
         web.get("/api/stream", app.api_stream),
         web.get("/api/accuracy", app.api_accuracy),
         web.post("/api/import-form", app.api_import_form),
+        web.post("/api/import-diag", app.api_import_diag),
         web.post("/api/medal", app.api_medal),
         web.get(r"/api/medal/{id:\d+}", app.api_medal_status),
         web.get("/api/push/key", app.api_push_key),

@@ -462,3 +462,38 @@ def test_merge_coins_replaces_covered_time_span():
     merged, ok = merge_newest_first(old, new, key)
     assert ok and [(x["t"][-5:], x["amount"]) for x in merged] == [
         ("14:12", -88), ("14:10", -88), ("14:10", -88), ("14:05", -88), ("14:05", -88), ("09:00", 100)]
+
+
+def test_diagnose_only_for_admins(tmp_path, monkeypatch):
+    """Diagnose-Lesezeichen: nur Admins; Ergebnis landet in data/api_diag.txt (Discord ohne Zugang übersprungen)."""
+    import json as _json
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from database.db import Database
+    from webapp.server import App, make_app
+    monkeypatch.delenv("DISCORD_TOKEN", raising=False)
+
+    async def run():
+        await Database(str(tmp_path / "gtcha_bot.db")).init()
+        app = App(str(tmp_path / "gtcha_bot.db"), str(tmp_path), "x")
+        await app.bridge.init()
+        token = (await app.bridge.redeem_code(await app.bridge.create_code(42, "Basti")))["token"]
+        web_app = make_app(app)
+        web_app.on_startup.clear()
+        web_app.on_cleanup.clear()
+        client = TestClient(TestServer(web_app))
+        await client.start_server()
+        try:
+            body = {"t": token, "areas": {"history/shipped/1": {"status": 200, "shape": {"list": [{"id": "int"}]}}}}
+            monkeypatch.setenv("APP_ADMIN_IDS", "7")
+            res = await client.post("/api/import-diag", data={"d": _json.dumps(body)})
+            assert "nur für Admins" in await res.text() and not (tmp_path / "api_diag.txt").exists()
+            monkeypatch.setenv("APP_ADMIN_IDS", "42")
+            res = await client.post("/api/import-diag", data={"d": _json.dumps(body)})
+            assert "1 Bereiche" in await res.text()
+            assert "history/shipped/1" in (tmp_path / "api_diag.txt").read_text()
+        finally:
+            await client.close()
+
+    asyncio.run(run())
