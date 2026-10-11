@@ -217,7 +217,7 @@ def test_banner_fields_from_pack_list_after_site_redesign(tmp_path, env):
     b = fill_from_api(ScrapedBanner(pack_id=7, category="Pokémon", current_packs=127), item)
     assert (b.title, b.price_coins, b.total_packs, b.entries_per_day, b.sale_end_date) == \
         (None, 2500, 500, 30, "2026/10/31 16:00")          # interner Name ist kein Titel
-    assert b.image_url == "https://gtchaxonline.com/pack/7/1.webp" and api_image({"image": []}) is None
+    assert b.image_url == "https://gtchaxonline.com/pack/7/1.webp?v=2" and api_image({"image": []}) is None
     assert fill_from_api(ScrapedBanner(pack_id=7, category="X"), {**item, "max_buy_count": 0}).entries_per_day is None
 
     async def run():
@@ -228,6 +228,9 @@ def test_banner_fields_from_pack_list_after_site_redesign(tmp_path, env):
         assert (row["title"], row["sale_end_date"]) == ("Titel", "2026/10/31 16:00")
         assert await db.clear_title_if(7, "Titel") and (await db.get_banner(7))["title"] is None
         assert not await db.clear_title_if(7, None)
+        assert await db.set_image(7, "https://gtchaxonline.com/pack/7/1.webp?v=3")      # Seite hat das Bild getauscht
+        assert not await db.set_image(7, "https://gtchaxonline.com/pack/7/1.webp?v=3")
+        assert await db.set_image(7, None) and (await db.get_banner(7))["image_url"] is None
 
     asyncio.run(run())
 

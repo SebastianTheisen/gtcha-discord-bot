@@ -650,6 +650,16 @@ class Database:
             await db.commit()
             return changed > 0
 
+    async def set_image(self, pack_id: int, image_url: Optional[str]) -> bool:
+        """Bannerbild wie auf der Seite setzen (None = Seite zeigt kein eigenes Bild). True bei Änderung."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("UPDATE banners SET image_url = ? WHERE pack_id = ? AND image_url IS NOT ?",
+                                   (image_url, pack_id, image_url))
+            await db.commit()
+            if cur.rowcount:
+                logger.info(f"[BILD] {pack_id}: Bannerbild {'neu: ' + image_url if image_url else 'entfernt (Seite zeigt keins)'}")
+            return cur.rowcount > 0
+
     async def clear_title_if(self, pack_id: int, title: Optional[str]) -> bool:
         """Titel entfernen, wenn er genau dieser Text ist (interner Name aus pack/list, versehentlich übernommen)."""
         if not title:
