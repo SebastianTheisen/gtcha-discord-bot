@@ -455,4 +455,8 @@ with open(OUT, "w", encoding="utf-8") as out:
         asyncio.run(main())
     finally:
         sys.stdout = stdout
-post_to_discord(OUT)
+# automatisch (Bot, täglich): nur bei Problemen in den Admin-Kanal
+if not __import__("os").getenv("GT_AUTO") or any(r[1] in ("❌", "⚠️") for r in results):
+    post_to_discord(OUT)
+else:
+    print("Alles in Ordnung - nichts gesendet.")

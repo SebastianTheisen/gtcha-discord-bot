@@ -27,6 +27,23 @@ class MonitoringMixin:
             f"Prüfen: `docker restart gtcha-tor` und danach die Pack-Zahlen mit der Seite vergleichen."
         )
 
+    async def _run_check(self, script: str):
+        """tools/site_check.py bzw. api_check.py automatisch ausführen - die Werkzeuge melden sich selbst im
+        Admin-Kanal, im automatischen Lauf (GT_AUTO) nur bei Problemen oder Änderungen."""
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools", script)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, path, env={**os.environ, "GT_AUTO": "1"},
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=1800)
+            tail = out.decode(errors="replace").strip().splitlines()[-1:] or [""]
+            logger.info(f"[PRÜFUNG] {script} fertig (Code {proc.returncode}): {tail[0][:200]}")
+        except asyncio.TimeoutError:
+            proc.kill()
+            logger.warning(f"[PRÜFUNG] {script} nach 30 Min abgebrochen")
+        except Exception as e:
+            logger.warning(f"[PRÜFUNG] {script} fehlgeschlagen: {e}")
+
     async def _backup_database(self):
         try:
             target = await asyncio.to_thread(backup_database, self.db.db_path)

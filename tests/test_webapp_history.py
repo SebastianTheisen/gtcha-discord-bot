@@ -1,6 +1,8 @@
 import asyncio
 from datetime import datetime
 
+import pytest
+
 from utils.app_bridge import AppBridge
 from webapp.history import (build_history, parse_card_tiles, ingest, merge_newest_first, parse_cards, parse_coins, parse_member, profile,
                             plan_claims)
@@ -152,7 +154,7 @@ def test_bridge_latest_sync_and_auto_claims(tmp_path):
         assert await bridge.auto_claim_keys("42") == {"10@2026-09-28#0"}
         claims = await bridge.auto_claims("42")
         assert claims[0]["status"] == "pending" and claims[0]["tier"] == "T2"
-        assert [r["action"] for r in await bridge.pending()] == ["claim"]
+        assert [r["action"] for r in await bridge.pending()] == ["auto_claim"]
 
     asyncio.run(run())
 
@@ -626,3 +628,94 @@ def test_old_card_with_site_value_counts_in_balance():
     summary = {"since": "2026-01-01", "banners": [], "total": {"balance": -1000}}
     add_hits(summary, [{"date": "2026-05-01", "card_id": "9", "price": 45980}], {})
     assert summary["total"]["hits_value"] == 45980 and summary["total"]["balance_with_hits"] == 44980
+
+
+def test_plan_pull_claims_from_purchase_details():
+    """Kauf-Details: gezogene meldbare Karte -> Medaille; fremde Medaille -> geplant als Ersatz (Bot entscheidet);
+    eigene -> nur bestätigen; Banner über die Karten-IDs, bei mehreren der beim Kauf zuletzt gestartete."""
+    from webapp.history import plan_pull_claims, pull_banner
+    units = [{"key": "1", "tier": "T1"}, {"key": "2", "tier": "T2"}]
+    pull = {"hid": 7, "t": "2026-10-12 05:10", "cards": [{"card_id": "1", "num": 1}, {"card_id": "9", "num": 3}]}
+    cmap = {"1": [(100, 1000), (200, 1_900_000_000)], "9": [(100, 1000), (200, 1_900_000_000)]}
+    assert pull_banner(pull, cmap) == 100          # 200 startete erst nach dem Kauf
+    free = plan_pull_claims([pull], cmap, {100: {"units": units, "medals": {}}}, "42", set())
+    assert [(p["tier"], p["replace"], p["confirm"]) for p in free] == [("T1", False, False)]
+    taken = plan_pull_claims([pull], cmap, {100: {"units": units, "medals": {"T1": 7}}}, "42", set())
+    assert [(p["tier"], p["replace"]) for p in taken] == [("T1", True)]
+    mine = plan_pull_claims([pull], cmap, {100: {"units": units, "medals": {"T1": "42"}}}, "42", set())
+    assert mine[0]["confirm"] and not plan_pull_claims([pull], cmap, {100: {"units": units, "medals": {}}}, "42",
+                                                       {"pull:7:1:0"})
+
+
+def test_outdated_bookmarklet_flag(tmp_path):
+    import json as _json
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from database.db import Database
+    from webapp.server import BOOKMARKLET_VERSION, App, make_app
+
+    async def run():
+        await Database(str(tmp_path / "gtcha_bot.db")).init()
+        app = App(str(tmp_path / "gtcha_bot.db"), str(tmp_path), "x")
+        await app.bridge.init()
+        token = (await app.bridge.redeem_code(await app.bridge.create_code(42, "Basti")))["token"]
+        web_app = make_app(app)
+        web_app.on_startup.clear()
+        web_app.on_cleanup.clear()
+        client = TestClient(TestServer(web_app))
+        await client.start_server()
+        try:
+            h = {"X-Device-Token": token}
+            assert not (await (await client.get("/api/me", headers=h)).json())["bookmarklet_outdated"]   # nie benutzt
+            await client.post("/api/import-form", data={"d": _json.dumps({"t": token, "v": 3, "pages": []})})
+            assert (await (await client.get("/api/me", headers=h)).json())["bookmarklet_outdated"]
+            await client.post("/api/import-form", data={"d": _json.dumps({"t": token, "v": BOOKMARKLET_VERSION, "pages": []})})
+            assert not (await (await client.get("/api/me", headers=h)).json())["bookmarklet_outdated"]
+        finally:
+            await client.close()
+
+    asyncio.run(run())
+
+
+def test_admin_forums(tmp_path, monkeypatch):
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from database.db import Database
+    from webapp.server import App, make_app
+    monkeypatch.setenv("APP_ADMIN_IDS", "42")
+    monkeypatch.setenv("CHANNEL_MIX", "111111111111111111")
+
+    async def run():
+        await Database(str(tmp_path / "gtcha_bot.db")).init()
+        app = App(str(tmp_path / "gtcha_bot.db"), str(tmp_path), "x")
+        await app.bridge.init()
+        token = (await app.bridge.redeem_code(await app.bridge.create_code(42, "Basti")))["token"]
+        web_app = make_app(app)
+        web_app.on_startup.clear()
+        web_app.on_cleanup.clear()
+        client = TestClient(TestServer(web_app))
+        await client.start_server()
+        try:
+            h = {"X-Device-Token": token}
+            res = await client.post("/api/admin/forums", headers=h,
+                                    json={"forums": {"Yu-Gi-Oh!": {"main": "222222222222222222", "premium": ""}}})
+            forums = {f["name"]: f for f in (await res.json())["forums"]}
+            assert forums["Yu-Gi-Oh!"]["main"] == "222222222222222222" and forums["MIX"]["main"] == "111111111111111111"
+            assert (await client.post("/api/admin/forums", headers=h, json={"forums": {"X": {"main": "abc"}}})).status == 400
+            assert await app.bridge.forum_ids() == {"Yu-Gi-Oh!": {"main": "222222222222222222"}}
+        finally:
+            await client.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.no_legacy
+def test_legacy_text_off_keeps_stored_history():
+    """Alte Text-Wege abgeschaltet: Lauf ohne Daten der Seite (altes Lesezeichen) ändert den gespeicherten Stand nicht."""
+    from webapp.history import ingest
+    stored = {"coins": {"items": [{"t": "2026-10-01 10:00", "amount": -88, "note": "Kaufen", "id": 1}]}}
+    changed = ingest(stored, [{"path": "buy-point-history", "pages": [{"text": "11.10.2026\nKaufen\n10:00\n−88"}]},
+                              {"path": "pending-detail", "pages": [{"text": "x"}]}])
+    assert "coins" not in changed or changed["coins"]["items"] == stored["coins"]["items"]
+    assert "pending" not in changed

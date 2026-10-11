@@ -206,7 +206,7 @@ function Overview({ b }: { b: BannerDetail }) {
 }
 
 const STATE_ICON: Record<Hit["state"], string> = { open: "🟢", pulled: "✅", unsure: "❓", maybe: "❔" };
-const VIA: Record<string, string> = { discord: "💬", app: "📱", lesezeichen: "🔖" };
+const VIA: Record<string, string> = { discord: "💬", app: "📱", lesezeichen: "🔖", auto: "🔖", pull: "🎰" };
 
 // Unter der Karte: wer hat sie, wann und wie (Medaille aus Discord/App/Lesezeichen) oder wann verschickt
 function originLines(units: Hit[], meId?: string): string[] {

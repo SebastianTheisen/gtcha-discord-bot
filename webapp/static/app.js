@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 129;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 130;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -497,7 +497,7 @@ const unitsOf = (b, card) => (b.hits || []).filter((h) => h.key === card.id || h
 
 // Unter der Karte: wer hat sie, wann und wie (Medaille aus Discord/App/Lesezeichen) oder wann verschickt
 // kurz, weil die Kachel schmal ist: Platz nur bei mehreren Exemplaren, Weg als Symbol (💬 Discord, 📱 App, 🔖 Lesezeichen)
-const VIA = { discord: "💬", app: "📱", lesezeichen: "🔖" };
+const VIA = { discord: "💬", app: "📱", lesezeichen: "🔖", auto: "🔖", pull: "🎰" };
 const shortTime = (t) => new Date(t * 1000).toLocaleString("de-DE",
   { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).replace(",", "");
 function originLines(units, meId) {
@@ -1031,6 +1031,16 @@ async function showSettings() {
       haptic();
     } catch (e) { msg.textContent = "Nicht gespeichert: " + e.message; }
   });
+  view.querySelector("#forum-save")?.addEventListener("click", async () => {
+    const msg = view.querySelector("#forum-msg");
+    const forums = {};
+    view.querySelectorAll(".forum-row").forEach((r) => {
+      forums[r.dataset.cat] = { main: r.querySelector('[data-kind="main"]').value.trim(),
+                                premium: r.querySelector('[data-kind="premium"]').value.trim() };
+    });
+    try { await authApi("/api/admin/forums", { forums }); msg.textContent = "Gespeichert ✓ – der Bot übernimmt es in ≤ 1 Minute"; haptic(); }
+    catch (e) { msg.textContent = "Nicht gespeichert: " + e.message; }
+  });
   view.querySelector("#ann-save")?.addEventListener("click", async () => {
     const msg = view.querySelector("#ann-msg");
     try {
@@ -1465,7 +1475,7 @@ function historySection(h) {
   return `<h2>📊 Mein Verlauf <small>Stand ${esc(d ? d.split("-").reverse().join(".") + " " + (tm || "") : "–")}</small></h2>
     <div class="stats hist-stats">
       ${m.spent_month_yen != null ? stat("Ausgaben diesen Monat", num(m.spent_month_yen) + " ¥", "laut Kontoseite") : ""}
-      ${m.coins != null ? stat("Coin-Stand", num(m.coins) + " Coins") : ""}
+      ${m.coins != null ? stat("Coin-Stand", num(m.coins) + " Coins", m.tickets != null ? `🎟️ ${num(m.tickets)} Tickets` : "") : ""}
       ${stat("Bilanz inkl. Hits", signed(t.balance_with_hits ?? t.balance) + " Coins",
         `${num(t.spent)} rein · ${num(t.returned)} umgewandelt${t.hits ? ` · ${num(t.hits_value)} in ${t.hits} Hits` : ""}`)}
       ${t.hits ? stat("Nur Coins", signed(t.balance) + " Coins", "ohne angeforderte/verschickte Karten") : ""}
@@ -1508,7 +1518,24 @@ function adminSection(a) {
       <div class="hint">Admin: ${(a.admins || []).map((x) => esc(x.name || "–")).join(", ") || "–"}</div>
       <div class="hint" id="admin-msg"></div>
     </div>
+    ${forumSection(a)}
     ${announceSection(a)}`;
+}
+
+// --- Admin: Discord-Foren je Kategorie (der Bot übernimmt sie innerhalb einer Minute) ---
+function forumSection(a) {
+  const rows = (a.forums || []).map((f) => `<div class="forum-row" data-cat="${esc(f.name)}">
+      <b>${esc(f.name)}</b>
+      <input class="code-input plain" inputmode="numeric" data-kind="main" value="${esc(f.main || "")}" placeholder="Forum-ID" aria-label="${esc(f.name)} Forum">
+      <input class="code-input plain" inputmode="numeric" data-kind="premium" value="${esc(f.premium || "")}" placeholder="Premium-ID" aria-label="${esc(f.name)} Premium">
+    </div>`).join("");
+  return `<h2>💬 Discord-Foren <small>Admin</small></h2>
+    <div class="panel">${rows}
+      <div class="hint">Kanal-ID des Forums je Kategorie (Discord: Rechtsklick aufs Forum → ID kopieren). Leer = kein Forum.
+        Neu eingetragen: laufende Banner der Kategorie werden dort innerhalb einer Minute nachgepostet.</div>
+      <button class="btn primary" id="forum-save">Foren speichern</button>
+      <div class="hint" id="forum-msg"></div>
+    </div>`;
 }
 
 // --- Admin: Ankündigung, die der Bot einmal zur eingestellten Zeit in alle laufenden Threads postet ---
@@ -2059,7 +2086,18 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").cat
 route();
 updateBell();
 // Reiter "Nutzer" nur für Admins
-me().then((u) => { const t = document.getElementById("users-tab"); if (t) t.hidden = !u?.admin; }).catch(() => {});
+me().then((u) => {
+  const t = document.getElementById("users-tab"); if (t) t.hidden = !u?.admin;
+  // Lesezeichen veraltet: oben ein Hinweis (bis zum nächsten Übertragen mit dem neuen Lesezeichen)
+  if (u?.bookmarklet_outdated && !document.getElementById("bm-outdated")) {
+    const bar = document.createElement("a");
+    bar.id = "bm-outdated";
+    bar.className = "notice-bar";
+    bar.href = "#/settings";
+    bar.textContent = "🔁 Dein Lesezeichen ist veraltet – unter „Ich“ neu kopieren und im Browser ersetzen";
+    view.before(bar);
+  }
+}).catch(() => {});
 setInterval(() => { if (document.visibilityState === "visible") updateBell(); }, 60000);
 // Rang/Aufladung beim Start aus dem letzten Übertragen holen (Banner-Liste danach neu zeichnen)
 if (deviceToken()) authApi("/api/me/profile").then((p) => { if (applyProfile(p) && state.render) state.render().catch(() => {}); }).catch(() => {});

@@ -94,8 +94,13 @@ def flat(s, prefix=""):
     return {prefix.rstrip("."): s}
 
 
+CHANGED = []   # was sich geändert hat (für den automatischen Lauf: nur dann melden)
+
+
 def diff(label, old, new):
     added, gone = sorted(set(new) - set(old)), sorted(set(old) - set(new))
+    if added or gone:
+        CHANGED.append(label)
     out(f"\n=== {label}: {len(new)} (neu {len(added)}, weg {len(gone)})")
     for x in added:
         out(f"  🆕 {x}")
@@ -190,6 +195,8 @@ async def main():
         gone = sorted(set(before) - set(now))
         changed = sorted(k for k in set(now) & set(before) if now[k] != before[k])
         status = "unverändert" if not (added or gone or changed) else "GEÄNDERT"
+        if status == "GEÄNDERT":
+            CHANGED.append(key)
         out(f"  {key} -> HTTP {c['status']} · {status}")
         for k in added:
             out(f"     🆕 {k}: {now[k]}")
@@ -228,4 +235,8 @@ except Exception as e:
     out(f"❌ Abbruch: {type(e).__name__}: {e}")
 with open(OUT, "w", encoding="utf-8") as f:
     f.write("\n".join(lines) + "\n")
-asyncio.run(post(OUT))
+# automatisch (Bot, wöchentlich): nur bei Änderungen in den Admin-Kanal
+if not os.getenv("GT_AUTO") or CHANGED or any(line.startswith("❌") for line in lines):
+    asyncio.run(post(OUT))
+else:
+    print("Keine Änderungen - nichts gesendet.")

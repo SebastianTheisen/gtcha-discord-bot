@@ -15,7 +15,7 @@ import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import aiohttp
 import aiosqlite
@@ -26,7 +26,7 @@ from database.db import Database
 from utils.app_bridge import MAX_DELAY_MINUTES, MAX_IMPORT_BYTES, AppBridge
 from utils.banner_info import berlin_time, berlin_to_ts
 from webapp.accuracy import AccuracyStore
-from webapp.history import (JST_OFFSET, coins_total, build_from_stored, ingest, local_time, plan_claims, profile, stored_events,
+from webapp.history import (JST_OFFSET, coins_total, plan_pull_claims, build_from_stored, ingest, local_time, plan_claims, profile, stored_events,
                             summarize, attribute_opens, opens_by_banner, CLAIM_OPEN_DAYS)
 from webapp.images import ImageCache, content_type
 from webapp.push import DEFAULTS, EVENTS, WATCH_EVENTS, PushService, build_events
@@ -106,6 +106,9 @@ def import_result_page(lines: list, ok: bool = True, report: list = None) -> web
 
 PREMIUM_ENV = ("PREMIUM_CHANNEL_BONUS", "PREMIUM_CHANNEL_MIX", "PREMIUM_CHANNEL_POKEMON", "PREMIUM_CHANNEL_ONE_PIECE",
                "PREMIUM_CHANNEL_DRAGON_BALL")
+
+
+FORUM_ENV = {"Bonus": "BONUS", "MIX": "MIX", "Pokémon": "POKEMON", "One piece": "ONE_PIECE", "Dragon Ball": "DRAGON_BALL"}
 
 
 def premium_enabled() -> bool:
@@ -410,7 +413,9 @@ class App:
     async def api_me(self, request):
         user = await self._user(request)
         if user:
-            user = {**user, "admin": is_admin(user["user_id"]), "sync": await self._sync_info(user)}
+            used = await self.bridge.bookmarklet_version(user["user_id"])
+            user = {**user, "admin": is_admin(user["user_id"]), "sync": await self._sync_info(user),
+                    "bookmarklet_outdated": bool(used and used < BOOKMARKLET_VERSION)}
         return web.json_response(user or {}, status=200 if user else 401)
 
     async def _admin(self, request):
@@ -441,10 +446,53 @@ class App:
                 await self.bridge.set_setting("premium_mode", premium)
             logger.info(f"Discord-Ansicht von {user['name']} geändert: {mode}, Premium {premium or '-'}, {delay} Min")
         view = await self.bridge.discord_view()
+        forums = await self._forums()
         return web.json_response({"mode": view["mode"], "delay_minutes": view["delay_minutes"],
-                                  "premium_mode": view["premium_mode"], "premium": premium_enabled(),
+                                  "premium_mode": view["premium_mode"],
+                                  "premium": premium_enabled() or any(f["premium"] for f in forums),
+                                  "forums": forums,
                                   "announcements": [self._announcement_out(a) for a in await self.bridge.announcements()],
                                   "admins": [{"name": x["name"]} for x in await self.bridge.names(admin_ids())]})
+
+    async def _forums(self) -> List[Dict]:
+        """Discord-Foren je Kategorie: aus der App eingetragen (gewinnt) und aus der .env."""
+        saved = await self.bridge.forum_ids()
+        async with aiosqlite.connect(self.view.db.db_path) as conn:
+            cur = await conn.execute("SELECT DISTINCT category FROM banners WHERE is_active = 1 AND category IS NOT NULL "
+                                     "AND category != 'Store'")
+            active = [r[0] for r in await cur.fetchall()]
+        out = []
+        for cat in dict.fromkeys(list(FORUM_ENV) + sorted(active) + sorted(saved)):
+            env = FORUM_ENV.get(cat)
+            env_main = (os.getenv(f"CHANNEL_{env}") or "").strip() if env else ""
+            env_premium = (os.getenv(f"PREMIUM_CHANNEL_{env}") or "").strip() if env else ""
+            ids = saved.get(cat, {})
+            out.append({"name": cat, "main": ids.get("main") or (env_main if env_main != "0" else ""),
+                        "premium": ids.get("premium") or (env_premium if env_premium != "0" else ""),
+                        "from_env": bool(env_main.strip("0") and not ids.get("main"))})
+        return out
+
+    async def api_admin_forums(self, request):
+        """Discord-Foren je Kategorie eintragen ({forums: {Kategorie: {main, premium}}}) - der Bot übernimmt sie
+        innerhalb einer Minute und postet laufende Banner einer neu eingetragenen Kategorie nach."""
+        user = await self._admin(request)
+        body = await request.json()
+        clean = {}
+        for cat, ids in (body.get("forums") or {}).items():
+            if not isinstance(ids, dict) or len(str(cat)) > 60:
+                continue
+            entry = {}
+            for kind in ("main", "premium"):
+                v = str(ids.get(kind) or "").strip()
+                if v and not re.fullmatch(r"\d{15,21}", v):
+                    raise web.HTTPBadRequest(text=f"{cat}: ungültige Kanal-ID „{v}“")
+                if v:
+                    entry[kind] = v
+            if entry:
+                clean[str(cat)] = entry
+        await self.bridge.set_setting("forum_ids", json.dumps(clean, ensure_ascii=False))
+        logger.info(f"Discord-Foren von {user['name']} geändert: {clean}")
+        return web.json_response({"ok": True, "forums": await self._forums()})
 
     @staticmethod
     def _announcement_out(a: Dict) -> Dict:
@@ -579,6 +627,11 @@ class App:
         except ValueError:
             raise web.HTTPBadRequest(text="Ungültige Daten")
         user = await self.bridge.device(str(data.get("t", "")))
+        if user:
+            try:
+                await self.bridge.set_bookmarklet_version(user["user_id"], int(data.get("v") or 0))
+            except (TypeError, ValueError):
+                pass
         if not user:
             return import_result_page(["⚠️ Dieses Lesezeichen gehört zu keinem verknüpften Gerät mehr – bitte in der "
                                        "App unter „Ich“ neu kopieren."], ok=False)
@@ -738,24 +791,45 @@ class App:
     async def auto_claim(self, user: Dict) -> list:
         """Angeforderte Karten (noch nicht verschickt) automatisch als Medaille melden, wenn eindeutig."""
         stored = await self.history(user)
+        planned = await self._pull_claims(user, stored)
         cards = (stored.get("pending") or {}).get("items") or []
         if not cards:
-            return []
+            return planned
         # eigene Öffnungen je Banner (aus dem Münzverlauf) - ohne Verlauf wird nichts automatisch gemeldet
         events = stored_events(stored)
         if not events:
-            return []
+            return planned
         first = min(c.get("date") or "9999" for c in cards)
         since = datetime.strptime(first[:10], "%Y-%m-%d") - timedelta(days=CLAIM_OPEN_DAYS + 1) \
             if first != "9999" else datetime.now() - timedelta(days=60)
         banners, moves = await self.view.history_context(since)
         attribute_opens(events, banners, moves)
-        planned = plan_claims(cards, banners, await self.view.claim_targets(), user["user_id"],
-                              await self.bridge.auto_claim_keys(user["user_id"]), opens_by_banner(events))
+        targets = await self.view.claim_targets()
+        # Plätze, die die Kauf-Details gerade sicher vergeben haben, nicht nochmal geschätzt melden
         for p in planned:
+            targets.get(p["pack_id"], {}).get("medals", {}).setdefault(p["tier"], user["user_id"])
+        guessed = plan_claims(cards, banners, targets, user["user_id"],
+                              await self.bridge.auto_claim_keys(user["user_id"]), opens_by_banner(events))
+        for p in guessed:
             await self.bridge.add_auto_claim(user, p["key"], p["pack_id"], p["tier"])
             logger.info(f"Automatische Medaille für {user['name']}: {p['card']} -> {p['pack_id']} {p['tier']}")
-        return planned
+        return planned + guessed
+
+    async def _pull_claims(self, user: Dict, stored: Dict) -> list:
+        """Sichere Medaillen aus den Kauf-Details: gezogene meldbare Karte -> Medaille mit Namen (ersetzt im Bot
+        automatisch gesetzte oder ohne Person abgehakte, nie eine von Hand gemeldete einer anderen Person)."""
+        pulls = (stored.get("pulls") or {}).get("items") or []
+        if not pulls:
+            return []
+        planned = plan_pull_claims(pulls, await self._card_banners(), await self.view.claim_targets(),
+                                   user["user_id"], await self.bridge.auto_claim_keys(user["user_id"]))
+        for p in planned:
+            await self.bridge.add_auto_claim(user, p["key"], p["pack_id"], p["tier"], action="pull_claim")
+            if p["confirm"]:   # schon eigene Medaille - kein Push
+                await self.bridge.mark_auto_claim_notified(user["user_id"], p["key"])
+            logger.info(f"Medaille aus Kauf-Details für {user['name']}: {p['card']} -> {p['pack_id']} {p['tier']}"
+                        + (" (bestätigt)" if p["confirm"] else " (ersetzt)" if p["replace"] else ""))
+        return [p for p in planned if not p["confirm"]]
 
     async def migrate_raw_imports(self):
         """Einmalig: alte Rohdaten der Lesezeichen in den ausgewerteten Verlauf übernehmen (falls noch nicht
@@ -795,7 +869,8 @@ class App:
             return cached[1]
         out: Dict[str, list] = {}
         async with aiosqlite.connect(self.view.db.db_path) as conn:
-            cur = await conn.execute("SELECT pack_id, card_pool, COALESCE(starts_at, 0) FROM banners WHERE card_pool IS NOT NULL")
+            cur = await conn.execute("SELECT pack_id, card_pool, COALESCE(starts_at, CAST(strftime('%s', created_at) AS INTEGER), 0) "
+                                     "FROM banners WHERE card_pool IS NOT NULL")
             for pid, raw, start in await cur.fetchall():
                 try:
                     for c in json.loads(raw).get("cards") or []:
@@ -1153,7 +1228,16 @@ class App:
             row = await self.view.db.get_banner(c["pack_id"]) or {}
             title = banner_label(row.get("title"), row.get("best_hit"), row.get("category"), row.get("price_coins")) \
                 or f"Banner {c['pack_id']}"
-            if c["status"] == "ok":
+            if str(c["card_key"]).startswith("pull:"):
+                # Medaille aus den Kauf-Details: das ist ein eigener Hit
+                if c["status"] == "ok":
+                    await self.push.send_user(c["discord_user_id"], "own_hit", f"🎉 Hit gezogen: {c['tier']}",
+                                              f"{title} · Medaille ist eingetragen", f"/#/banner/{c['pack_id']}")
+                else:
+                    await self.push.send_user(c["discord_user_id"], "own_hit", f"🎉 Hit gezogen: {c['tier']}",
+                                              f"{title} · {c.get('reason') or 'Medaille nicht eingetragen'}",
+                                              f"/#/banner/{c['pack_id']}")
+            elif c["status"] == "ok":
                 await self.push.send_user(c["discord_user_id"], "auto_ok", f"🏅 Medaille {c['tier']} gemeldet",
                                           f"Automatisch aus deinen angeforderten Karten · {title}",
                                           f"/#/banner/{c['pack_id']}")
@@ -1268,6 +1352,7 @@ def make_app(app: App) -> web.Application:
         web.post("/api/admin/accounts", app.api_admin_accounts),
         web.post("/api/admin/block", app.api_admin_block),
         web.post("/api/admin/push", app.api_admin_push),
+        web.post("/api/admin/forums", app.api_admin_forums),
         web.post("/api/me/devices/remove", app.api_remove_device),
         web.get("/api/health", app.api_health),
         web.get("/api/stream", app.api_stream),

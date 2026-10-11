@@ -75,6 +75,9 @@ function App() {
       </header>
       <main class="main">
         {loadError.value && <div class="notice" style={{ marginBottom: "12px" }}>{loadError.value} – neuer Versuch läuft</div>}
+        {me.value?.bookmarklet_outdated && r !== "/me" && (
+          <a class="notice" href="#/me" style={{ display: "block", marginBottom: "12px" }}>
+            🔁 Dein Lesezeichen ist veraltet – unter „Ich“ neu kopieren und im Browser ersetzen</a>)}
         <div class="page" key={r}><Page /></div>
       </main>
       <nav class="nav">

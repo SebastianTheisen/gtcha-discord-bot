@@ -46,6 +46,8 @@ CREATE TABLE IF NOT EXISTS sync_accounts (discord_user_id TEXT, account TEXT, fi
     PRIMARY KEY (discord_user_id, account));
 -- wie viele GTCHA-Konten eine Person hat (vom Admin eingestellt, Standard 1)
 CREATE TABLE IF NOT EXISTS account_counts (discord_user_id TEXT PRIMARY KEY, expected INTEGER);
+-- zuletzt benutzte Lesezeichen-Version je Person (App weist auf veraltete Lesezeichen hin)
+CREATE TABLE IF NOT EXISTS bookmarklet_versions (discord_user_id TEXT PRIMARY KEY, version INTEGER, used_at TEXT);
 CREATE TABLE IF NOT EXISTS auto_claims (
     discord_user_id TEXT, card_key TEXT, pack_id INTEGER, tier TEXT, request_id INTEGER, created_at TEXT,
     PRIMARY KEY (discord_user_id, card_key));
@@ -55,7 +57,9 @@ MAX_IMPORT_BYTES = 40_000_000   # "Komplett" mit hunderten Münzseiten
 #   discord_mode  "slim" = abgespeckt, "full" = alles wie früher
 #   discord_delay Minuten, um die automatisch erkannte Hits und in der App gemeldete Medaillen in Discord später erscheinen
 #   premium_mode  Premium-Foren: "full" = alle Infos wie in der App, "slim" = abgespeckt (immer mit Verzögerung)
-DEFAULT_SETTINGS = {"discord_mode": "minimal", "discord_delay": "30", "premium_mode": "full"}
+DEFAULT_SETTINGS = {"discord_mode": "minimal", "discord_delay": "30", "premium_mode": "full",
+                    # Discord-Foren je Kategorie aus der App ({"Yu-Gi-Oh!": {"main": "123…", "premium": "456…"}})
+                    "forum_ids": "{}"}
 DISCORD_MODES = ("minimal", "slim", "full")
 PREMIUM_MODES = ("slim", "full")
 MAX_DELAY_MINUTES = 24 * 60
@@ -196,6 +200,14 @@ class AppBridge:
             cur = await db.execute("SELECT key, value FROM app_settings")
             return {**DEFAULT_SETTINGS, **{k: v for k, v in await cur.fetchall()}}
 
+    async def forum_ids(self) -> Dict[str, Dict[str, str]]:
+        try:
+            data = json.loads((await self.settings()).get("forum_ids") or "{}")
+        except ValueError:
+            return {}
+        return {str(c): {k: str(v) for k, v in (ids or {}).items() if k in ("main", "premium") and str(v).isdigit()}
+                for c, ids in data.items() if isinstance(ids, dict)}
+
     async def discord_view(self) -> Dict:
         """{"mode", "slim", "minimal", "delay": Sekunden} - Verzögerung nur im schlanken/minimalen Modus.
         minimal: nur Grundinfos, Pack-Updates und Medaillen von euch (keine Auswertungen, keine Hit-Liste)."""
@@ -216,6 +228,18 @@ class AppBridge:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)", (key, str(value)))
             await db.commit()
+
+    async def set_bookmarklet_version(self, user_id, version: int) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("INSERT OR REPLACE INTO bookmarklet_versions (discord_user_id, version, used_at) "
+                             "VALUES (?, ?, ?)", (str(user_id), int(version), _now()))
+            await db.commit()
+
+    async def bookmarklet_version(self, user_id) -> Optional[int]:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT version FROM bookmarklet_versions WHERE discord_user_id = ?", (str(user_id),))
+            row = await cur.fetchone()
+        return row[0] if row else None
 
     async def add_admin(self, user_id) -> None:
         async with aiosqlite.connect(self.db_path) as db:
@@ -404,14 +428,22 @@ class AppBridge:
             cur = await db.execute("SELECT card_key FROM auto_claims WHERE discord_user_id = ?", (str(user_id),))
             return {r[0] for r in await cur.fetchall()}
 
-    async def add_auto_claim(self, user: Dict, card_key: str, pack_id: int, tier: str) -> int:
-        request_id = await self.add_request(pack_id, tier, user, "claim")
+    async def add_auto_claim(self, user: Dict, card_key: str, pack_id: int, tier: str, action: str = "auto_claim") -> int:
+        """action: "auto_claim" (aus angeforderten Karten geschlossen) oder "pull_claim" (Kauf-Details, sicher)."""
+        request_id = await self.add_request(pack_id, tier, user, action)
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("INSERT OR IGNORE INTO auto_claims (discord_user_id, card_key, pack_id, tier, request_id, "
                              "created_at) VALUES (?, ?, ?, ?, ?, ?)",
                              (user["user_id"], card_key, pack_id, tier, request_id, _now()))
             await db.commit()
         return request_id
+
+    async def is_auto_claim(self, pack_id: int, tier: str, user_id) -> bool:
+        """Wurde diese Medaille automatisch (aus angeforderten Karten geschlossen) gemeldet?"""
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT 1 FROM auto_claims WHERE pack_id = ? AND tier = ? AND discord_user_id = ? "
+                                   "AND card_key NOT LIKE 'pull:%'", (pack_id, tier, str(user_id)))
+            return await cur.fetchone() is not None
 
     async def auto_claims_for(self, pack_id: int) -> Dict[str, Dict]:
         """Per Lesezeichen gemeldete Medaillen eines Banners: Stufe -> {user_id, pulled_on (Anfragedatum)}."""

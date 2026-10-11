@@ -264,3 +264,80 @@ def test_shipment_marks_card_pool_for_reload(tmp_path, env):
         assert await db.get_banners_without_pool(10, [7]) == [7]
 
     asyncio.run(run())
+
+
+def test_pull_claim_replaces_only_automatic_medals(tmp_path, env):
+    """Medaille aus Kauf-Details: ersetzt automatisch gesetzte / ohne Person abgehakte, nie eine von Hand gemeldete."""
+    async def run():
+        from bot.app_link import AppLinkMixin
+        db, bridge = await setup(tmp_path)
+        posted = []
+
+        class Bot(AppLinkMixin):
+            def __init__(self):
+                self.db, self._app_bridge = db, bridge
+
+            async def _invalid_medal_reason(self, *a):
+                return None
+
+            async def _post_app_medal(self, pack_id, emoji, add, silent, text):
+                posted.append(text)
+
+            async def _update_probability_message(self, *a):
+                pass
+
+            async def _refresh_pool_views(self, *a, **kw):
+                pass
+
+        bot = Bot()
+        req = lambda tier, user, action: {"pack_id": 7, "tier": tier, "discord_user_id": user, "discord_name": "Basti",
+                                          "action": action}
+        await db.save_medal(MAIN, "T1", 0, source="admin")       # ohne Person abgehakt
+        await db.save_medal(MAIN, "T2", 55, source="auto")       # automatisch geschlossen
+        await db.save_medal(MAIN, "T3", 66, source="app")        # von Hand gemeldet
+        assert (await bot._apply_app_medal(req("T1", 42, "pull_claim")))[0]
+        assert (await bot._apply_app_medal(req("T2", 42, "pull_claim")))[0]
+        ok, reason = await bot._apply_app_medal(req("T3", 42, "pull_claim"))
+        assert not ok and "jemand anderes" in reason
+        medals = await db.get_medals(MAIN)
+        assert (medals["T1"], medals["T2"], medals["T3"]) == (42, 42, 66)
+        assert (await db.get_medal(MAIN, "T2"))["source"] == "pull" and "statt <@55>" in posted[1]
+
+    asyncio.run(run())
+
+
+def test_forum_ids_from_app_post_missing_banners(tmp_path, env, monkeypatch):
+    """In der App eingetragenes Forum (neue Kategorie): Bot übernimmt die ID und postet laufende Banner nach."""
+    import bot.common
+    import bot.discord_view as dv
+
+    async def run():
+        db, bridge = await setup(tmp_path)
+        async with aiosqlite.connect(db.db_path) as conn:
+            await conn.execute("INSERT INTO banners (pack_id, is_active, category) VALUES (8, 1, 'Yu-Gi-Oh!')")
+            await conn.commit()
+        monkeypatch.setattr(dv, "_ENV_CHANNELS", {})
+        monkeypatch.setattr(dv, "_ENV_PREMIUM", {})
+        monkeypatch.setattr(bot.common, "CHANNEL_IDS", {})
+        monkeypatch.setattr(dv, "CHANNEL_IDS", bot.common.CHANNEL_IDS)
+        monkeypatch.setattr(dv, "PREMIUM_CHANNEL_IDS", {})
+        await bridge.set_setting("forum_ids", '{"Yu-Gi-Oh!": {"main": "123456789012345678"}}')
+        posted = []
+
+        class Bot(dv.DiscordViewMixin):
+            def __init__(self):
+                self.db, self._app_bridge = db, bridge
+
+            @property
+            def app_bridge(self):
+                return self._app_bridge
+
+            async def _post_banner_to_discord(self, banner, starts_at=None):
+                posted.append((banner.pack_id, banner.category))
+
+        await Bot()._apply_forum_ids()
+        assert dv.CHANNEL_IDS["Yu-Gi-Oh!"] == 123456789012345678 and posted == [(8, "Yu-Gi-Oh!")]
+        await Bot()._apply_forum_ids()
+        assert posted == [(8, "Yu-Gi-Oh!")]          # nur beim Eintragen einmal
+
+    asyncio.run(run())
