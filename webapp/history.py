@@ -528,6 +528,8 @@ def cards_from_json(responses: List[Dict]) -> List[Dict]:
                     "name": html.unescape(str(c.get("name") or c.get("title"))).strip(),
                     "rarity": str(c.get("rarity") or ""), "number": str(c.get("model_number") or ""),
                     "image": image, "card_id": str(c["id"]) if c.get("id") is not None else None}
+            if c.get("history_id"):
+                card["hid"] = int(c["history_id"])   # Kauf, aus dem die Karte stammt (Details: Coin-Wert beim Ziehen)
             if c.get("stock_sale_price") not in (None, ""):
                 card["price"] = int(float(c["stock_sale_price"]))   # Wert laut Seite (zum Abgleich mit dem Versand)
             out += [dict(card) for _ in range(count if 1 <= count <= 99 else 1)]
@@ -643,11 +645,11 @@ def ingest(stored: Dict[str, Dict], entries: List[Dict], now: Optional[datetime]
         path, pages, partial = entry.get("path"), entry.get("pages") or [], bool(entry.get("partial"))
         rank = rank or parse_rank(pages)
         data = _responses(entry)
-        if path == "buy-point-history" and entry.get("details"):
+        if entry.get("details"):   # Münzverlauf: neue Käufe; Versendet/Angefordert: Kauf je Karte
             pulls = pulls_from_details(entry["details"])
             if pulls:
-                changed["pulls"] = {"items": merge_pulls((stored.get("pulls") or {}).get("items") or [], pulls),
-                                    "gap": False}
+                base = (changed.get("pulls") or stored.get("pulls") or {}).get("items") or []
+                changed["pulls"] = {"items": merge_pulls(base, pulls), "gap": False}
         if path == "buy-point-history":
             area, key = "coins", COIN_KEY
             new = coins_from_json(data) if data else [{**e, "t": e["t"].strftime(TIME_FMT)} for e in parse_coins(pages)]
@@ -732,7 +734,7 @@ def add_hits(summary: Dict, cards: List[Dict], banners: Dict[int, Dict]) -> None
     for card in cards:
         if not since or (card.get("date") or "") < since:
             continue
-        worth = card_worth(card, banners)
+        worth = card.get("pull_value") or card_worth(card, banners)
         if worth is None:
             continue
         count += 1
@@ -773,13 +775,18 @@ def build_from_stored(stored: Dict[str, Dict], banners: Dict[int, Dict], moves: 
     summary = summarize(events)
     pending = (stored.get("pending") or {}).get("items") or []
     shipped = (stored.get("shipped") or {}).get("items") or []
+    # Coin-Wert beim Ziehen aus den Kauf-Details (exakt, auch für Banner vor Beginn der Aufzeichnung)
+    pulled = {(p["hid"], c.get("card_id")): c.get("value") for p in (stored.get("pulls") or {}).get("items") or []
+              for c in p.get("cards") or [] if c.get("value")}
+    for card in pending + shipped:
+        card["pull_value"] = pulled.get((card.get("hid"), card.get("card_id")))
     add_hits(summary, pending + shipped, banners)
     summary["months"] = months(events)
     for row in summary["banners"]:
         b = banners.get(row["banner"]) or {}
         row.update(title=b.get("title"), image=b.get("image"), price=b.get("price"))
     for card in pending + shipped:
-        card["value"] = card_worth(card, banners)
+        card["value"] = card.get("pull_value") or card_worth(card, banners)
         # ohne Kartenliste des Banners (z. B. vor Beginn der Aufzeichnung): Wert laut Seite (stock_sale_price)
         card["site_value"] = card.get("price") if card["value"] is None else None
     return {

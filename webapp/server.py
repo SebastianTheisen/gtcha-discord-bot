@@ -39,7 +39,7 @@ BETA_DIST = Path(__file__).parent / "beta" / "dist"   # neue Oberfläche (Vite-B
 ROLE = os.getenv("WEBAPP_ROLE", "live")
 STREAM_HEARTBEAT = 25
 REFRESH_SECONDS = 20
-BOOKMARKLET_VERSION = 20   # = SYNC_VERSION in app.js; ältere Lesezeichen bekommen einen Hinweis
+BOOKMARKLET_VERSION = 21   # = SYNC_VERSION in app.js; ältere Lesezeichen bekommen einen Hinweis
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
        "img-src 'self' data: https://gtchaxonline.com https://*.gtchaxonline.com; connect-src 'self'; "
        "manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; "
@@ -627,6 +627,12 @@ class App:
             stored = await self.bridge.get_account_history(user["user_id"], acc)
             before = {a: len((stored.get(a) or {}).get("items") or []) for a in ("coins", "shipped", "pending")}
             changed = ingest(stored, entries)
+            bal = data.get("bal") if isinstance(data.get("bal"), dict) else {}
+            if bal.get("coin") is not None:   # Coin- und Ticket-Stand (Lesezeichen ab v21)
+                member = changed.get("member") or {"info": dict((stored.get("member") or {}).get("info") or {})}
+                member["info"].update({k: v for k, v in (("coins", bal.get("coin")), ("tickets", bal.get("ticket")))
+                                       if isinstance(v, (int, float))})
+                changed["member"] = member
             # Seite geladen, aber keine Karte erkannt (z. B. geändertes Layout): melden und Seitenanfang loggen
             for path, area, label in (("pending-detail", "pending", "Angefordert"), ("shipped-detail", "shipped", "Versendet")):
                 entry = next((e for e in entries if e["path"] == path), None)
