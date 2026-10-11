@@ -4,7 +4,8 @@ from bot.common import *  # noqa: F401,F403
 from utils.translate import translate_pool
 
 
-def api_title(item: dict) -> Optional[str]:
+def api_name(item: dict) -> Optional[str]:
+    """Interner Name aus pack/list (z. B. '成田　全員　至宝 25,000 PO新弾') - KEIN Anzeigetitel."""
     name = str(item.get('name') or '').strip()
     return name or None
 
@@ -20,7 +21,6 @@ def api_image(item: dict) -> Optional[str]:
 def fill_from_api(banner, item: dict):
     """Felder, die früher aus den Kacheln der Startseite kamen, aus pack/list ergänzen (seit dem Umbau der Seite
     liefern die Kacheln keine Titel, Bilder, Preise und Enddaten mehr)."""
-    banner.title = banner.title or api_title(item)
     banner.image_url = banner.image_url or api_image(item)
     banner.sale_end_date = item.get('end_date') or banner.sale_end_date
     banner.price_coins = _int(item.get('point')) or banner.price_coins
@@ -313,7 +313,6 @@ class ScrapingMixin:
             banner = ScrapedBanner(
                 pack_id=pid,
                 category=category_for(item),
-                title=api_title(item),
                 price_coins=_int(item.get('point')) or None,
                 current_packs=_int(item.get('pack_count')),
                 total_packs=_int(item.get('total_pack_count')) or None,
@@ -392,9 +391,10 @@ class ScrapingMixin:
             if _int(item.get('point')) > 0:
                 changed = await self.db.update_price(pid, _int(item.get('point'))) or changed
             changed = await self.db.update_site_stats(pid, shipping_stats(item)) or changed
-            # Titel, Verkaufsende, Bild: seit dem Umbau der Seite nur noch aus pack/list
-            changed = await self.db.update_site_fields(pid, api_title(item), item.get('end_date'),
-                                                       api_image(item)) or changed
+            # Verkaufsende, Bild: seit dem Umbau der Seite nur noch aus pack/list. Der "name" dort ist ein interner
+            # Name (kein Titel) - versehentlich als Titel übernommene Namen wieder entfernen
+            changed = await self.db.update_site_fields(pid, None, item.get('end_date'), api_image(item)) or changed
+            changed = await self.db.clear_title_if(pid, api_name(item)) or changed
             # Umgewandelte Coins nur speichern (Verlauf), Startbeitrag deshalb nicht neu bearbeiten
             if item.get('total_kangen') is not None:
                 await self.db.update_converted(pid, _int(item.get('total_kangen')))

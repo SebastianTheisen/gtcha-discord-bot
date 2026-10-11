@@ -212,11 +212,11 @@ def test_banner_fields_from_pack_list_after_site_redesign(tmp_path, env):
     """Seit dem Umbau liefern die Kacheln der Startseite keine Titel/Bilder/Preise/Enddaten mehr: pack/list ergänzt."""
     from bot.scraping import api_image, fill_from_api
     from scraper.models import ScrapedBanner
-    item = {"id": 7, "name": " 36 IN 500 CHANCE! ", "point": "2500", "total_pack_count": 500, "max_buy_count": 30,
+    item = {"id": 7, "name": "成田　全員　至宝 25,000 PO新弾", "point": "2500", "total_pack_count": 500, "max_buy_count": 30,
             "end_date": "2026/10/31 16:00", "image": ["/pack/7/1.webp?v=2"]}
     b = fill_from_api(ScrapedBanner(pack_id=7, category="Pokémon", current_packs=127), item)
     assert (b.title, b.price_coins, b.total_packs, b.entries_per_day, b.sale_end_date) == \
-        ("36 IN 500 CHANCE!", 2500, 500, 30, "2026/10/31 16:00")
+        (None, 2500, 500, 30, "2026/10/31 16:00")          # interner Name ist kein Titel
     assert b.image_url == "https://gtchaxonline.com/pack/7/1.webp" and api_image({"image": []}) is None
     assert fill_from_api(ScrapedBanner(pack_id=7, category="X"), {**item, "max_buy_count": 0}).entries_per_day is None
 
@@ -226,5 +226,7 @@ def test_banner_fields_from_pack_list_after_site_redesign(tmp_path, env):
         assert not await db.update_site_fields(7, "Anderer Titel", "2026/10/31 16:00", "https://x")   # nichts neu
         row = await db.get_banner(7)
         assert (row["title"], row["sale_end_date"]) == ("Titel", "2026/10/31 16:00")
+        assert await db.clear_title_if(7, "Titel") and (await db.get_banner(7))["title"] is None
+        assert not await db.clear_title_if(7, None)
 
     asyncio.run(run())
