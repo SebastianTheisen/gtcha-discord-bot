@@ -9,6 +9,7 @@ Züge werden einem Banner nur zugeordnet, wenn es eindeutig ist (Preis + Pack-Be
 Minute + Wert der umgewandelten Karte im Kartenpool).
 """
 
+import html
 import re
 from bisect import bisect_left
 from collections import defaultdict
@@ -441,6 +442,96 @@ def summarize(events: List[Dict]) -> Dict:
                         for b, v in sorted(per_banner.items(), key=lambda x: -x[1]["spent"])]}
 
 
+# --- ab Lesezeichen v19: die Daten, die die Seiten selbst laden (JSON mit IDs) ---
+SITE = "https://gtchaxonline.com"
+JSON_DAY = re.compile(r"(\d{4})[/-](\d{1,2})[/-](\d{1,2})")
+JSON_TIME = re.compile(r"(\d{4})[/-](\d{1,2})[/-](\d{1,2})\D+(\d{1,2}):(\d{2})")
+# Vermerke im Münzverlauf (japanisch) wie in den deutschen Seiten - classify erkennt sie dann wie bisher
+MEMO_DE = {"コインへ還元": "In Coins umwandeln", "コイン還元": "In Coins umwandeln", "購入": "Kaufen",
+           "ガチャ": "Kaufen", "パック購入": "Kaufen", "コイン購入": "Coins kaufen", "チャージ": "Aufladung"}
+
+
+def _responses(entry: Dict) -> List[Dict]:
+    return [j for j in entry.get("json") or [] if isinstance(j, dict)]
+
+
+def coins_from_json(responses: List[Dict]) -> List[Dict]:
+    """Münzverlauf aus point/list: [{id, bonusPoint, money, memo, created}] -> Buchungen, neueste zuerst.
+    Jede Buchung hat eine eigene ID - gleiche Buchungen in derselben Minute bleiben getrennt."""
+    seen, items = set(), []
+    for resp in responses:
+        for x in resp.get("list") if isinstance(resp.get("list"), list) else []:
+            if not isinstance(x, dict) or x.get("id") in (None, "") or x["id"] in seen:
+                continue
+            m = JSON_TIME.search(str(x.get("created") or ""))
+            if not m:
+                continue
+            seen.add(x["id"])
+            amount = int(float(x.get("bonusPoint") or 0))
+            yen = int(float(x.get("money") or 0))
+            memo = html.unescape(str(x.get("memo") or "")).strip()
+            note = MEMO_DE.get(memo, memo)
+            kind = classify(amount, yen, note)
+            if kind == "other" and amount < 0:
+                kind = "open"   # Coins weg (Pack gezogen), auch bei unbekanntem Vermerk
+            t = datetime(*(int(g) for g in m.groups()))
+            items.append({"id": x["id"], "t": t.strftime(TIME_FMT), "amount": amount, "yen": yen, "note": note,
+                          "kind": kind})
+    items.sort(key=lambda e: (e["t"], e["id"]), reverse=True)
+    return items
+
+
+def coins_total(responses: List[Dict]) -> Optional[int]:
+    """Anzahl aller Buchungen laut Seite (page.all)."""
+    for resp in responses:
+        page = resp.get("page")
+        if isinstance(page, dict) and isinstance(page.get("all"), int):
+            return page["all"]
+    return None
+
+
+def cards_from_json(responses: List[Dict]) -> List[Dict]:
+    """Karten aus history/shipped bzw. history/pending: list ist ein Objekt je Gruppe -
+    Versendet: {"2026/08/03_<Sendung>": {date, delivery_code, cards: [...]}}, Angefordert: {"2026/10/03": [...]}.
+    Je Karte so viele Einträge wie ihre Anzahl (num)."""
+    groups, seen = [], set()
+    for resp in responses:
+        lst = resp.get("list")
+        entries = list(lst.items()) if isinstance(lst, dict) else [(str(i), g) for i, g in enumerate(lst or [])]
+        for key, g in entries:
+            if key in seen:
+                continue
+            seen.add(key)
+            if isinstance(g, dict) and isinstance(g.get("cards"), list):
+                day, tracking, cards = str(g.get("date") or key), str(g.get("delivery_code") or "") or None, g["cards"]
+            elif isinstance(g, list):
+                day, tracking, cards = key, None, g
+            else:
+                continue
+            m = JSON_DAY.search(day) or JSON_DAY.search(key)
+            date = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}" if m else None
+            groups.append((date or "", tracking, cards))
+    groups.sort(key=lambda g: g[0], reverse=True)
+    out = []
+    for date, tracking, cards in groups:
+        for c in cards:
+            if not isinstance(c, dict) or not (c.get("name") or c.get("title")):
+                continue
+            image = str(c.get("image") or "") or None
+            if image and image.startswith("/"):
+                image = SITE + image
+            try:
+                count = int(c.get("num") or 1)
+            except (TypeError, ValueError):
+                count = 1
+            card = {"date": date or None, "tracking": tracking,
+                    "name": html.unescape(str(c.get("name") or c.get("title"))).strip(),
+                    "rarity": str(c.get("rarity") or ""), "number": str(c.get("model_number") or ""),
+                    "image": image, "card_id": str(c["id"]) if c.get("id") is not None else None}
+            out += [dict(card) for _ in range(count if 1 <= count <= 99 else 1)]
+    return out
+
+
 TIME_FMT = "%Y-%m-%d %H:%M"
 COIN_KEY = ("t", "amount", "note")
 CARD_KEY = ("date", "tracking", "name", "number")
@@ -487,6 +578,17 @@ def merge_newest_first(old: List[Dict], new: List[Dict], key: tuple) -> tuple:
     return fresh + list(old), (not new) or len(fresh) < len(new)
 
 
+def merge_by_id(old: List[Dict], new: List[Dict]) -> tuple:
+    """Buchungen mit ID (Lesezeichen ab v19): neue und gespeicherte zusammen, jede ID einmal, neueste zuerst.
+    Rückgabe: (zusammengeführt, Überlapp gefunden) - ohne gemeinsame ID fehlt evtl. etwas dazwischen."""
+    known = {e.get("id") for e in old}
+    overlap = any(e.get("id") in known for e in new)
+    fresh = {e["id"]: e for e in new}
+    merged = list(fresh.values()) + [e for e in old if e.get("id") not in fresh]
+    merged.sort(key=lambda e: (e.get("t") or "", e.get("id") or 0), reverse=True)
+    return merged, overlap or not new
+
+
 def ingest(stored: Dict[str, Dict], entries: List[Dict], now: Optional[datetime] = None) -> Dict[str, Dict]:
     """Ein "Alles übertragen" in den gespeicherten Verlauf übernehmen.
 
@@ -498,13 +600,17 @@ def ingest(stored: Dict[str, Dict], entries: List[Dict], now: Optional[datetime]
     for entry in entries:
         path, pages, partial = entry.get("path"), entry.get("pages") or [], bool(entry.get("partial"))
         rank = rank or parse_rank(pages)
+        data = _responses(entry)
         if path == "buy-point-history":
             area, key = "coins", COIN_KEY
-            new = [{**e, "t": e["t"].strftime(TIME_FMT)} for e in parse_coins(pages)]
+            new = coins_from_json(data) if data else [{**e, "t": e["t"].strftime(TIME_FMT)} for e in parse_coins(pages)]
+            old_items = (stored.get("coins") or {}).get("items") or []
+            if data and old_items and all(e.get("id") is not None for e in old_items[:50]):
+                key = ("id",)   # Buchungen mit ID: eindeutig
         elif path == "shipped-detail":
-            area, key, new = "shipped", CARD_KEY, parse_cards(pages)
+            area, key, new = "shipped", CARD_KEY, cards_from_json(data) if data else parse_cards(pages)
         elif path == "pending-detail":
-            changed["pending"] = {"items": parse_cards(pages), "gap": False}
+            changed["pending"] = {"items": cards_from_json(data) if data else parse_cards(pages), "gap": False}
             continue
         elif path == "change-member":
             info = {k: v for k, v in parse_member(pages).items() if v is not None}
@@ -515,7 +621,10 @@ def ingest(stored: Dict[str, Dict], entries: List[Dict], now: Optional[datetime]
         else:
             continue
         old = (stored.get(area) or {}).get("items") or []
-        if partial:
+        if partial and key == ("id",):
+            items, ok = merge_by_id(old, new)
+            gap = (stored.get(area) or {}).get("gap", False) or not ok
+        elif partial:
             items, ok = merge_newest_first(old, new, key)
             gap = (stored.get(area) or {}).get("gap", False) or not ok
         else:
