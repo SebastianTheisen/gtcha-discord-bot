@@ -633,6 +633,14 @@ def merge_by_id(old: List[Dict], new: List[Dict]) -> tuple:
     return merged, overlap or not new
 
 
+def legacy_text() -> bool:
+    """ALT (zum Testen abgeschaltet, Oktober 2026): Versand/Münzen aus dem sichtbaren Seitentext lesen - nur noch für
+    Lesezeichen vor v19 nötig (die neuen lesen die Daten der Seite). Wieder einschalten: GT_LEGACY_TEXT=1.
+    Ohne Daten der Seite bleibt der gespeicherte Stand dann einfach erhalten."""
+    import os
+    return os.getenv("GT_LEGACY_TEXT", "0") == "1"
+
+
 def ingest(stored: Dict[str, Dict], entries: List[Dict], now: Optional[datetime] = None) -> Dict[str, Dict]:
     """Ein "Alles übertragen" in den gespeicherten Verlauf übernehmen.
 
@@ -650,16 +658,21 @@ def ingest(stored: Dict[str, Dict], entries: List[Dict], now: Optional[datetime]
             if pulls:
                 base = (changed.get("pulls") or stored.get("pulls") or {}).get("items") or []
                 changed["pulls"] = {"items": merge_pulls(base, pulls), "gap": False}
+        if path in ("buy-point-history", "shipped-detail") and not data and not legacy_text():
+            continue   # altes Lesezeichen ohne Daten der Seite: gespeicherten Stand behalten
         if path == "buy-point-history":
             area, key = "coins", COIN_KEY
-            new = coins_from_json(data) if data else [{**e, "t": e["t"].strftime(TIME_FMT)} for e in parse_coins(pages)]
+            new = coins_from_json(data) if data else ([{**e, "t": e["t"].strftime(TIME_FMT)} for e in parse_coins(pages)]
+                                                      if legacy_text() else [])
             old_items = (stored.get("coins") or {}).get("items") or []
             if data and old_items and all(e.get("id") is not None for e in old_items[:50]):
                 key = ("id",)   # Buchungen mit ID: eindeutig
         elif path == "shipped-detail":
-            area, key, new = "shipped", CARD_KEY, cards_from_json(data) if data else parse_cards(pages)
+            area, key = "shipped", CARD_KEY
+            new = cards_from_json(data) if data else (parse_cards(pages) if legacy_text() else [])
         elif path == "pending-detail":
-            changed["pending"] = {"items": cards_from_json(data) if data else parse_cards(pages), "gap": False}
+            if data or legacy_text():
+                changed["pending"] = {"items": cards_from_json(data) if data else parse_cards(pages), "gap": False}
             continue
         elif path == "change-member":
             info = {k: v for k, v in parse_member(pages).items() if v is not None}

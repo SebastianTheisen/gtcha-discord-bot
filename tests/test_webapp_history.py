@@ -1,6 +1,8 @@
 import asyncio
 from datetime import datetime
 
+import pytest
+
 from utils.app_bridge import AppBridge
 from webapp.history import (build_history, parse_card_tiles, ingest, merge_newest_first, parse_cards, parse_coins, parse_member, profile,
                             plan_claims)
@@ -706,3 +708,14 @@ def test_admin_forums(tmp_path, monkeypatch):
             await client.close()
 
     asyncio.run(run())
+
+
+@pytest.mark.no_legacy
+def test_legacy_text_off_keeps_stored_history():
+    """Alte Text-Wege abgeschaltet: Lauf ohne Daten der Seite (altes Lesezeichen) ändert den gespeicherten Stand nicht."""
+    from webapp.history import ingest
+    stored = {"coins": {"items": [{"t": "2026-10-01 10:00", "amount": -88, "note": "Kaufen", "id": 1}]}}
+    changed = ingest(stored, [{"path": "buy-point-history", "pages": [{"text": "11.10.2026\nKaufen\n10:00\n−88"}]},
+                              {"path": "pending-detail", "pages": [{"text": "x"}]}])
+    assert "coins" not in changed or changed["coins"]["items"] == stored["coins"]["items"]
+    assert "pending" not in changed

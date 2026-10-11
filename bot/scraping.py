@@ -388,6 +388,10 @@ class ScrapingMixin:
 
     async def _full_scrape_reason(self, api_items: dict) -> Optional[str]:
         """Grund für einen vollen Tab-Scrape, sonst None (dann reicht die API)."""
+        # ALT (zum Testen abgeschaltet, Oktober 2026): Seit dem Umbau der Seite liefern die Kacheln der Startseite
+        # weder Titel noch Bild, Preis oder Ende - alles kommt aus pack/list. Wieder einschalten: GT_LEGACY_TABS=1
+        if os.getenv("GT_LEGACY_TABS", "0") != "1":
+            return None
         if not api_items:
             return "API-Liste leer"
         if self._last_full_scrape is None:
