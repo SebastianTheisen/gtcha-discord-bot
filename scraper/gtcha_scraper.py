@@ -29,6 +29,12 @@ FETCH_PACK_LIST_JS = """async () => {
     try { return await r.json(); } catch (e) { return null; }
 }"""
 
+# Kategorien der Seite (Reiter der Startseite, die Seite lädt die Liste selbst): [{id, name}]
+FETCH_CARD_TYPES_JS = """async () => {
+    const r = await fetch('/api/user/card_type', {headers: {Accept: 'application/json'}});
+    try { return await r.json(); } catch (e) { return null; }
+}"""
+
 # Lädt Seite 1 der Kartenliste, dann alle weiteren Seiten gleichzeitig, und gibt alle Karten zurück.
 FETCH_CARD_LIST_JS = """async (pid) => {
     const get = async (n) => {
@@ -166,6 +172,7 @@ class GTCHAScraper:
         # API-Response abfangen: /api/user/pack/list enthält echte Pack-Zahlen.
         # Listener am Kontext-Level → gilt für alle Pages (main + parallel).
         self._api_pack_data: Dict[int, dict] = {}
+        self._card_types: Dict[str, str] = {}   # card_type -> Name der Kategorie (Reiter der Seite)
 
         async def _capture_pack_api(response):
             try:
@@ -352,11 +359,22 @@ class GTCHAScraper:
                     result = {int(it["id"]): it for it in items if it.get("id")}
                     self._api_pack_data = dict(result)
                     logger.info(f"[API] pack/list: {len(result)} Banner")
+                    await self._fetch_card_types(page)
                     return result
             logger.warning("[API] pack/list lieferte keine Banner")
             return {}
         finally:
             await page.close()
+
+    async def _fetch_card_types(self, page) -> None:
+        """Namen der Kategorien (card_type -> Name), damit neue Kategorien der Seite richtig heißen."""
+        try:
+            data = await page.evaluate(FETCH_CARD_TYPES_JS)
+            items = (data or {}).get("list") if isinstance(data, dict) else None
+            self._card_types = {str(it["id"]): str(it.get("name") or "").strip()
+                                for it in items or [] if isinstance(it, dict) and it.get("id") not in (None, "")}
+        except Exception as e:
+            logger.debug(f"[API] card_type nicht geladen: {e}")
 
     async def fetch_card_pools(self, pack_ids: List[int]) -> Dict[int, Dict]:
         """Holt die komplette Kartenliste (alle Seiten) je Banner über die Browser-Sitzung (Tor)."""

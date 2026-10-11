@@ -3,7 +3,7 @@
 import json
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Dict, Optional
 
 from utils.card_pool import card_value, fmt_coins
 
@@ -85,13 +85,25 @@ def format_shipping(raw: Optional[str]) -> Optional[str]:
 
 JST = timezone(timedelta(hours=9))
 CATEGORY_BY_CARD_TYPE = {"2": "Pokémon", "5": "One piece", "9": "Dragon Ball", "999996": "MIX"}
+# Namen weiterer Kategorien, wie die Seite sie in ihren Reitern zeigt (card_type -> Name, z. B. "Yu-Gi-Oh!");
+# setzt der Scrape aus der Kategorienliste der Seite (set_card_type_names)
+CARD_TYPE_NAMES: Dict[str, str] = {}
+
+
+def set_card_type_names(names: Dict) -> None:
+    CARD_TYPE_NAMES.clear()
+    CARD_TYPE_NAMES.update({str(k): str(v).strip() for k, v in (names or {}).items() if str(v or "").strip()})
 
 
 def category_for(item: dict) -> Optional[str]:
-    """Discord-Kategorie eines Banners aus pack/list (None = Kategorie wird nicht gepostet)."""
+    """Kategorie eines Banners aus pack/list. Bekannte haben feste Namen (wie die Discord-Foren); neue Kategorien
+    der Seite (z. B. Yu-Gi-Oh!) bekommen den Namen aus ihren Reitern - so erscheinen sie automatisch in der App."""
     if str(item.get("is_bonus")) == "1":
         return "Bonus"
-    return CATEGORY_BY_CARD_TYPE.get(str(item.get("card_type")))
+    card_type = str(item.get("card_type") or "").strip()
+    if not card_type or card_type == "0":
+        return None
+    return CATEGORY_BY_CARD_TYPE.get(card_type) or CARD_TYPE_NAMES.get(card_type) or f"Kategorie {card_type}"
 
 
 def jst_timestamp(text: Optional[str]) -> Optional[int]:

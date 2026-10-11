@@ -17,6 +17,13 @@ const CATEGORIES: [string, string][] = [
   ["Alle", "Alle"], ["Heiss", "🔥 Besonders heiß"], ["Bonus", "Bonus"], ["MIX", "MIX"], ["Pokémon", "Pokémon"], ["One piece", "One Piece"],
   ["Dragon Ball", "Dragon Ball"], ["Store", "🏪 Store"], ["Wunsch", "⭐ Wunschkarten"], ["Archiv", "🗄️ Archiv"],
 ];
+// Neue Kategorien der Seite (z. B. Yu-Gi-Oh!) bekommen automatisch einen eigenen Reiter vor dem Store
+function categoryTabs(list: Banner[]): [string, string][] {
+  const known = new Set(CATEGORIES.map(([key]) => key));
+  const extra = [...new Set(list.map((b) => b.category).filter((c): c is string => !!c && !known.has(c)))].sort();
+  const at = CATEGORIES.findIndex(([key]) => key === "Store");
+  return [...CATEGORIES.slice(0, at), ...extra.map((c): [string, string] => [c, c]), ...CATEGORIES.slice(at)];
+}
 
 const SORTS: Record<string, [string, (a: Banner, b: Banner) => number]> = {
   site: ["Wie auf der Seite", (a, b) => b.id - a.id],
@@ -129,7 +136,7 @@ export function List() {
         </select>
       </form>
       <div class="chips">
-        {CATEGORIES.map(([key, label]) => (
+        {categoryTabs(banners.value || []).map(([key, label]) => (
           <button class={`chip ${cat === key && !q ? "active" : ""}`} onClick={() => { category.value = key; search.value = ""; }}>
             {key === "Heiss" && hotCount ? `${label} (${hotCount})` : label}</button>
         ))}
