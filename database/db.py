@@ -607,6 +607,28 @@ class Database:
             await db.commit()
             return cursor.rowcount > 0
 
+    async def update_site_fields(self, pack_id: int, title: Optional[str], sale_end_date: Optional[str],
+                                 image_url: Optional[str]) -> bool:
+        """Titel, Verkaufsende und Bild aus pack/list übernehmen (seit dem Umbau der Seite die einzige Quelle):
+        Titel/Bild nur, wenn sie fehlen; Verkaufsende, wenn es fehlt oder abweicht. True bei Änderung."""
+        async with aiosqlite.connect(self.db_path) as db:
+            changed = 0
+            if title:
+                cur = await db.execute("UPDATE banners SET title = ? WHERE pack_id = ? AND (title IS NULL OR title = '')",
+                                       (title, pack_id))
+                changed += cur.rowcount
+            if sale_end_date:
+                cur = await db.execute("UPDATE banners SET sale_end_date = ? WHERE pack_id = ? "
+                                       "AND (sale_end_date IS NULL OR sale_end_date != ?)",
+                                       (sale_end_date, pack_id, sale_end_date))
+                changed += cur.rowcount
+            if image_url:
+                cur = await db.execute("UPDATE banners SET image_url = ? WHERE pack_id = ? "
+                                       "AND (image_url IS NULL OR image_url = '')", (image_url, pack_id))
+                changed += cur.rowcount
+            await db.commit()
+            return changed > 0
+
     async def set_hit_list_sig(self, thread_id: int, sig: str) -> None:
         async with aiosqlite.connect(self.db_path) as db:
             for table in THREAD_TABLES:

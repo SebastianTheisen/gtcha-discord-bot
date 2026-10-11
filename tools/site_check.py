@@ -205,13 +205,16 @@ async def check_tabs(items):
            f"{len(banners)} gefunden (pack/list: {len(items)})")
     if not banners:
         return
+    # Seit dem Umbau liefern die Kacheln keine Titel/Bilder/Preise/Enddaten mehr - der Bot nimmt sie aus pack/list.
+    # Hier zählt nur noch, dass die Startseite alle Banner zeigt (fürs Erkennen beendeter Banner).
     for field, label in (("title", "Titel"), ("image_url", "Bild"), ("sale_end_date", "Enddatum"),
-                         ("price_coins", "Preis"), ("current_packs", "Pack-Zahl")):
+                         ("price_coins", "Preis")):
         missing = [b.pack_id for b in banners if not getattr(b, field)]
-        share = len(missing) / len(banners)
-        report(f"Kacheln: {label}", "✅" if share < 0.1 else ("⚠️" if share < 0.5 else "❌"),
-               f"bei {len(banners) - len(missing)} von {len(banners)}"
-               + (f" (fehlt z. B. bei {missing[:5]})" if missing else ""))
+        report(f"Kacheln: {label} (nur Hinweis, kommt aus pack/list)", "✅" if not missing else "ℹ️",
+               f"bei {len(banners) - len(missing)} von {len(banners)}")
+    titles = sum(1 for it in items.values() if str(it.get("name") or "").strip())
+    report("Titel aus pack/list", "✅" if titles == len(items) else "⚠️", f"bei {titles} von {len(items)} "
+           f"(z. B. {next((it.get('name') for it in items.values() if it.get('name')), '–')!r})")
 
 
 # --- 7./8./9. Detailseite, Bilder, Lesezeichen-Seiten ---
@@ -220,9 +223,13 @@ async def check_pages(page, items, picked):
     pid = next(iter(picked.values()))["id"] if picked else next(iter(items))
     try:
         resp = await page.goto(f"{BASE}/pack-detail?packId={pid}", wait_until="domcontentloaded", timeout=60000)
-        await page.wait_for_timeout(3000)
+        try:   # neue Seite lädt den Inhalt nach
+            await page.wait_for_load_state("networkidle", timeout=20000)
+        except Exception:
+            pass
+        await page.wait_for_timeout(2000)
         text = await page.evaluate("document.body ? document.body.innerText.length : 0")
-        report("Detailseite", "✅" if resp and resp.status < 400 and text > 200 else "⚠️",
+        report("Detailseite", "✅" if resp and resp.status < 400 and text > 200 else "ℹ️",
                f"HTTP {resp.status if resp else '–'}, {text} Zeichen Text, Adresse {page.url}")
     except Exception as e:
         report("Detailseite", "❌", f"Fehler: {type(e).__name__}: {e}")
@@ -318,8 +325,9 @@ async def main():
     print("\n================ ERGEBNIS ================")
     bad = [r for r in results if r[1] == "❌"]
     warn = [r for r in results if r[1] == "⚠️"]
+    info = [r for r in results if r[1] == "ℹ️"]
     print(f"✅ {sum(1 for r in results if r[1] == '✅')}   ⚠️ {len(warn)}   ❌ {len(bad)}")
-    for area, status, text in bad + warn:
+    for area, status, text in bad + warn + info:
         print(f"{status} {area}: {text}")
     if not bad and not warn:
         print("Alles kommt an wie vorher.")
