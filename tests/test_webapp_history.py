@@ -356,3 +356,29 @@ def test_paypal_purchase_and_missing_note():
     stored["coins"]["items"][0]["kind"] = "other"
     from webapp.history import build_from_stored
     assert build_from_stored(stored, {}, {})["summary"]["total"]["bought_yen"] == 45000
+
+
+def test_parse_card_tiles_new_layout():
+    """Neues Layout (Oktober 2026): Kartenknöpfe mit Namen im aria-label, Datum in der Gruppen-Kopfzeile."""
+    src = "https://gtchaxonline.com/card/{}_small.jpg?d=2026101105"
+    pending = [{"text": "Datum der Versandanfrage\n03.10.2026\n1 Karte", "cards": [
+        {"src": src.format(6004610), "alt": "[Full Art Relief Specification] Sabo (Hatori Kyoka) ",
+         "label": "[Full Art Relief Specification] Sabo (Hatori Kyoka) ", "group": "Datum der Versandanfrage 03.10.2026 1 Karte"},
+        {"src": src.format(1034580), "alt": "【30th】Pikachu ex", "label": "【30th】Pikachu ex",
+         "group": "Datum der Versandanfrage 28.09.2026 1 Karte"}]}]
+    cards = parse_cards(pending)
+    assert [(c["name"], c["date"], c["card_id"]) for c in cards] == [
+        ("[Full Art Relief Specification] Sabo (Hatori Kyoka)", "2026-10-03", "6004610"),
+        ("【30th】Pikachu ex", "2026-09-28", "1034580")]
+    # Sammlung: TIER-Vitrine überspringen; gibt es eine Ansicht mit Gruppen (Sendungen), zählt nur die
+    collection = {"text": "Meine Sammlung", "cards": [
+        {"src": src.format(1034417), "alt": "", "label": "TIER 1", "showcase": True},
+        {"src": src.format(1034417), "alt": "Mega Chandelure ex", "label": "Mega Chandelure ex"},
+        {"src": src.format(1001662), "alt": "[25th] Mewtwo EX", "label": "[25th] Mewtwo EX"}]}
+    assert [c["name"] for c in parse_cards([collection])] == ["Mega Chandelure ex", "[25th] Mewtwo EX"]
+    shipments = {"text": "Sendungen", "view": "sendungen", "cards": [
+        {"src": src.format(1034417), "label": "Mega Chandelure ex", "group": "Versanddatum 2026/02/20 Sendungsnummer: 8895751"}]}
+    assert [(c["name"], c["date"], c["tracking"]) for c in parse_cards([collection, shipments])] == [
+        ("Mega Chandelure ex", "2026-02-20", "8895751")]
+    # altes Layout ohne Kartenknöpfe: wie bisher über den Seitentext
+    assert parse_cards([{"text": SHIPPED}])[0]["tracking"] == "111"

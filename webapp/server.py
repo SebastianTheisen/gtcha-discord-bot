@@ -38,7 +38,7 @@ BETA_DIST = Path(__file__).parent / "beta" / "dist"   # neue Oberfläche (Vite-B
 ROLE = os.getenv("WEBAPP_ROLE", "live")
 STREAM_HEARTBEAT = 25
 REFRESH_SECONDS = 20
-BOOKMARKLET_VERSION = 9   # = SYNC_VERSION in app.js; ältere Lesezeichen bekommen einen Hinweis
+BOOKMARKLET_VERSION = 10   # = SYNC_VERSION in app.js; ältere Lesezeichen bekommen einen Hinweis
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
        "img-src 'self' data: https://gtchaxonline.com https://*.gtchaxonline.com; connect-src 'self'; "
        "manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; "
@@ -488,7 +488,8 @@ class App:
                 if i:
                     text += (pg.get("text") or "")[:20000] + "\n"
                 text += "--- Karten (Bild | alt | Text der Kachel) ---\n" + "\n".join(
-                    f"{c.get('src')} | {c.get('alt')} | {' / '.join((c.get('text') or '').split(chr(10)))}"
+                    f"{c.get('src')} | {c.get('label') or c.get('alt')} | {c.get('group') or ''}"
+                    f"{' | VITRINE' if c.get('showcase') else ''} | {' / '.join((c.get('text') or '').split(chr(10)))}"
                     for c in (pg.get("cards") or []))
                 text += "\n--- Aufbau ---\n" + "\n\n".join(pg.get("skel") or [])
             (folder / f"{user['user_id']}-{path}.txt").write_text(text, encoding="utf-8")
