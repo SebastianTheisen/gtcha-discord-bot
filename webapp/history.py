@@ -39,6 +39,8 @@ MOVE_WINDOW = timedelta(minutes=7)   # Scrape alle 5 Minuten + Laufzeit
 NEAR_WINDOW = timedelta(seconds=150)  # schneller Abfrager alle 15 s; Seite zeigt nur die Minute
 OPEN_NOTES = ("öffnen", "open")
 CONVERT_NOTES = ("umwandeln", "convert")
+BUY_PACK_NOTES = ("kaufen", "kauf", "purchase", "buy", "購入")
+CHARGE_NOTES = ("kaufen", "kauf", "aufladung", "aufgeladen", "charge", "paypal", "kredit", "購入", "チャージ")
 HEADER = re.compile(r"^(Liste der versendeten Artikel|Anfragedatum|Sendungsnummer|Börsenhistorie)", re.I)
 # Seite in anderer Sprache (Englisch/Japanisch): Sendungsnummer erkennen, jede kurze Zeile mit Datum ist Kopfzeile
 TRACKING = re.compile(r"^(Sendungsnummer|Tracking|追跡|お問い合わせ|伝票)", re.I)
@@ -71,12 +73,50 @@ def classify(amount: int, yen: int, note: str) -> str:
         return "open"
     if any(n in low for n in CONVERT_NOTES):
         return "convert"
-    if amount > 0 and yen > 0:
+    # neues Layout (Oktober 2026): Pack ziehen heißt "Kaufen" (Coins weg); Coins aufladen evtl. ohne Yen-Betrag
+    if amount < 0 and any(n in low for n in BUY_PACK_NOTES):
+        return "open"
+    if amount > 0 and (yen > 0 or any(n in low for n in CHARGE_NOTES)):
         return "buy"
     return "other"
 
 
+DAY_LINE = re.compile(r"^(\d{1,2})\.(\d{1,2})\.(\d{4})$")
+TIME_LINE = re.compile(r"^(\d{1,2}):(\d{2})(?::\d{2})?$")
+
+
+def parse_coins_grouped(pages: List[Dict]) -> List[Dict]:
+    """Neues Layout (Oktober 2026): Datumszeile "11.10.2026", darunter je Buchung Text ("In Coins umwandeln",
+    "Kaufen"), Uhrzeit ("00:56") und Betrag ("+100", "−88"); ein Yen-Betrag steht ggf. direkt danach."""
+    events = []
+    for page in _unique(pages):
+        lines, day = _lines(page), None
+        for i, line in enumerate(lines):
+            m = DAY_LINE.match(line)
+            if m:
+                day = (int(m.group(3)), int(m.group(2)), int(m.group(1)))
+                continue
+            t = TIME_LINE.match(line)
+            if not (t and day and 0 < i and i + 1 < len(lines)):
+                continue
+            amount = _amount(lines[i + 1])
+            if amount is None:
+                continue
+            note = lines[i - 1]
+            yen = lines[i + 2] if i + 2 < len(lines) and lines[i + 2].startswith(("¥", "￥")) else ""
+            yen_value = _int(re.sub(r"[^\d.]", "", yen) or "0")
+            events.append({"t": datetime(*day, int(t.group(1)), int(t.group(2))), "amount": amount,
+                           "yen": yen_value, "note": note, "kind": classify(amount, yen_value, note)})
+    return events
+
+
 def parse_coins(pages: List[Dict]) -> List[Dict]:
+    """Münzen-Verlauf: altes Layout (Zeit + Betrag je Zeile), sonst das neue (Datumsgruppen)."""
+    events = parse_coins_lines(pages)
+    return events if events else parse_coins_grouped(pages)
+
+
+def parse_coins_lines(pages: List[Dict]) -> List[Dict]:
     """Münzen-Verlauf: [{t (JST, naiv), amount, yen, note, kind}] in Seitenreihenfolge (neueste zuerst)."""
     events = []
     for page in _unique(pages):

@@ -393,3 +393,15 @@ def test_parse_coins_new_date_and_amount_format():
     assert [(e["t"].strftime("%d.%m. %H:%M"), e["amount"], e["kind"]) for e in events] == [
         ("11.10. 10:29", 1320, "convert"), ("11.10. 10:20", -1000, "open"), ("01.10. 09:00", 10000, "buy")]
     assert parse_coins([{"text": COINS}])[1]["amount"] == -1000      # altes Format wie bisher
+
+
+def test_parse_coins_new_grouped_layout():
+    """Coin-Verlauf seit dem Umbau (Screenshot 11.10.2026): Datumszeile, darunter Text / Uhrzeit / Betrag."""
+    text = ("HISTORY\nTransaktionen\nGacha\nCoins\nTicket\n11.10.2026\nIn Coins umwandeln\n00:56\n+100\n"
+            "10.10.2026\nIn Coins umwandeln\n00:03\n+300\n09.10.2026\nIn Coins umwandeln\n04:30\n+10\n"
+            "Kaufen\n04:30\n−88\nCoins kaufen\n04:00\n+10.000\n¥8.000\nStart\nShop")
+    events = parse_coins([{"text": text}])
+    assert [(e["t"].strftime("%d.%m. %H:%M"), e["amount"], e["kind"]) for e in events] == [
+        ("11.10. 00:56", 100, "convert"), ("10.10. 00:03", 300, "convert"), ("09.10. 04:30", 10, "convert"),
+        ("09.10. 04:30", -88, "open"), ("09.10. 04:00", 10000, "buy")]
+    assert events[-1]["yen"] == 8000
