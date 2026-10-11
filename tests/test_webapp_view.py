@@ -110,3 +110,16 @@ def test_cover_images_for_banner_without_image():
             "top": [{"image": "b", "value": 900}, {"image": "c", "value": 50}, {"value": 9999}]}
     assert cover_images(pool) == ["b", "a", "c"]
     assert cover_images(None) == []
+
+
+def test_shipment_counted_in_two_steps_is_not_flagged():
+    """Seite zählt erst die Karte (0 Coins), kurz danach die Coins: zusammen plausibel - kein ⚠️."""
+    from webapp.view import implausible_shipment, pack_timeline
+    pool = {"cards": [{"value": 330}, {"value": 98780}]}
+    ships = [{"t": 1000, "cards": 1, "value": 0, "players": 1, "explain": []},
+             {"t": 1030, "cards": 0, "value": 98780, "players": 0, "explain": []}]
+    out = [e for e in pack_timeline([], [], ships, pool=pool) if e["kind"] == "out"]
+    assert len(out) == 1 and out[0]["ship_value"] == 98780 and not out[0]["explain"]
+    assert implausible_shipment(pool, 1, 0) is None
+    odd = pack_timeline([], [], [{"t": 5, "cards": 1, "value": 46, "players": 1, "explain": []}], pool=pool)
+    assert odd[0]["explain"][0]["icon"] == "⚠️"
