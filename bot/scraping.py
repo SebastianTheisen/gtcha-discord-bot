@@ -4,6 +4,32 @@ from bot.common import *  # noqa: F401,F403
 from utils.translate import translate_pool
 
 
+def api_title(item: dict) -> Optional[str]:
+    name = str(item.get('name') or '').strip()
+    return name or None
+
+
+def api_image(item: dict) -> Optional[str]:
+    image = item.get('image')
+    image = image[0] if isinstance(image, list) and image else (image if isinstance(image, str) else None)
+    if not image:
+        return None
+    return image if image.startswith('http') else f"{BASE_URL}{image.split('?')[0]}"
+
+
+def fill_from_api(banner, item: dict):
+    """Felder, die früher aus den Kacheln der Startseite kamen, aus pack/list ergänzen (seit dem Umbau der Seite
+    liefern die Kacheln keine Titel, Bilder, Preise und Enddaten mehr)."""
+    banner.title = banner.title or api_title(item)
+    banner.image_url = banner.image_url or api_image(item)
+    banner.sale_end_date = item.get('end_date') or banner.sale_end_date
+    banner.price_coins = _int(item.get('point')) or banner.price_coins
+    banner.total_packs = _int(item.get('total_pack_count')) or banner.total_packs
+    if item.get('max_buy_count') is not None:
+        banner.entries_per_day = _int(item.get('max_buy_count')) or None
+    return banner
+
+
 class ScrapingMixin:
     async def scrape_and_post(self):
         """Hauptfunktion: Scrapen und neue Banner posten."""
@@ -37,6 +63,7 @@ class ScrapingMixin:
                         for b in banners:
                             if b.pack_id in api_items:
                                 b.current_packs = _int(api_items[b.pack_id].get('pack_count'))
+                                fill_from_api(b, api_items[b.pack_id])
                 else:
                     banners = await self._banners_from_api(api_items)
                     logger.info(f"Schneller Scrape über die API: {len(banners)} bekannte Banner")
@@ -282,17 +309,17 @@ class ScrapingMixin:
         states = await self.db.get_banner_states()
         for pid in sorted(self._new_banner_candidates(api_items, states)):
             item = api_items[pid]
-            image = (item.get('image') or [None])[0]
             limit = _int(item.get('max_buy_count'))
             banner = ScrapedBanner(
                 pack_id=pid,
                 category=category_for(item),
+                title=api_title(item),
                 price_coins=_int(item.get('point')) or None,
                 current_packs=_int(item.get('pack_count')),
                 total_packs=_int(item.get('total_pack_count')) or None,
                 entries_per_day=limit or None,
                 sale_end_date=item.get('end_date'),
-                image_url=f"{BASE_URL}{image.split('?')[0]}" if image else None,
+                image_url=api_image(item),
                 detail_page_url=f"{BASE_URL}/pack-detail?packId={pid}",
             )
             starts_at = jst_timestamp(item.get('start_date'))
@@ -342,19 +369,19 @@ class ScrapingMixin:
             row = rows.get(pid)
             if not row:
                 continue
-            banners.append(ScrapedBanner(
+            banners.append(fill_from_api(ScrapedBanner(
                 pack_id=pid,
                 category=row['category'],
                 title=row.get('title'),
                 best_hit=row.get('best_hit'),
-                price_coins=_int(item.get('point')) or row.get('price_coins'),
+                price_coins=row.get('price_coins'),
                 current_packs=_int(item.get('pack_count')),
-                total_packs=_int(item.get('total_pack_count')) or row.get('total_packs'),
+                total_packs=row.get('total_packs'),
                 entries_per_day=row.get('entries_per_day'),
                 sale_end_date=row.get('sale_end_date'),
                 image_url=row.get('image_url'),
                 detail_page_url=row.get('detail_page_url'),
-            ))
+            ), item))
         return banners
 
     async def _apply_site_data(self, api_items: dict):
@@ -365,6 +392,9 @@ class ScrapingMixin:
             if _int(item.get('point')) > 0:
                 changed = await self.db.update_price(pid, _int(item.get('point'))) or changed
             changed = await self.db.update_site_stats(pid, shipping_stats(item)) or changed
+            # Titel, Verkaufsende, Bild: seit dem Umbau der Seite nur noch aus pack/list
+            changed = await self.db.update_site_fields(pid, api_title(item), item.get('end_date'),
+                                                       api_image(item)) or changed
             # Umgewandelte Coins nur speichern (Verlauf), Startbeitrag deshalb nicht neu bearbeiten
             if item.get('total_kangen') is not None:
                 await self.db.update_converted(pid, _int(item.get('total_kangen')))
