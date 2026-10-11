@@ -644,3 +644,13 @@ def test_off_value_hit_prefers_hits_counted_lower():
     names = {u["key"]: u["name"] for u in tracked_units(pool)}
     res = explain_batch(pool, 1, 41800, set())
     assert res["kind"] == "hits" and [names[k] for k in res["certain"]] == ["Groß"] and res["off_value"]
+
+
+def test_single_card_slightly_below_normal_card_is_normal():
+    """2.090 gezählt (×1,1) bei normaler Karte 2.310: normale Karte, von der Seite etwas niedriger gezählt - kein Hit."""
+    from utils.card_pool import explain_batch, match_shipment_history
+    pool = summarize_cards([card(1, 3000, hit=True, name="Hit"), card(2, 2310, copies=50, name="Normal"),
+                            card(3, 330, copies=400, name="Klein")])
+    res = explain_batch(pool, 1, 1900, set())
+    assert res["kind"] == "normal" and res.get("lower")
+    assert match_shipment_history(pool, [[1, 1900, 1000]])["certain"] == []

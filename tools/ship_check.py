@@ -84,7 +84,10 @@ for b in batches:
         if hit:
             names = [c["name"] for c in cards if int(c.get("value") or 0) in hit][:3]
             verdict, note = "✅", f"Karte {fmt_coins(hit[0])}: {', '.join(n[:40] for n in names)}"
-        elif (off := explain_batch(pool, 1, b["coins"], set(), price=row["price_coins"])).get("off_value"):
+        elif (off := explain_batch(pool, 1, b["coins"], set(), price=row["price_coins"])).get("lower"):
+            above = min(v for v in values if v >= gross)
+            verdict, note = "🔹", f"normale Karte {fmt_coins(above)} – Seite zählt weniger (×{gross / above:.2f})"
+        elif off.get("off_value"):
             # wie der Bot: Hit, für den die Seite einen anderen (meist niedrigeren) Wert zählt
             units = {u["key"]: u for u in tracked_units(pool)}
             keys = off["certain"] + [k for g in off["groups"] for k in g["keys"]]
@@ -119,7 +122,7 @@ for b in batches:
     print(f"{verdict} {head}\n     {note}")
 
 total = sum(verdicts.values())
-print(f"\nERGEBNIS: {total} Schübe · ✅ {verdicts['✅']} passen · 🔶 {verdicts['🔶']} Hit mit anderem Wert · ⏳ {verdicts['⏳']} Teilschritte · "
+print(f"\nERGEBNIS: {total} Schübe · ✅ {verdicts['✅']} passen · 🔶 {verdicts['🔶']} Hit mit anderem Wert · 🔹 {verdicts['🔹']} normale Karte niedriger gezählt · ⏳ {verdicts['⏳']} Teilschritte · "
       f"❓ {verdicts['❓']} unklar · ❌ {verdicts['❌']} unmöglich")
 if cross:
     print(f"Einzelkarten ohne Treffer im eigenen Banner, aber mit gleichem Wert in einem anderen: {sum(cross.values())}")

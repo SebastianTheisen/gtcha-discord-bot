@@ -611,7 +611,8 @@ class BannerView:
                 rest = s['cards'] - hits
                 lines.append({"icon": "·", "text": f"+ {rest} normale Karte" + ("" if rest == 1 else "n")})
             elif res["kind"] == "normal":
-                lines.append({"icon": "·", "text": "nur normale Karten"})
+                lines.append({"icon": "·", "text": "normale Karte – Seite zählt etwas weniger als ihren Wert"
+                              if res.get("lower") else "nur normale Karten"})
             elif res["kind"] == "too_big":
                 lines.append({"icon": "·", "text": "zu viele Karten auf einmal – nicht zerlegbar"})
             elif res["kind"] == "unclear":
