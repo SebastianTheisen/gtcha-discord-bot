@@ -316,16 +316,23 @@ async def check_hidden(page, items):
            + (f" (z. B. {', '.join(map(str, sorted(no_image)[:8]))})" if no_image else ""))
     report("Banner ohne Kartenliste", "✅" if not empty else "ℹ️", f"{len(empty)}"
            + (f": {', '.join(map(str, sorted(empty)[:15]))}" if empty else ""))
-    for pid in (hidden + [p for p in sorted(empty, reverse=True) if p not in hidden])[:3]:
+    picks = hidden + [p for p in sorted(empty, reverse=True) if p not in hidden]
+    picks += [p for p in sorted(no_image, reverse=True) if p not in picks]
+    for pid in picks[:5]:
         it = items.get(pid) or {}
         fields = {k: it.get(k) for k in ("card_hide_flag", "show_list_count", "is_before", "is_countdown",
                                           "rule_type", "lottery_method", "stock_count", "start_date")}
         report(f"{pid}: Werte der Seite", "ℹ️", _json.dumps(fields, ensure_ascii=False))
-        seen = []   # Abfragen, die die Detailseite selbst lädt (nur mitgelesen)
+        seen, own = [], {}   # Abfragen, die die Detailseite selbst lädt (nur mitgelesen)
 
-        def on_response(r, seen=seen):
+        async def on_response(r, seen=seen, own=own, pid=pid):
             if "/api/" in r.url:
                 seen.append(f"{r.request.method} {r.url.replace(BASE, '')} -> {r.status}")
+                if f"/pack/detail/{pid}" in r.url or f"/pack/card_list/{pid}/" in r.url:
+                    try:
+                        own["detail" if "/detail/" in r.url else "cards"] = await r.json()
+                    except Exception:
+                        pass
         page.on("response", on_response)
         try:
             await page.goto(f"{BASE}/pack-detail?packId={pid}", wait_until="domcontentloaded", timeout=60000)
@@ -338,6 +345,18 @@ async def check_hidden(page, items):
                 text: (document.body ? document.body.innerText : '').replace(/\\s+/g, ' ').slice(0, 300)})""")
             report(f"{pid}: Detailseite zeigt", "ℹ️", f"{shown['cards']} Kartenbilder · Text: {shown['text']!r}")
             report(f"{pid}: Abfragen der Detailseite", "ℹ️", " | ".join(dict.fromkeys(seen)) or "keine")
+            det = (own.get("detail") or {}).get("detail") or {}
+            if det:   # öffentliche Banner-Daten, die die Detailseite lädt: Bilder und Kartenliste
+                keys = ["image", "image02", "image03", "image04", "image05", "image06", "card_type_name",
+                        "show_cardlist", "card_hide_flag", "is_before"]
+                report(f"{pid}: Banner-Daten der Detailseite", "ℹ️",
+                       _json.dumps({k: det.get(k) for k in keys}, ensure_ascii=False)[:900])
+                extra = sorted(set(det) - set(keys) - {"detail", "name"})
+                report(f"{pid}: weitere Felder", "ℹ️", ", ".join(extra))
+            cl = own.get("cards")
+            report(f"{pid}: Kartenliste, die die Detailseite selbst lädt", "ℹ️",
+                   "nicht geladen" if cl is None else
+                   f"{len(cl.get('list') or [])} Karten auf Seite 1 (gesamt {(cl.get('page') or {}).get('all')})")
         except Exception as e:
             report(f"{pid}: Detailseite", "❌", f"Fehler: {type(e).__name__}: {e}")
         finally:
