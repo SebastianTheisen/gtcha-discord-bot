@@ -63,7 +63,7 @@ export function HistorySection({ h, title = "📊 Mein Verlauf" }: { h: History;
       <div class="section-title"><h2>{title}</h2><span class="muted small">Stand {d ? `${dmy(d)} ${tm || ""}` : "–"}</span></div>
       <div class="stats">
         {m.spent_month_yen != null && <Stat l="Ausgaben diesen Monat" v={`${num(m.spent_month_yen)} ¥`} s="laut Kontoseite" />}
-        {m.coins != null && <Stat l="Coin-Stand" v={`${num(m.coins)} Coins`} />}
+        {m.coins != null && <Stat l="Coin-Stand" v={`${num(m.coins)} Coins`} s={m.tickets != null ? `🎟️ ${num(m.tickets)} Tickets` : undefined} />}
         <Stat l="Bilanz inkl. Hits" v={<><Signed n={t.balance_with_hits ?? t.balance} /> Coins</>}
           s={`${num(t.spent)} rein · ${num(t.returned)} umgewandelt${t.hits ? ` · ${num(t.hits_value)} in ${t.hits} Hits` : ""}`} />
         {t.hits ? <Stat l="Nur Coins" v={<><Signed n={t.balance} /> Coins</>} s="ohne angeforderte/verschickte Karten" /> : null}

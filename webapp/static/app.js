@@ -1465,7 +1465,7 @@ function historySection(h) {
   return `<h2>📊 Mein Verlauf <small>Stand ${esc(d ? d.split("-").reverse().join(".") + " " + (tm || "") : "–")}</small></h2>
     <div class="stats hist-stats">
       ${m.spent_month_yen != null ? stat("Ausgaben diesen Monat", num(m.spent_month_yen) + " ¥", "laut Kontoseite") : ""}
-      ${m.coins != null ? stat("Coin-Stand", num(m.coins) + " Coins") : ""}
+      ${m.coins != null ? stat("Coin-Stand", num(m.coins) + " Coins", m.tickets != null ? `🎟️ ${num(m.tickets)} Tickets` : "") : ""}
       ${stat("Bilanz inkl. Hits", signed(t.balance_with_hits ?? t.balance) + " Coins",
         `${num(t.spent)} rein · ${num(t.returned)} umgewandelt${t.hits ? ` · ${num(t.hits_value)} in ${t.hits} Hits` : ""}`)}
       ${t.hits ? stat("Nur Coins", signed(t.balance) + " Coins", "ohne angeforderte/verschickte Karten") : ""}
