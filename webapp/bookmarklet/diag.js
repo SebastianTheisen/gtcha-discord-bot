@@ -26,8 +26,8 @@
   box.style.cssText = 'position:fixed;z-index:9999999;inset:9px 9px auto;padding:12px;background:#6e1f5a;color:#fff;font:15px sans-serif;border-radius:9px';
   document.body.appendChild(box);
   const sleep = ms => new Promise(r => setTimeout(r, ms));
-  const pages = ['shipped-detail', 'pending-detail', 'undecided-detail', 'downloaded-detail', 'buy-point-history',
-    'purchase-history', 'ticket-history'];
+  // aktuell: nur der Münzverlauf (Details eines Kaufs) - die übrigen Seiten sind ausgewertet (Lesezeichen v19)
+  const pages = ['buy-point-history'];
   const out = {};
   for (const p of pages) {
     box.textContent = 'GTCHA Diagnose: ' + p + ' …';
@@ -43,7 +43,7 @@
       X.open = function (m, u) { this.__m = m; this.__u = String(u); return open.apply(this, arguments) };
       X.send = function (b) {
         this.addEventListener('load', () => {
-          if (!/\/api\//.test(this.__u) || seen.length > 12) return;
+          if (!/\/api\//.test(this.__u) || seen.length > 20) return;
           let j = null;
           try { j = JSON.parse(this.responseText) } catch (e) {}
           seen.push({ method: this.__m, url: this.__u.replace(location.origin, ''), body: params(b), status: this.status,
@@ -54,7 +54,7 @@
       const f = w.fetch;
       w.fetch = async (u, o) => {
         const r = await f(u, o), url = String(u && u.url || u);
-        if (/\/api\//.test(url) && seen.length <= 12) {
+        if (/\/api\//.test(url) && seen.length <= 20) {
           r.clone().json().then(j => seen.push({ method: (o && o.method) || 'GET', url: url.replace(location.origin, ''),
             body: params(o && o.body), status: r.status, shape: shape(j), page: j && j.page,
             sample: clean(j && Array.isArray(j.list) ? j.list[0] : null) })).catch(() => {});
@@ -68,6 +68,17 @@
       await sleep(4);
     }
     await sleep(9000);
+    // Münzverlauf: wie ein Nutzer einen "Kaufen"-Eintrag antippen - die Seite lädt dann die Details (welche Karten,
+    // evtl. aus welchem Banner); auch diese Abfrage wird nur mitgelesen
+    if (p == 'buy-point-history') {
+      try {
+        const d = fr.contentDocument;
+        // Text "Kaufen" antippen - der Klick steigt zur Zeile auf, die das Detail öffnet
+        const target = [...d.querySelectorAll('*')].find(e => !e.children.length && /^(Kaufen|Buy|購入)$/.test(e.textContent.trim()));
+        if (target) { target.click(); await sleep(4000) }
+        seen.push({ note: target ? 'Eintrag "Kaufen" geöffnet' : 'kein "Kaufen"-Eintrag zum Öffnen gefunden' });
+      } catch (e) { seen.push({ note: 'Öffnen fehlgeschlagen: ' + e }) }
+    }
     fr.remove();
   }
   box.textContent = 'GTCHA Diagnose: sende …';
