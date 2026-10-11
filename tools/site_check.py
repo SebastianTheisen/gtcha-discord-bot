@@ -79,9 +79,10 @@ def check_db():
     day = (datetime.now() - timedelta(days=1)).isoformat()
     new = db.execute("SELECT pack_id, card_pool IS NOT NULL, image_url IS NOT NULL, sale_end_date IS NOT NULL "
                      "FROM banners WHERE created_at > ? ORDER BY pack_id DESC", (day,)).fetchall()
-    bad = [str(p) for p, pool, img, end in new if not (pool and img and end)]
+    # Bild: neue Banner haben seit dem Umbau keins mehr (App zeigt die Top-Karten) - zählt nicht als Fehler
+    bad = [str(p) for p, pool, img, end in new if not (pool and end)]
     report("Neue Banner (24 Std)", "✅" if not bad else "⚠️",
-           f"{len(new)} neu" + (f", unvollständig (Pool/Bild/Ende fehlt): {', '.join(bad[:10])}" if bad else ""))
+           f"{len(new)} neu" + (f", unvollständig (Kartenpool/Ende fehlt): {', '.join(bad[:10])}" if bad else ""))
     nopool = q("SELECT count(*) FROM banners WHERE is_active = 1 AND card_pool IS NULL")[0]
     report("Aktive Banner ohne Kartenpool", "✅" if not nopool else "⚠️", str(nopool))
     return {r[0]: r[1] for r in db.execute("SELECT pack_id, current_packs FROM banners WHERE is_active = 1")}
@@ -89,7 +90,13 @@ def check_db():
 
 # --- 2./3. pack/list ---
 def check_pack_list(items, db_packs):
-    from utils.banner_info import category_for, jst_timestamp, sale_end_timestamp
+    import json as _json
+    from utils.banner_info import category_for, jst_timestamp, sale_end_timestamp, set_card_type_names
+    try:   # Namen neuer Kategorien wie im Bot (z. B. Yu-Gi-Oh!)
+        row = sqlite3.connect(DB).execute("SELECT value FROM bot_meta WHERE key = 'card_type_names'").fetchone()
+        set_card_type_names(_json.loads(row[0]) if row else {})
+    except Exception:
+        pass
     print("\n== 2. pack/list (Banner-Liste der Seite)")
     lst = list(items.values())
     report("Banner in pack/list", "✅" if lst else "❌", str(len(lst)))
@@ -123,8 +130,10 @@ def check_pack_list(items, db_packs):
            f"{upcoming} angekündigt" if not start_bad
            else f"Format unbekannt bei {start_bad[:5]}: {items[start_bad[0]].get('start_date')!r}")
     no_img = [it["id"] for it in lst if not (isinstance(it.get("image"), list) and it["image"])]
-    report("Bannerbilder", "✅" if not no_img else "⚠️", "vorhanden" if not no_img
-           else f"fehlen/anderes Format bei {no_img[:10]} (Beispiel: {items[no_img[0]].get('image')!r})")
+    odd_img = [pid for pid in no_img if items[pid].get("image") not in ([], None, "")]
+    report("Bannerbilder", "✅" if not odd_img else "⚠️",
+           (f"vorhanden; ohne eigenes Bild (App zeigt Top-Karten): {no_img[:10]}" if no_img else "vorhanden")
+           if not odd_img else f"anderes Format bei {odd_img[:10]} (Beispiel: {items[odd_img[0]].get('image')!r})")
     badges = [it["id"] for it in lst if it.get("badges") is not None and not isinstance(it.get("badges"), list)]
     report("Kaufbedingungen (Rang)", "✅" if not badges else "⚠️", "lesbar" if not badges
            else f"anderes Format bei {badges[:5]}")
@@ -297,16 +306,18 @@ async def check_hidden(page, items):
     import json as _json
     db = sqlite3.connect(DB)
     pools = {r[0]: r[1] for r in db.execute("SELECT pack_id, card_pool FROM banners WHERE is_active = 1")}
-    empty = [pid for pid in items if not (pools.get(pid) and '"cards": [' in pools[pid] and '"cards": []' not in pools[pid])]
-    flags = Counter(f"card_hide_flag={it.get('card_hide_flag')!r}" for it in items.values())
-    report("card_hide_flag in pack/list", "ℹ️", ", ".join(f"{k}: {n}" for k, n in flags.most_common()))
+    # nur aktive Banner des Bots (pack/list enthält auch beendete)
+    empty = [pid for pid in pools if not (pools[pid] and '"cards": [{' in pools[pid])]
+    hidden = sorted(pid for pid, it in items.items() if str(it.get("card_hide_flag")) == "1")
+    report("Kartenliste versteckt (card_hide_flag=1)", "ℹ️", f"{len(hidden)} Banner"
+           + (f": {', '.join(map(str, hidden))}" if hidden else ""))
     no_image = [pid for pid, it in items.items() if not it.get("image")]
     report("Banner ohne eigenes Bild", "ℹ️", f"{len(no_image)} von {len(items)}"
            + (f" (z. B. {', '.join(map(str, sorted(no_image)[:8]))})" if no_image else ""))
     report("Banner ohne Kartenliste", "✅" if not empty else "ℹ️", f"{len(empty)}"
            + (f": {', '.join(map(str, sorted(empty)[:15]))}" if empty else ""))
-    for pid in sorted(empty)[:3]:
-        it = items[pid]
+    for pid in (hidden + [p for p in sorted(empty, reverse=True) if p not in hidden])[:3]:
+        it = items.get(pid) or {}
         fields = {k: it.get(k) for k in ("card_hide_flag", "show_list_count", "is_before", "is_countdown",
                                           "rule_type", "lottery_method", "stock_count", "start_date")}
         report(f"{pid}: Werte der Seite", "ℹ️", _json.dumps(fields, ensure_ascii=False))
