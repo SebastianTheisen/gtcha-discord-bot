@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 120;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 121;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -14,6 +14,13 @@ const isHotNew = (b) => b.status === "upcoming" && (b.ev_pct ?? 0) >= HOT_MIN_PC
 const CATEGORIES = [["Heiss", "🔥 Besonders heiß"], ["Alle", "Alle"], ["Bonus", "BONUS"], ["MIX", "MIX"], ["Pokémon", "Pokémon"],
                     ["One piece", "One Piece"], ["Dragon Ball", "Dragon Ball"], ["Store", "🏪 Store"],
                     ["Wunsch", "⭐ Wunschkarten"], ["Archiv", "🗄️ Archiv"]];
+// Neue Kategorien der Seite (z. B. Yu-Gi-Oh!) bekommen automatisch einen eigenen Reiter vor dem Store
+const categoryTabs = (banners) => {
+  const known = new Set(CATEGORIES.map(([key]) => key));
+  const extra = [...new Set(banners.map((b) => b.category).filter((c) => c && !known.has(c)))].sort();
+  const at = CATEGORIES.findIndex(([key]) => key === "Store");
+  return [...CATEGORIES.slice(0, at), ...extra.map((c) => [c, c]), ...CATEGORIES.slice(at)];
+};
 const SORTS = {
   site: ["Wie auf der Seite", (a, b) => b.id - a.id],
   ev: ["Ø Rückgabe", (a, b) => (b.ev_pct ?? -1) - (a.ev_pct ?? -1)],
@@ -284,10 +291,15 @@ function matches(b, q) {
 async function showList() {
   const { banners, updated } = await api("/api/banners");
   state.listData = { banners, updated };
-  // Grundgerüst nur einmal bauen, damit das Suchfeld beim Aktualisieren den Fokus behält
+  // Grundgerüst nur einmal bauen, damit das Suchfeld beim Aktualisieren den Fokus behält - neu nur, wenn
+  // eine Kategorie dazukommt
+  const tabs = categoryTabs(banners);
+  const tabsKey = tabs.map(([key]) => key).join("|");
+  if (view.querySelector("#search") && view.dataset.tabs !== tabsKey) view.innerHTML = "";
   if (!view.querySelector("#search")) {
+    view.dataset.tabs = tabsKey;
     view.innerHTML = `
-      <div class="tabs">${CATEGORIES.map(([key, label]) =>
+      <div class="tabs">${tabs.map(([key, label]) =>
         `<button class="tab ${key === "Bonus" ? "bonus" : key === "Heiss" ? "hot" : ""}" data-cat="${esc(key)}">${esc(label)}</button>`).join("")}</div>
       <form class="search" id="search-form" role="search">
         <input id="search" type="search" inputmode="numeric" autocomplete="off" placeholder="🔍 Banner-ID suchen, z. B. 24149">

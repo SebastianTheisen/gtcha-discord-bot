@@ -47,6 +47,7 @@ class ScrapingMixin:
                 except Exception as e:
                     logger.warning(f"[API] pack/list fehlgeschlagen: {e}")
                     api_items = {}
+                await self._load_category_names(getattr(scraper, '_card_types', None))
 
                 created_from_api = await self._create_banners_from_api(api_items) if api_items else []
                 if api_items:
@@ -200,7 +201,8 @@ class ScrapingMixin:
                 # Die Kartenliste ändert sich nicht; pro Scrape nur wenige fehlende Pools nachladen
                 # (neue Banner zuerst), damit der Scrape kurz bleibt.
                 missing_pools = await self.db.get_banners_without_pool(
-                    limit=POOL_FETCH_PER_SCRAPE, prefer_ids=new_banner_ids)
+                    limit=POOL_FETCH_PER_SCRAPE, prefer_ids=new_banner_ids,
+                    forums=[c for c, cid in CHANNEL_IDS.items() if cid])
                 if missing_pools:
                     try:
                         pools = await scraper.fetch_card_pools(missing_pools)
@@ -296,6 +298,25 @@ class ScrapingMixin:
             await self._report_scrape_problem(f"Scrape-Fehler: {e}")
         finally:
             self._scraper = None
+
+    async def _load_category_names(self, fetched: Optional[dict]) -> None:
+        """Namen neuer Kategorien der Seite (z. B. Yu-Gi-Oh!) übernehmen und merken (gelten auch nach einem
+        Neustart, falls die Liste einmal nicht lädt)."""
+        try:
+            if fetched:
+                new = sorted(set(fetched.values()) - set(CARD_TYPE_NAMES.values()))
+                set_card_type_names(fetched)
+                await self.db.set_meta("card_type_names", json.dumps(fetched, ensure_ascii=False))
+                for k, name in fetched.items():   # vorher ohne Namen angelegt ("Kategorie 7"): umbenennen
+                    if k not in CATEGORY_BY_CARD_TYPE and name:
+                        await self.db.rename_category(f"Kategorie {k}", name)
+                unknown = [n for k, n in fetched.items() if k not in CATEGORY_BY_CARD_TYPE]
+                if new and unknown:
+                    logger.info(f"[KATEGORIEN] Seite: {', '.join(f'{k}={n}' for k, n in sorted(fetched.items()))}")
+            elif not CARD_TYPE_NAMES:
+                set_card_type_names(json.loads(await self.db.get_meta("card_type_names") or "{}"))
+        except Exception as e:
+            logger.debug(f"[KATEGORIEN] nicht übernommen: {e}")
 
     @staticmethod
     def _new_banner_candidates(api_items: dict, states: dict) -> set:
@@ -480,6 +501,9 @@ class ScrapingMixin:
         True, sobald es in mindestens einem Thread geklappt hat."""
         try:
             if not await self._banner_threads(pack_id):
+                row = await self.db.get_banner(pack_id)
+                if row and not CHANNEL_IDS.get(row.get('category')):
+                    return True   # Kategorie ohne Discord-Forum (z. B. neu auf der Seite): nur App - Stand übernehmen
                 logger.debug(f"Kein Thread für Pack-Update {pack_id}")
                 return False
 

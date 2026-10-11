@@ -327,8 +327,9 @@ class Database:
             await db.commit()
 
     async def get_banners_without_pool(self, limit: int, prefer_ids: List[int],
-                                       max_age_hours: int = 6) -> List[int]:
-        """Aktive Banner mit Thread, deren Kartenpool fehlt oder älter als max_age_hours ist.
+                                       max_age_hours: int = 6, forums: Optional[List[str]] = None) -> List[int]:
+        """Aktive Banner mit Thread, deren Kartenpool fehlt oder älter als max_age_hours ist. Banner einer
+        Kategorie ohne Discord-Forum (nicht in `forums`, z. B. neu auf der Seite) zählen auch ohne Thread.
 
         Reihenfolge: prefer_ids (z.B. neue Banner), dann fehlende Pools, dann die ältesten.
         """
@@ -339,15 +340,27 @@ class Database:
                                   OR b.card_pool NOT LIKE '%"cards": [%' AS missing,
                        COALESCE(b.pool_updated_at, '') AS updated
                 FROM banners b
-                JOIN discord_threads t ON t.banner_id = b.pack_id AND t.is_expired = 0
-                WHERE b.is_active = 1 AND (b.card_pool IS NULL OR b.card_pool NOT LIKE '%"version": 2%'
+                LEFT JOIN discord_threads t ON t.banner_id = b.pack_id AND t.is_expired = 0
+                WHERE b.is_active = 1
+                  AND (t.banner_id IS NOT NULL OR (? AND b.category IS NOT NULL AND b.category != 'Store'
+                       AND b.category NOT IN (SELECT value FROM json_each(?))))
+                  AND (b.card_pool IS NULL OR b.card_pool NOT LIKE '%"version": 2%'
                                            OR b.card_pool NOT LIKE '%"cards": [%'
                                            OR b.pool_updated_at IS NULL OR b.pool_updated_at < ?)
-            """, (cutoff,))
+            """, (forums is not None, json.dumps(list(forums or [])), cutoff))
             rows = await cursor.fetchall()
         preferred = set(prefer_ids)
         rows.sort(key=lambda r: (r[0] not in preferred, not r[1], r[2]))
         return [r[0] for r in rows[:limit]]
+
+    async def rename_category(self, old: str, new: str) -> int:
+        """Banner einer Kategorie umbenennen (neue Kategorie der Seite, deren Name erst später bekannt war)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("UPDATE banners SET category = ? WHERE category = ?", (new, old))
+            await db.commit()
+            if cur.rowcount:
+                logger.info(f"[KATEGORIEN] {cur.rowcount} Banner: {old} -> {new}")
+            return cur.rowcount
 
     async def save_card_pool(self, pack_id: int, pool: Dict) -> None:
         async with aiosqlite.connect(self.db_path) as db:

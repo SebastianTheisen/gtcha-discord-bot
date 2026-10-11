@@ -52,7 +52,19 @@ def test_category_for_pack_list_items():
     assert category_for({"card_type": "9", "is_bonus": 0}) == "Dragon Ball"
     assert category_for({"card_type": "999996", "is_bonus": 0}) == "MIX"
     assert category_for({"card_type": "999996", "is_bonus": 1}) == "Bonus"
-    assert category_for({"card_type": "7", "is_bonus": 0}) is None
+    assert category_for({"card_type": "7", "is_bonus": 0}) == "Kategorie 7"       # neu auf der Seite
+    assert category_for({"card_type": "", "is_bonus": 0}) is None
+
+
+def test_new_site_category_gets_name_from_site_tabs():
+    """Kommt auf der Seite eine Kategorie dazu (Yu-Gi-Oh!), heißt sie in Bot und App wie ihr Reiter."""
+    from utils.banner_info import category_for, set_card_type_names
+    try:
+        set_card_type_names({7: "Yu-Gi-Oh!", 2: "ポケモン"})
+        assert category_for({"card_type": 7, "is_bonus": "0"}) == "Yu-Gi-Oh!"
+        assert category_for({"card_type": "2", "is_bonus": "0"}) == "Pokémon"     # bekannte behalten ihren Namen
+    finally:
+        set_card_type_names({})
 
 
 def test_jst_timestamp_reads_site_times():

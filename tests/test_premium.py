@@ -230,3 +230,19 @@ def test_banner_fields_from_pack_list_after_site_redesign(tmp_path, env):
         assert not await db.clear_title_if(7, None)
 
     asyncio.run(run())
+
+
+def test_new_category_without_forum_still_gets_card_pool(tmp_path, env):
+    """Neue Kategorie der Seite (z. B. Yu-Gi-Oh!) hat kein Discord-Forum: Banner trotzdem mit Kartenpool (App)."""
+    async def run():
+        db, _ = await setup(tmp_path)
+        async with aiosqlite.connect(db.db_path) as conn:
+            await conn.execute("INSERT INTO banners (pack_id, is_active, category) VALUES (8, 1, 'Yu-Gi-Oh!')")
+            await conn.execute("INSERT INTO banners (pack_id, is_active, category) VALUES (9, 1, 'Pokémon')")
+            await conn.commit()
+        forums = ["Bonus", "MIX", "Pokémon", "One piece", "Dragon Ball"]
+        assert sorted(await db.get_banners_without_pool(10, [], forums=forums)) == [7, 8]   # 9: Thread fehlt noch
+        assert await db.get_banners_without_pool(10, []) == [7]                             # ohne Angabe wie bisher
+        assert await db.rename_category("Yu-Gi-Oh!", "Yu-Gi-Oh") == 1
+
+    asyncio.run(run())

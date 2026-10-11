@@ -40,6 +40,7 @@ from utils.cache import banner_cache
 from utils.coin_history import coin_intervals, match_coin_history
 from utils.maintenance import backup_database, new_tor_identity, start_watchdog, touch_heartbeat
 from utils.banner_info import (
+    CARD_TYPE_NAMES, CATEGORY_BY_CARD_TYPE, set_card_type_names,
     banner_conditions, category_for, chance_at_least_one, format_conditions, format_shipping,
     sale_end_timestamp,
     is_upcoming, jst_timestamp, parse_thread_title, shipping_stats, thread_title, to_int as _int,

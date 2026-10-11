@@ -69,6 +69,8 @@ class FastPollMixin:
             sample = next(iter(items.values()), {})
             logger.info(f"[API] pack/list-Felder: {', '.join(sorted(sample))}")
             self._fields_logged = True
+        if not CARD_TYPE_NAMES:
+            await self._load_category_names(None)   # Namen neuer Kategorien (vom letzten Scrape gemerkt)
         await self._create_banners_from_api(items)
         await self._announce_started_banners(items)
 
