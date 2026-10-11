@@ -2,7 +2,7 @@ import asyncio
 from datetime import datetime
 
 from utils.app_bridge import AppBridge
-from webapp.history import (build_history, ingest, merge_newest_first, parse_cards, parse_coins, parse_member, profile,
+from webapp.history import (build_history, parse_card_tiles, ingest, merge_newest_first, parse_cards, parse_coins, parse_member, profile,
                             plan_claims)
 
 HEAD = "949\n1\n×\nMitglieds-ID\nTransaktionen\nGacha\nMünzen\nVerkauf\nTicket\n"
@@ -422,3 +422,23 @@ def test_parse_coins_grouped_counts_repeated_list_once():
     events = parse_coins([{"text": first}, {"text": more}, {"text": more}])
     assert [(e["t"].strftime("%d.%m. %H:%M"), e["amount"]) for e in events] == [
         ("11.10. 04:30", -88), ("11.10. 04:30", -88), ("11.10. 04:29", 10), ("10.10. 00:03", 300)]
+
+
+def test_parse_card_tiles_page_transition():
+    """Beim Umblättern zeigt die Seite alte und neue Karten zugleich: Reste ohne Sendung (Sammlung) zählen nicht,
+    eine Sendung auf zwei eingelesenen Seiten nur einmal; zwei gleiche Karten in einer Sendung bleiben zwei."""
+    src = "https://gtchaxonline.com/card/{}_small.jpg"
+    g1 = "Versendet 01.08.2026 Sendungsnummer: 876350975697 Sendung verfolgen"
+    g2 = "Versendet 29.07.2026 Sendungsnummer: 876350975697 Sendung verfolgen"
+    page1 = {"view": "sendungen", "cards": [
+        {"src": src.format(1), "label": "Rest aus der Sammlung", "group": ""},
+        {"src": src.format(2), "label": "Yamato", "group": g1},
+        {"src": src.format(3), "label": "Booster", "group": g1}, {"src": src.format(3), "label": "Booster", "group": g1},
+        {"src": src.format(4), "label": "Storm Emeralda", "group": g2}]}
+    page2 = {"cards": [{"src": src.format(4), "label": "Storm Emeralda", "group": g2},
+                       {"src": src.format(5), "label": "Mew", "group": g2}]}
+    cards = parse_card_tiles([page1, page2])
+    assert [(c["name"], c["date"]) for c in cards] == [
+        ("Yamato", "2026-08-01"), ("Booster", "2026-08-01"), ("Booster", "2026-08-01"),
+        ("Storm Emeralda", "2026-07-29"), ("Mew", "2026-07-29")]
+    assert cards[0]["tracking"] == "876350975697"

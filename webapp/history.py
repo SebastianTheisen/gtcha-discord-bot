@@ -176,11 +176,18 @@ def parse_card_tiles(pages: List[Dict]) -> List[Dict]:
     Kopfzeile ("Datum der Versandanfrage 03.10.2026 · 1 Karte", bei Sendungen evtl. mit Sendungsnummer).
     Das Lesezeichen (ab v9) schickt je Kartenbild: src, alt, label, group (Kopfzeile), showcase (TIER-Vitrine).
     Gibt es eine Ansicht mit Gruppen (z. B. "Sendungen"), zählt nur sie - die Sammlung zeigt dieselben Karten."""
+    from collections import Counter
     views = [p for p in pages if p.get("cards")]
     grouped = [p for p in views if any(c.get("group") for c in p["cards"])]
-    cards = []
+    cards: List[Dict] = []
+    best: Counter = Counter()   # je Karte die höchste Anzahl auf einer Seite: beim Umblättern zeigt die Seite kurz
+    first: Dict[tuple, Dict] = {}   # alte und neue Seite zugleich - Karten von dort zählen nicht doppelt
+    order: List[tuple] = []
     for page in grouped or views[:1]:
+        page_cards = []
         for c in page["cards"]:
+            if grouped and not c.get("group"):
+                continue   # in der Sendungsansicht nur Karten mit Sendung (keine Reste der Sammlung)
             name = (c.get("label") or c.get("alt") or "").strip()
             src = c.get("src") or ""
             if c.get("showcase") or not name or "/card/" not in src:
@@ -195,8 +202,17 @@ def parse_card_tiles(pages: List[Dict]) -> List[Dict]:
             if t:
                 tracking = t.group(1)
             m = re.search(r"/card/(\d+)", src)
-            cards.append({"date": date, "tracking": tracking, "name": name, "rarity": "", "number": "",
-                          "image": src, "card_id": m.group(1) if m else None})
+            page_cards.append({"date": date, "tracking": tracking, "name": name, "rarity": "", "number": "",
+                               "image": src, "card_id": m.group(1) if m else None, "_group": group})
+        counts = Counter((c["card_id"] or c["image"], c["_group"], c["name"]) for c in page_cards)
+        for key, n in counts.items():
+            if key not in first:
+                order.append(key)
+                first[key] = next(c for c in page_cards if (c["card_id"] or c["image"], c["_group"], c["name"]) == key)
+            best[key] = max(best[key], n)
+    for key in order:
+        card = {k: v for k, v in first[key].items() if k != "_group"}
+        cards += [dict(card) for _ in range(best[key])]
     return cards
 
 
