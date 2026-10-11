@@ -131,6 +131,15 @@ class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, Hits
             self._check_webapp, 'interval', minutes=5,
             id='webapp_check_job', replace_existing=True, coalesce=True, max_instances=1,
         )
+        # Selbstüberwachung: Seite täglich, Schnittstellen wöchentlich prüfen (Meldung nur bei Problemen/Änderungen)
+        self.scheduler.add_job(
+            self._run_check, 'cron', hour=4, minute=15, args=["site_check.py"],
+            id='site_check_job', replace_existing=True, coalesce=True, max_instances=1,
+        )
+        self.scheduler.add_job(
+            self._run_check, 'cron', day_of_week='mon', hour=4, minute=45, args=["api_check.py"],
+            id='api_check_job', replace_existing=True, coalesce=True, max_instances=1,
+        )
         self.scheduler.add_job(
             self._backup_database, 'cron', hour=3, minute=30,
             id='db_backup_job', replace_existing=True, coalesce=True, max_instances=1,
