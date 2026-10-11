@@ -69,20 +69,32 @@ for user in users:
             stats["kein Banner"] += 1
             print(f"·  {line}\n     keine Kartenliste mit dieser Karte" + (f" · Seite: {fmt_coins(price)}" if price else ""))
             continue
-        pid, value, _ = found[0]
-        hits = []
-        for at, n, coins in batches(pid, c["date"]):
-            gross = round((coins or 0) * 1.1)
-            tags = [t for t, ok in (("=Kartenwert", close(gross, value)), ("=Seitenwert×1,1", close(gross, round((price or 0) * 1.1))),
-                                    ("=Seitenwert", close(coins, price)), ("ungezählt=Kartenwert", close(coins, value))) if ok]
-            hits.append((at, n, coins, gross, tags))
+        # dieselbe Karte steckt oft in mehreren Bannern: den Banner nehmen, dessen Versand-Zähler am Tag passt
+        best = None
+        for pid, value, _ in found:
+            hits = []
+            for at, n, coins in batches(pid, c["date"]):
+                if not n or n <= 0:
+                    continue   # nur Schübe mit neuer Karte (Korrekturen ohne Karte zählen nicht)
+                gross = round((coins or 0) * 1.1)
+                tags = [t for t, ok in (("=Kartenwert", close(gross, value)),
+                                        ("=Seitenwert×1,1", close(gross, round((price or 0) * 1.1))),
+                                        ("=Seitenwert", close(coins, price)), ("ungezählt=Kartenwert", close(coins, value))) if ok]
+                hits.append((at, n, coins, gross, tags))
+            score = (any(h[4] for h in hits), bool(hits))
+            if best is None or score > best[0]:
+                best = (score, pid, value, hits)
+        _, pid, value, hits = best
         match = next((h for h in hits if h[4]), None)
         stats["Kartenwert passt" if match and "=Kartenwert" in match[4] else
               "Seitenwert passt" if match else "kein Schub passt"] += 1
         print(f"{'✅' if match else '❓'} {line}\n     Banner {pid} · Kartenwert {fmt_coins(value)}"
+              + ("" if hits else " · kein Versand-Schub mit neuer Karte in den 3 Tagen danach")
               + (f" · Seitenwert {fmt_coins(price)}" if price else "")
               + (f" · {len(found)} Banner mit dieser Karte" if len(found) > 1 else ""))
         for at, n, coins, gross, tags in hits[:4]:
             print(f"     {at[5:16].replace('T', ' ')}  {n:+d} Karten  {coins:+,} gezählt = {gross:,}".replace(",", ".")
                   + (f"  {' '.join(tags)}" if tags else ""))
 print("\nERGEBNIS: " + " · ".join(f"{k}: {v}" for k, v in stats.most_common()))
+if stats and not any("price" in c for _, c in cards):
+    print("Hinweis: noch kein Seitenwert gespeichert - einmal „Alles übertragen“ mit dem Lesezeichen v19 ausführen.")
