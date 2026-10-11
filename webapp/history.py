@@ -15,9 +15,25 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
-DATE_TIME = re.compile(r"^(\d{4})/(\d{2})/(\d{2}) (\d{2}):(\d{2})$")
+# Buchungszeit: altes Format "2026/10/01 21:08", neues Layout (Oktober 2026) evtl. "01.10.2026 21:08" (auch mit Sekunden)
+DATE_TIME = re.compile(r"^(?:(\d{4})/(\d{1,2})/(\d{1,2})|(\d{1,2})\.(\d{1,2})\.(\d{4}))\s+(\d{1,2}):(\d{2})(?::\d{2})?$")
 DATE = re.compile(r"(\d{2,4})/(\d{2})/(\d{2})")
 NUMBER = re.compile(r"^-?[\d.]+$")
+# Betrag einer Buchung: auch mit Vorzeichen ("+1.320", "−1.000") oder Einheit ("1.320 Coins")
+AMOUNT = re.compile(r"^([+\-−]?)\s*([\d.,]+)\s*(?:Coins?|コイン|Münzen)?$", re.I)
+
+
+def _when(m) -> datetime:
+    y, mo, d = (m.group(1), m.group(2), m.group(3)) if m.group(1) else (m.group(6), m.group(5), m.group(4))
+    return datetime(int(y), int(mo), int(d), int(m.group(7)), int(m.group(8)))
+
+
+def _amount(text: str) -> Optional[int]:
+    m = AMOUNT.match(text.strip())
+    if not m:
+        return None
+    value = _int(m.group(2))
+    return -value if m.group(1) in ("-", "−") else value
 JST_OFFSET = timedelta(hours=9)
 MOVE_WINDOW = timedelta(minutes=7)   # Scrape alle 5 Minuten + Laufzeit
 NEAR_WINDOW = timedelta(seconds=150)  # schneller Abfrager alle 15 s; Seite zeigt nur die Minute
@@ -68,9 +84,9 @@ def parse_coins(pages: List[Dict]) -> List[Dict]:
         i = 0
         while i < len(lines):
             m = DATE_TIME.match(lines[i])
-            if m and i + 1 < len(lines) and NUMBER.match(lines[i + 1]):
-                t = datetime(*map(int, m.groups()))
-                amount = _int(lines[i + 1])
+            if m and i + 1 < len(lines) and _amount(lines[i + 1]) is not None:
+                t = _when(m)
+                amount = _amount(lines[i + 1])
                 yen = lines[i + 2] if i + 2 < len(lines) and lines[i + 2].startswith(("¥", "￥")) else ""
                 j = i + (3 if yen else 2)                       # Hinweis ist auf der Seite optional:
                 note = lines[j] if j < len(lines) and not DATE_TIME.match(lines[j]) else ""   # nicht die nächste Buchung schlucken
