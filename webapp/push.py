@@ -399,7 +399,7 @@ class PushService:
             data["hot"] = True
             if HOT_IMAGES.get(banner_id):
                 from urllib.parse import quote
-                data["image"] = f"/img?v=4&w=640&u={quote(HOT_IMAGES[banner_id], safe='')}"
+                data["image"] = f"/img?v=5&w=640&u={quote(HOT_IMAGES[banner_id], safe='')}"
         payload = json.dumps(data)
         loop = asyncio.get_running_loop()
         try:

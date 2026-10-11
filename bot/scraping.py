@@ -15,7 +15,9 @@ def api_image(item: dict) -> Optional[str]:
     image = image[0] if isinstance(image, list) and image else (image if isinstance(image, str) else None)
     if not image:
         return None
-    return image if image.startswith('http') else f"{BASE_URL}{image.split('?')[0]}"
+    # mit ?v=…: tauscht GTCHA das Bild unter derselben Adresse aus, ändert sich die Version - sonst bliebe das
+    # alte Bild im Zwischenspeicher der App
+    return image if image.startswith('http') else f"{BASE_URL}{image}"
 
 
 def fill_from_api(banner, item: dict):
@@ -428,6 +430,9 @@ class ScrapingMixin:
             # Verkaufsende, Bild: seit dem Umbau der Seite nur noch aus pack/list. Der "name" dort ist ein interner
             # Name (kein Titel) - versehentlich als Titel übernommene Namen wieder entfernen
             changed = await self.db.update_site_fields(pid, None, item.get('end_date'), api_image(item)) or changed
+            # Bild: pack/list ist maßgeblich (auch "kein Bild" - dann zeigt die App die Top-Karten)
+            if isinstance(item.get('image'), list):
+                changed = await self.db.set_image(pid, api_image(item)) or changed
             changed = await self.db.clear_title_if(pid, api_name(item)) or changed
             # Umgewandelte Coins nur speichern (Verlauf), Startbeitrag deshalb nicht neu bearbeiten
             if item.get('total_kangen') is not None:

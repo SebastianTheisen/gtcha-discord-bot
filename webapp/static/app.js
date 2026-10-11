@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 125;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 126;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -57,7 +57,7 @@ const safeUrl = (u) => (typeof u === "string" && /^https:\/\//.test(u) ? u : "")
 // Bilder von GTCHA über den Zwischenspeicher des VPS laden (schneller, bleiben 30 Tage im iPhone-Cache)
 // v= ändert die Adresse, wenn sich die Auslieferung ändert: Safari hält Bilder 30 Tage und würde sonst
 // alte (kaputte) Antworten weiterverwenden
-const IMG_VERSION = 4;
+const IMG_VERSION = 5;
 // w = Breite in Pixeln: der VPS liefert eine verkleinerte Kopie (Banner 640, Karten 320)
 const imgSrc = (u, w = 640) => (/^https:\/\/([\w-]+\.)*gtchaxonline\.com\//.test(u)
   ? `/img?v=${IMG_VERSION}&w=${w}&u=${encodeURIComponent(u)}` : u);
