@@ -410,7 +410,9 @@ class App:
     async def api_me(self, request):
         user = await self._user(request)
         if user:
-            user = {**user, "admin": is_admin(user["user_id"]), "sync": await self._sync_info(user)}
+            used = await self.bridge.bookmarklet_version(user["user_id"])
+            user = {**user, "admin": is_admin(user["user_id"]), "sync": await self._sync_info(user),
+                    "bookmarklet_outdated": bool(used and used < BOOKMARKLET_VERSION)}
         return web.json_response(user or {}, status=200 if user else 401)
 
     async def _admin(self, request):
@@ -579,6 +581,11 @@ class App:
         except ValueError:
             raise web.HTTPBadRequest(text="Ungültige Daten")
         user = await self.bridge.device(str(data.get("t", "")))
+        if user:
+            try:
+                await self.bridge.set_bookmarklet_version(user["user_id"], int(data.get("v") or 0))
+            except (TypeError, ValueError):
+                pass
         if not user:
             return import_result_page(["⚠️ Dieses Lesezeichen gehört zu keinem verknüpften Gerät mehr – bitte in der "
                                        "App unter „Ich“ neu kopieren."], ok=False)

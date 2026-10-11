@@ -119,4 +119,5 @@ export interface Me {
   name?: string;
   admin?: boolean;
   sync?: import("./api").LockInfo;
+  bookmarklet_outdated?: boolean;
 }

@@ -2059,7 +2059,18 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").cat
 route();
 updateBell();
 // Reiter "Nutzer" nur für Admins
-me().then((u) => { const t = document.getElementById("users-tab"); if (t) t.hidden = !u?.admin; }).catch(() => {});
+me().then((u) => {
+  const t = document.getElementById("users-tab"); if (t) t.hidden = !u?.admin;
+  // Lesezeichen veraltet: oben ein Hinweis (bis zum nächsten Übertragen mit dem neuen Lesezeichen)
+  if (u?.bookmarklet_outdated && !document.getElementById("bm-outdated")) {
+    const bar = document.createElement("a");
+    bar.id = "bm-outdated";
+    bar.className = "notice-bar";
+    bar.href = "#/settings";
+    bar.textContent = "🔁 Dein Lesezeichen ist veraltet – unter „Ich“ neu kopieren und im Browser ersetzen";
+    view.before(bar);
+  }
+}).catch(() => {});
 setInterval(() => { if (document.visibilityState === "visible") updateBell(); }, 60000);
 // Rang/Aufladung beim Start aus dem letzten Übertragen holen (Banner-Liste danach neu zeichnen)
 if (deviceToken()) authApi("/api/me/profile").then((p) => { if (applyProfile(p) && state.render) state.render().catch(() => {}); }).catch(() => {});

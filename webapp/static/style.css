@@ -533,3 +533,7 @@ details.section > summary small { font-size: 13px; color: var(--muted); font-wei
 .crow-img .fan { padding: 3px; }
 .crow-img .fan-card.top { flex-basis: auto; height: 100%; }
 .crow-img .fan img { width: auto; height: 100%; }
+
+/* Hinweis: Lesezeichen veraltet */
+.notice-bar { display: block; margin: 8px 10px 0; padding: 10px 12px; border-radius: var(--radius); background: #5a3d0c;
+  color: #ffd98a; font-weight: 600; text-decoration: none; }

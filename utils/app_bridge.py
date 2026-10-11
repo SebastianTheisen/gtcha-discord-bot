@@ -46,6 +46,8 @@ CREATE TABLE IF NOT EXISTS sync_accounts (discord_user_id TEXT, account TEXT, fi
     PRIMARY KEY (discord_user_id, account));
 -- wie viele GTCHA-Konten eine Person hat (vom Admin eingestellt, Standard 1)
 CREATE TABLE IF NOT EXISTS account_counts (discord_user_id TEXT PRIMARY KEY, expected INTEGER);
+-- zuletzt benutzte Lesezeichen-Version je Person (App weist auf veraltete Lesezeichen hin)
+CREATE TABLE IF NOT EXISTS bookmarklet_versions (discord_user_id TEXT PRIMARY KEY, version INTEGER, used_at TEXT);
 CREATE TABLE IF NOT EXISTS auto_claims (
     discord_user_id TEXT, card_key TEXT, pack_id INTEGER, tier TEXT, request_id INTEGER, created_at TEXT,
     PRIMARY KEY (discord_user_id, card_key));
@@ -216,6 +218,18 @@ class AppBridge:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)", (key, str(value)))
             await db.commit()
+
+    async def set_bookmarklet_version(self, user_id, version: int) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("INSERT OR REPLACE INTO bookmarklet_versions (discord_user_id, version, used_at) "
+                             "VALUES (?, ?, ?)", (str(user_id), int(version), _now()))
+            await db.commit()
+
+    async def bookmarklet_version(self, user_id) -> Optional[int]:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT version FROM bookmarklet_versions WHERE discord_user_id = ?", (str(user_id),))
+            row = await cur.fetchone()
+        return row[0] if row else None
 
     async def add_admin(self, user_id) -> None:
         async with aiosqlite.connect(self.db_path) as db:

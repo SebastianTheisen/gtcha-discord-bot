@@ -643,3 +643,34 @@ def test_plan_pull_claims_from_purchase_details():
     mine = plan_pull_claims([pull], cmap, {100: {"units": units, "medals": {"T1": "42"}}}, "42", set())
     assert mine[0]["confirm"] and not plan_pull_claims([pull], cmap, {100: {"units": units, "medals": {}}}, "42",
                                                        {"pull:7:1:0"})
+
+
+def test_outdated_bookmarklet_flag(tmp_path):
+    import json as _json
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from database.db import Database
+    from webapp.server import BOOKMARKLET_VERSION, App, make_app
+
+    async def run():
+        await Database(str(tmp_path / "gtcha_bot.db")).init()
+        app = App(str(tmp_path / "gtcha_bot.db"), str(tmp_path), "x")
+        await app.bridge.init()
+        token = (await app.bridge.redeem_code(await app.bridge.create_code(42, "Basti")))["token"]
+        web_app = make_app(app)
+        web_app.on_startup.clear()
+        web_app.on_cleanup.clear()
+        client = TestClient(TestServer(web_app))
+        await client.start_server()
+        try:
+            h = {"X-Device-Token": token}
+            assert not (await (await client.get("/api/me", headers=h)).json())["bookmarklet_outdated"]   # nie benutzt
+            await client.post("/api/import-form", data={"d": _json.dumps({"t": token, "v": 3, "pages": []})})
+            assert (await (await client.get("/api/me", headers=h)).json())["bookmarklet_outdated"]
+            await client.post("/api/import-form", data={"d": _json.dumps({"t": token, "v": BOOKMARKLET_VERSION, "pages": []})})
+            assert not (await (await client.get("/api/me", headers=h)).json())["bookmarklet_outdated"]
+        finally:
+            await client.close()
+
+    asyncio.run(run())
