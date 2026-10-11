@@ -90,9 +90,24 @@ CATEGORY_BY_CARD_TYPE = {"2": "Pokémon", "5": "One piece", "9": "Dragon Ball", 
 CARD_TYPE_NAMES: Dict[str, str] = {}
 
 
+# Die Kategorienliste der Seite ist japanisch; Namen wie in den deutschen Reitern der Seite
+CATEGORY_NAME_DE = {
+    "遊戯王": "Yu-Gi-Oh!", "ウルトラマン": "Ultraman", "ヴァイスシュヴァルツ": "Weiß Schwarz", "フィギュア": "Figuren",
+    "ゲーム": "Spiele", "ホビー": "Hobby", "予備": "Reserve", "海外向け": "International", "BtoB": "BtoB",
+    "ポケモン": "Pokémon", "ワンピース": "One piece", "ドラゴンボール": "Dragon Ball",
+    "デュエル・マスターズ": "Duel Masters", "デジモン": "Digimon", "ヴァンガード": "Vanguard", "マジック": "Magic",
+    "ロルカナ": "Lorcana", "ユニオンアリーナ": "Union Arena", "バトルスピリッツ": "Battle Spirits",
+}
+
+
+def category_name_de(name: str) -> str:
+    name = str(name or "").strip()
+    return CATEGORY_NAME_DE.get(name, name)
+
+
 def set_card_type_names(names: Dict) -> None:
     CARD_TYPE_NAMES.clear()
-    CARD_TYPE_NAMES.update({str(k): str(v).strip() for k, v in (names or {}).items() if str(v or "").strip()})
+    CARD_TYPE_NAMES.update({str(k): category_name_de(v) for k, v in (names or {}).items() if str(v or "").strip()})
 
 
 def category_for(item: dict) -> Optional[str]:

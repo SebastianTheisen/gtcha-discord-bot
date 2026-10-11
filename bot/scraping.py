@@ -304,15 +304,17 @@ class ScrapingMixin:
         Neustart, falls die Liste einmal nicht lädt)."""
         try:
             if fetched:
-                new = sorted(set(fetched.values()) - set(CARD_TYPE_NAMES.values()))
+                before = dict(CARD_TYPE_NAMES)
                 set_card_type_names(fetched)
+                new = CARD_TYPE_NAMES != before
                 await self.db.set_meta("card_type_names", json.dumps(fetched, ensure_ascii=False))
-                for k, name in fetched.items():   # vorher ohne Namen angelegt ("Kategorie 7"): umbenennen
+                for k, raw in fetched.items():   # vorher ohne (deutschen) Namen angelegt: umbenennen
+                    name = CARD_TYPE_NAMES.get(k)
                     if k not in CATEGORY_BY_CARD_TYPE and name:
-                        await self.db.rename_category(f"Kategorie {k}", name)
-                unknown = [n for k, n in fetched.items() if k not in CATEGORY_BY_CARD_TYPE]
-                if new and unknown:
-                    logger.info(f"[KATEGORIEN] Seite: {', '.join(f'{k}={n}' for k, n in sorted(fetched.items()))}")
+                        for old in {f"Kategorie {k}", str(raw).strip()} - {name}:
+                            await self.db.rename_category(old, name)
+                if new:
+                    logger.info(f"[KATEGORIEN] Seite: {', '.join(f'{k}={n}' for k, n in sorted(CARD_TYPE_NAMES.items()))}")
             elif not CARD_TYPE_NAMES:
                 set_card_type_names(json.loads(await self.db.get_meta("card_type_names") or "{}"))
         except Exception as e:

@@ -60,8 +60,9 @@ def test_new_site_category_gets_name_from_site_tabs():
     """Kommt auf der Seite eine Kategorie dazu (Yu-Gi-Oh!), heißt sie in Bot und App wie ihr Reiter."""
     from utils.banner_info import category_for, set_card_type_names
     try:
-        set_card_type_names({7: "Yu-Gi-Oh!", 2: "ポケモン"})
-        assert category_for({"card_type": 7, "is_bonus": "0"}) == "Yu-Gi-Oh!"
+        set_card_type_names({1: "遊戯王", 2: "ポケモン", 77: "新しいゲーム"})   # so liefert die Seite die Liste
+        assert category_for({"card_type": 1, "is_bonus": "0"}) == "Yu-Gi-Oh!"
+        assert category_for({"card_type": "77", "is_bonus": "0"}) == "新しいゲーム"   # unbekannt: wie auf der Seite
         assert category_for({"card_type": "2", "is_bonus": "0"}) == "Pokémon"     # bekannte behalten ihren Namen
     finally:
         set_card_type_names({})
