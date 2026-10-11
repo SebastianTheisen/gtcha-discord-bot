@@ -528,6 +528,8 @@ def cards_from_json(responses: List[Dict]) -> List[Dict]:
                     "name": html.unescape(str(c.get("name") or c.get("title"))).strip(),
                     "rarity": str(c.get("rarity") or ""), "number": str(c.get("model_number") or ""),
                     "image": image, "card_id": str(c["id"]) if c.get("id") is not None else None}
+            if c.get("stock_sale_price") not in (None, ""):
+                card["price"] = int(float(c["stock_sale_price"]))   # Wert laut Seite (zum Abgleich mit dem Versand)
             out += [dict(card) for _ in range(count if 1 <= count <= 99 else 1)]
     return out
 
