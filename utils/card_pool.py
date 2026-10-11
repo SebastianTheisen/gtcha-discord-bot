@@ -442,6 +442,7 @@ def _ship_options(pool: Dict, classes: List[Dict], count: int, value: int, tol: 
 # Einzelne Karte über jeder normalen Karte, die zu keinem Wert passt: das kann nur ein Versand-Hit sein, für den die
 # Seite einen anderen Wert zählt (24082: Box 88.000 als 132.000). In Frage kommen Hits in dieser Wertspanne.
 OFF_VALUE_RANGE = 1.6   # 24082: ×1,5 · 24188 (Medaille): Mewtwo ×0,73
+OFF_VALUE_BELOW_MIN = 0.55   # gezählter Wert mindestens so viel vom Hit-Wert (beobachtet ×0,64 bis ×0,93)
 
 
 def _off_value_hit_options(pool: Dict, classes: List[Dict], count: int, value: int, tol: float) -> List[tuple]:
@@ -451,11 +452,16 @@ def _off_value_hit_options(pool: Dict, classes: List[Dict], count: int, value: i
     top_normal = max((int(v) for v, n in (pool.get("normal_values") or {}).items() if n > 0), default=0)
     if value <= top_normal * (1 + tol):
         return []
-    out = []
-    for i, cls in enumerate(classes):
-        if cls["max"] * OFF_VALUE_RANGE >= value and cls["min"] <= value * OFF_VALUE_RANGE:
-            out.append(tuple(1 if j == i else 0 for j in range(len(classes))))
-    return out
+    one = lambda i: tuple(1 if j == i else 0 for j in range(len(classes)))
+    # Oktober 2026 (ship_pattern, 18 Einzelkarten an einem Tag): normale Karten zählt die Seite exakt (×1,1), Hits
+    # meist NIEDRIGER als ihren Kartenwert (×0,64-0,93 - vermutlich ihr Marktwert). Liegen Hits in dieser Spanne,
+    # kommen nur sie in Frage; sonst wie bisher die weite Spanne in beide Richtungen (24082: ×1,5)
+    below = [i for i, cls in enumerate(classes)
+             if cls["min"] * OFF_VALUE_BELOW_MIN <= value <= cls["max"] * (1 + tol)]
+    if below:
+        return [one(i) for i in below]
+    return [one(i) for i, cls in enumerate(classes)
+            if cls["max"] * OFF_VALUE_RANGE >= value and cls["min"] <= value * OFF_VALUE_RANGE]
 
 
 def _summarize_options(classes: List[Dict], possible: List[tuple], units: List[Dict]) -> Dict:

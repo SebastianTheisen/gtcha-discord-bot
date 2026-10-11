@@ -110,6 +110,7 @@ def test_cover_images_for_banner_without_image():
             "top": [{"image": "b", "value": 900}, {"image": "c", "value": 50}, {"value": 9999}]}
     assert cover_images(pool) == ["b", "a", "c"]
     assert cover_images(None) == []
+    assert cover_images({"hits": [{"image": f"i{n}", "value": n} for n in range(9)]}) == ["i8", "i7", "i6", "i5", "i4"]
 
 
 def test_shipment_counted_in_two_steps_is_not_flagged():

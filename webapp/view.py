@@ -206,7 +206,7 @@ class BannerView:
         medal_thread = store_thread_id(pid) if store else thread_id   # Store-Pack: Medaillen ohne Discord-Thread
         price, remaining, total = (to_int(row.get(k)) for k in ('price_coins', 'current_packs', 'total_packs'))
         pool = json.loads(row['card_pool']) if row.get('card_pool') else None
-        cover = [] if row.get('image_url') else cover_images(pool)
+        cover = cover_images(pool)   # wie die Seite: Fächer der Top-Karten (Bannerbild nur ohne Kartenliste)
         stats, sure, winners, open_groups, unsure, pulled, held = None, set(), {}, [], [], set(), set()
         shipped_keys = set()
         if pool and pool.get('total_count'):
