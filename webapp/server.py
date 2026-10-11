@@ -570,6 +570,16 @@ class App:
                         del changed[area]
                         logger.warning(f"Sync von {user['name']}: {path} nicht erkannt - gespeicherte "
                                        f"{before[area]} Karten bleiben")
+            # Münzverlauf: Seite geladen, aber keine Buchung erkannt (z. B. neues Layout) - gespeicherte behalten
+            coins_entry = next((e for e in entries if e["path"] == "buy-point-history"), None)
+            if coins_entry and "coins" in changed and not changed["coins"]["items"]:
+                self._dump_unparsed(user, "buy-point-history", coins_entry["pages"][0] or {}, coins_entry["pages"][:3])
+                if before.get("coins"):
+                    del changed["coins"]
+                    warnings.append(f"⚠️ Münzverlauf: keine Buchung erkannt (vorher {before['coins']}) – "
+                                    f"gespeicherte Buchungen bleiben, bitte dem Admin Bescheid geben.")
+                    logger.warning(f"Sync von {user['name']}: Münzverlauf nicht erkannt - gespeicherte "
+                                   f"{before['coins']} Buchungen bleiben")
             await self.bridge.set_history(user["user_id"], changed, acc)
             if saved:   # zählt für die 7-Tage-Pflicht, je GTCHA-Konto
                 await self.bridge.mark_synced(user["user_id"], acc)

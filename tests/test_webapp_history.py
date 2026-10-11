@@ -382,3 +382,14 @@ def test_parse_card_tiles_new_layout():
         ("Mega Chandelure ex", "2026-02-20", "8895751")]
     # altes Layout ohne Kartenknöpfe: wie bisher über den Seitentext
     assert parse_cards([{"text": SHIPPED}])[0]["tracking"] == "111"
+
+
+def test_parse_coins_new_date_and_amount_format():
+    """Neues Layout: deutsches Datum und Beträge mit Vorzeichen/Einheit werden genauso gelesen."""
+    text = HEAD + "\n".join(["11.10.2026 10:29", "+1.320 Coins", "¥0", "In Münzen umwandeln",
+                             "11.10.2026 10:20", "−1.000", "¥0", "Öffnen",
+                             "01.10.2026 09:00:15", "10.000", "¥8.000", "Münzen erhalten"]) + "\n" + FOOT
+    events = parse_coins([{"text": text}])
+    assert [(e["t"].strftime("%d.%m. %H:%M"), e["amount"], e["kind"]) for e in events] == [
+        ("11.10. 10:29", 1320, "convert"), ("11.10. 10:20", -1000, "open"), ("01.10. 09:00", 10000, "buy")]
+    assert parse_coins([{"text": COINS}])[1]["amount"] == -1000      # altes Format wie bisher
