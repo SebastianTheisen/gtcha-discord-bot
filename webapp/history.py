@@ -780,6 +780,8 @@ def build_from_stored(stored: Dict[str, Dict], banners: Dict[int, Dict], moves: 
         row.update(title=b.get("title"), image=b.get("image"), price=b.get("price"))
     for card in pending + shipped:
         card["value"] = card_worth(card, banners)
+        # ohne Kartenliste des Banners (z. B. vor Beginn der Aufzeichnung): Wert laut Seite (stock_sale_price)
+        card["site_value"] = card.get("price") if card["value"] is None else None
     return {
         "member": (stored.get("member") or {}).get("info") or {"coins": None, "spent_month_yen": None},
         "summary": summary,

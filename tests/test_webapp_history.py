@@ -597,3 +597,11 @@ def test_my_pulls_per_banner(tmp_path):
             await client.close()
 
     asyncio.run(run())
+
+
+def test_shipped_card_without_pool_shows_site_value():
+    from webapp.history import build_from_stored
+    card = {"date": "2026-08-03", "tracking": "1", "name": "Mega Chandelure ex", "number": "M5113-081",
+            "card_id": "999", "price": 45980}
+    out = build_from_stored({"shipped": {"items": [card]}}, {}, {})
+    assert out["shipped"][0]["value"] is None and out["shipped"][0]["site_value"] == 45980
