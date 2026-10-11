@@ -38,7 +38,7 @@ BETA_DIST = Path(__file__).parent / "beta" / "dist"   # neue Oberfläche (Vite-B
 ROLE = os.getenv("WEBAPP_ROLE", "live")
 STREAM_HEARTBEAT = 25
 REFRESH_SECONDS = 20
-BOOKMARKLET_VERSION = 8   # = SYNC_VERSION in app.js; ältere Lesezeichen bekommen einen Hinweis
+BOOKMARKLET_VERSION = 9   # = SYNC_VERSION in app.js; ältere Lesezeichen bekommen einen Hinweis
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
        "img-src 'self' data: https://gtchaxonline.com https://*.gtchaxonline.com; connect-src 'self'; "
        "manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; "
@@ -475,13 +475,22 @@ class App:
         age = int(time.time()) - self._updated if self._updated else None
         return web.json_response({"ok": True, "data_age": age})
 
-    def _dump_unparsed(self, user: Dict, path: str, page: Dict):
+    def _dump_unparsed(self, user: Dict, path: str, page: Dict, pages: Optional[list] = None):
         """Seite ohne erkannte Karten zur Fehlersuche ablegen (nur auf dem VPS, je Person und Bereich nur die
         letzte): data/sync_debug/<Discord-ID>-<Bereich>.txt - genau der Text mit Leerzeilen, dazu die Bilder."""
         try:
             folder = Path(self.data_dir) / "sync_debug"
             folder.mkdir(exist_ok=True)
             text = (page.get("text") or "") + "\n\n--- Bilder ---\n" + "\n".join(page.get("images") or [])
+            # ab Lesezeichen v9: je Karte die Kachel (Text, alt) und der Aufbau der ersten Kacheln
+            for i, pg in enumerate(pages or [page]):
+                text += f"\n\n=== Seite {i + 1}{' (' + pg['view'] + ')' if pg.get('view') else ''} ===\n"
+                if i:
+                    text += (pg.get("text") or "")[:20000] + "\n"
+                text += "--- Karten (Bild | alt | Text der Kachel) ---\n" + "\n".join(
+                    f"{c.get('src')} | {c.get('alt')} | {' / '.join((c.get('text') or '').split(chr(10)))}"
+                    for c in (pg.get("cards") or []))
+                text += "\n--- Aufbau ---\n" + "\n\n".join(pg.get("skel") or [])
             (folder / f"{user['user_id']}-{path}.txt").write_text(text, encoding="utf-8")
         except Exception as e:
             logger.debug(f"Seite nicht abgelegt: {e}")
@@ -540,6 +549,9 @@ class App:
             # Seite geladen, aber keine Karte erkannt (z. B. geändertes Layout): melden und Seitenanfang loggen
             for path, area, label in (("pending-detail", "pending", "Angefordert"), ("shipped-detail", "shipped", "Versendet")):
                 entry = next((e for e in entries if e["path"] == path), None)
+                if entry and any(pg.get("cards") for pg in entry["pages"]):
+                    # Lesezeichen ab v9: Aufbau der Kartenseiten immer ablegen (neues Layout der Seite anpassen)
+                    self._dump_unparsed(user, path, entry["pages"][0] or {}, entry["pages"])
                 if entry and area in changed and not changed[area]["items"]:
                     page0 = entry["pages"][0] or {}
                     all_lines = [ln.strip()[:60] for ln in (page0.get("text") or "").split("\n") if ln.strip()]
@@ -547,7 +559,7 @@ class App:
                                 f"(vorher {before.get(area, 0)}, {len(all_lines)} Zeilen, "
                                 f"{len(page0.get('images') or [])} Kartenbilder) · Seitenanfang: {' | '.join(all_lines[:15])}"
                                 f" · Seitenende: {' | '.join(all_lines[15:][-15:])}")
-                    self._dump_unparsed(user, path, page0)
+                    self._dump_unparsed(user, path, page0, entry["pages"])
                     if before.get(area):
                         warnings.append(f"⚠️ {label}: auf der Seite keine Karten erkannt (vorher {before[area]}). "
                                         f"Falls dort Karten stehen, bitte dem Admin Bescheid geben.")
