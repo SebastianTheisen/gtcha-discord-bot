@@ -1,6 +1,6 @@
 import type { ComponentChildren } from "preact";
 import { useEffect, useMemo, useState } from "preact/hooks";
-import { LockedError } from "../api";
+import { authApi, LockedError } from "../api";
 import { Flags, hitsText, STATUS, verdict } from "../components/BannerCard";
 import { CardSheet, type CardInfo } from "../components/CardSheet";
 import { AreaChart } from "../components/Chart";
@@ -314,9 +314,36 @@ function Cards({ b, open }: { b: BannerDetail; open: (c: Card) => void }) {
   );
 }
 
+interface PullCard { name: string; num: number; value?: number | null; state: string }
+interface MyPulls { purchases: number; cards: number; converted: number; requested: number; open: number; coins_back: number;
+  pulls: { hid: number; t?: string; coins_back?: number; cards: PullCard[] }[] }
+const PULL_ICON: Record<string, string> = { angefordert: "📦", umgewandelt: "🪙", offen: "⏳" };
+
+// "Meine Ziehungen" bei diesem Banner (aus den Kauf-Details von "Alles übertragen")
+function MyPulls({ id }: { id: number }) {
+  const [d, setD] = useState<MyPulls | null>(null);
+  useEffect(() => { authApi<MyPulls>(`api/me/pulls?banner=${id}`).then(setD).catch(() => setD(null)); }, [id]);
+  if (!d || !d.purchases) return null;
+  return (
+    <div>
+      <div class="section-title"><h2>🎰 Meine Ziehungen</h2><span class="muted small">{num(d.purchases)} Käufe · {num(d.cards)} Karten</span></div>
+      <div class="panel small">
+        <div>📦 {num(d.requested)} angefordert · 🪙 {num(d.converted)} umgewandelt (+{num(d.coins_back)} Coins){d.open ? ` · ⏳ ${num(d.open)} offen` : ""}</div>
+        {d.pulls.slice(0, 30).map((p) => (
+          <div class="tl-row"><span class="muted tnum">{(p.t || "").slice(5).replace("-", ".")}</span>
+            <span>{p.cards.map((c, i) => <>{i ? " · " : ""}{PULL_ICON[c.state] || ""} {c.num > 1 ? `${c.num}× ` : ""}{c.name}
+              {c.value && c.state !== "umgewandelt" ? <b> {num(c.value)}</b> : null}</>)}
+              {p.coins_back ? <span class="muted"> · +{num(p.coins_back)} Coins</span> : null}</span></div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function History({ b }: { b: BannerDetail }) {
   return (
     <div>
+      <MyPulls id={b.id} />
       <div class="section-title"><h2>📉 Pack-Verlauf</h2><span class="muted small">mit Versand/Umwandlung</span></div>
       <Timeline events={b.pack_timeline || []} />
       <div class="section-title"><h2>📦 Versandschübe</h2><span class="muted small">Kartenwert = gezählt × 1,1</span></div>

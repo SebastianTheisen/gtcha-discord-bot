@@ -74,7 +74,7 @@ def _merge_areas(area: str, parts: List[Dict]) -> Dict:
     merged = {"updated_at": parts[-1].get("updated_at"), "gap": any(p.get("gap") for p in parts)}
     if any("items" in p for p in parts):
         items = [i for p in parts for i in p.get("items") or []]
-        key = "t" if area == "coins" else "date"
+        key = "t" if area in ("coins", "pulls") else "date"
         merged["items"] = sorted(items, key=lambda i: str(i.get(key) or ""), reverse=True)
     if any("info" in p for p in parts):
         merged["info"] = {k: v for p in parts for k, v in (p.get("info") or {}).items()}   # neuester Stand gewinnt

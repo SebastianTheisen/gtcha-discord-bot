@@ -534,6 +534,46 @@ def cards_from_json(responses: List[Dict]) -> List[Dict]:
     return out
 
 
+PULL_STATES = (("cards", "offen"), ("send_card", "angefordert"), ("reduction_card", "umgewandelt"))
+MAX_PULLS = 5000
+
+
+def pulls_from_details(details: List[Dict]) -> List[Dict]:
+    """Details der Käufe (Lesezeichen ab v20, history/detail): je Kauf Zeitpunkt, Packname, Coins zurück und die
+    gezogenen Karten mit Zustand (offen / angefordert / umgewandelt). Neueste zuerst."""
+    out = {}
+    for d in details or []:
+        if not isinstance(d, dict) or not d.get("hid"):
+            continue
+        m = JSON_TIME.search(str(d.get("created") or ""))
+        cards = []
+        for field, state in PULL_STATES:
+            for c in d.get(field) or []:
+                if not isinstance(c, dict):
+                    continue
+                cid = c.get("card_id", c.get("id"))
+                image = str(c.get("image") or "") or None
+                if image and image.startswith("/"):
+                    image = SITE + image
+                cards.append({"card_id": str(cid) if cid is not None else None,
+                              "name": html.unescape(str(c.get("name") or c.get("title") or "")).strip(),
+                              "num": int(c.get("num") or 1), "value": int(float(c.get("buy_point") or 0)) or None,
+                              "rarity": str(c.get("rarity_label") or c.get("rarity") or ""), "image": image, "state": state})
+        out[int(d["hid"])] = {
+            "hid": int(d["hid"]), "t": datetime(*(int(g) for g in m.groups())).strftime(TIME_FMT) if m else None,
+            "pack_name": html.unescape(str(d.get("pack_name") or "")).strip(), "coins_back": int(d.get("reduction_point") or 0),
+            "status": str(d.get("status") or ""), "cards": cards}
+    return sorted(out.values(), key=lambda p: (p["t"] or "", p["hid"]), reverse=True)
+
+
+def merge_pulls(old: List[Dict], new: List[Dict]) -> List[Dict]:
+    """Käufe nach history_id zusammenführen (neuer Stand gewinnt - z. B. Karte inzwischen angefordert)."""
+    by_id = {p["hid"]: p for p in old or []}
+    for p in new:
+        by_id[p["hid"]] = {**by_id.get(p["hid"], {}), **p}
+    return sorted(by_id.values(), key=lambda p: (p.get("t") or "", p["hid"]), reverse=True)[:MAX_PULLS]
+
+
 TIME_FMT = "%Y-%m-%d %H:%M"
 COIN_KEY = ("t", "amount", "note")
 CARD_KEY = ("date", "tracking", "name", "number")
@@ -603,6 +643,11 @@ def ingest(stored: Dict[str, Dict], entries: List[Dict], now: Optional[datetime]
         path, pages, partial = entry.get("path"), entry.get("pages") or [], bool(entry.get("partial"))
         rank = rank or parse_rank(pages)
         data = _responses(entry)
+        if path == "buy-point-history" and entry.get("details"):
+            pulls = pulls_from_details(entry["details"])
+            if pulls:
+                changed["pulls"] = {"items": merge_pulls((stored.get("pulls") or {}).get("items") or [], pulls),
+                                    "gap": False}
         if path == "buy-point-history":
             area, key = "coins", COIN_KEY
             new = coins_from_json(data) if data else [{**e, "t": e["t"].strftime(TIME_FMT)} for e in parse_coins(pages)]
