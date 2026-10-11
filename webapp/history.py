@@ -734,7 +734,9 @@ def add_hits(summary: Dict, cards: List[Dict], banners: Dict[int, Dict]) -> None
     for card in cards:
         if not since or (card.get("date") or "") < since:
             continue
-        worth = card.get("pull_value") or card_worth(card, banners)
+        # Wert: Coin-Wert beim Ziehen (Kauf-Details), sonst aus der Kartenliste, sonst Wert laut Seite
+        # (alte Karten ohne beides - ohne sie wäre die Bilanz verfälscht)
+        worth = card.get("pull_value") or card_worth(card, banners) or card.get("price")
         if worth is None:
             continue
         count += 1
