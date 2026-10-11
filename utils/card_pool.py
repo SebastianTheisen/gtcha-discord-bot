@@ -445,12 +445,19 @@ OFF_VALUE_RANGE = 1.6   # 24082: ×1,5 · 24188 (Medaille): Mewtwo ×0,73
 OFF_VALUE_BELOW_MIN = 0.55   # gezählter Wert mindestens so viel vom Hit-Wert (beobachtet ×0,64 bis ×0,93)
 
 
+NORMAL_LOWER_MAX = 1.12   # normale Karte bis 12 % über dem gezählten Wert (beobachtet +3 bis +10,5 %)
+
+
+def lower_counted_normal(pool: Dict, count: int, value: int) -> bool:
+    """Einzelne Karte ohne exakten Treffer, knapp unter einer normalen Karte: die Seite zählt auch normale Karten
+    manchmal niedriger als ihren Kartenwert (Oktober 2026, ship_check: 2.090 bei 2.310, 82.940 bei 85.580)."""
+    return count == 1 and any(value <= int(v) <= value * NORMAL_LOWER_MAX
+                              for v, n in (pool.get("normal_values") or {}).items() if n > 0)
+
+
 def _off_value_hit_options(pool: Dict, classes: List[Dict], count: int, value: int, tol: float) -> List[tuple]:
     """Für einen sonst unerklärten Schub aus genau einer Karte: je passender Hit-Klasse eine Aufteilung mit einem Hit."""
     if count != 1 or not classes:
-        return []
-    top_normal = max((int(v) for v, n in (pool.get("normal_values") or {}).items() if n > 0), default=0)
-    if value <= top_normal * (1 + tol):
         return []
     one = lambda i: tuple(1 if j == i else 0 for j in range(len(classes)))
     # Oktober 2026 (ship_pattern, 18 Einzelkarten an einem Tag): normale Karten zählt die Seite exakt (×1,1), Hits
@@ -460,6 +467,10 @@ def _off_value_hit_options(pool: Dict, classes: List[Dict], count: int, value: i
              if cls["min"] * OFF_VALUE_BELOW_MIN <= value <= cls["max"] * (1 + tol)]
     if below:
         return [one(i) for i in below]
+    # weite Spanne (auch höher gezählt) nur über allen normalen Karten
+    top_normal = max((int(v) for v, n in (pool.get("normal_values") or {}).items() if n > 0), default=0)
+    if value <= top_normal * (1 + tol):
+        return []
     return [one(i) for i, cls in enumerate(classes)
             if cls["max"] * OFF_VALUE_RANGE >= value and cls["min"] <= value * OFF_VALUE_RANGE]
 
@@ -651,6 +662,8 @@ def explain_batch(pool: Dict, count: int, value: int, pulled_keys: Set[str],
             return out
         else:
             forced = []
+    if not possible and lower_counted_normal(pool, count, gross):
+        return {**base, "kind": "normal", "lower": True}
     if not possible:
         off = _off_value_hit_options(pool, classes, count, gross, tol)
         if not off:
@@ -731,7 +744,9 @@ def match_shipment_history(pool: Dict, batches: List[List], tol: float = VALUE_T
             # Geht der Schub als Karten nicht auf: der Zähler zählt manchmal Versand-Aufträge (mehrere Karten
             # je Auftrag, Karten nachträglich zu einem Auftrag) - dann muss der Wert fast exakt aufgehen
             options = _ship_options(pool, classes, count, value, tol, price)
-            if options == [] and not now_due:
+            if options == [] and not now_due and lower_counted_normal(pool, count, value):
+                options = [tuple([0] * len(classes))]   # normale Karte, von der Seite niedriger gezählt
+            elif options == [] and not now_due:
                 options = _off_value_hit_options(pool, classes, count, value, tol)
                 if options:
                     result["off_value"].append(i)
