@@ -97,7 +97,46 @@ def _without_blank_lines(lines: List[str]) -> bool:
     return started
 
 
+GROUP_DATE = re.compile(r"(\d{1,2})\.(\d{1,2})\.(\d{4})|(\d{4})[/-](\d{1,2})[/-](\d{1,2})")
+GROUP_TRACKING = re.compile(r"(?:Sendungsnummer|Tracking(?:\s*number)?|追跡番号|お問い合わせ番号)\s*[:：]?\s*([A-Za-z0-9-]{4,})", re.I)
+
+
+def parse_card_tiles(pages: List[Dict]) -> List[Dict]:
+    """Neues Layout (seit Oktober 2026): Karten als Knöpfe mit Namen (aria-label/alt) und Bild, gruppiert unter einer
+    Kopfzeile ("Datum der Versandanfrage 03.10.2026 · 1 Karte", bei Sendungen evtl. mit Sendungsnummer).
+    Das Lesezeichen (ab v9) schickt je Kartenbild: src, alt, label, group (Kopfzeile), showcase (TIER-Vitrine).
+    Gibt es eine Ansicht mit Gruppen (z. B. "Sendungen"), zählt nur sie - die Sammlung zeigt dieselben Karten."""
+    views = [p for p in pages if p.get("cards")]
+    grouped = [p for p in views if any(c.get("group") for c in p["cards"])]
+    cards = []
+    for page in grouped or views[:1]:
+        for c in page["cards"]:
+            name = (c.get("label") or c.get("alt") or "").strip()
+            src = c.get("src") or ""
+            if c.get("showcase") or not name or "/card/" not in src:
+                continue
+            group = c.get("group") or ""
+            date = tracking = None
+            m = GROUP_DATE.search(group)
+            if m:
+                d, mo, y = (m.group(1), m.group(2), m.group(3)) if m.group(1) else (m.group(6), m.group(5), m.group(4))
+                date = f"{int(y):04d}-{int(mo):02d}-{int(d):02d}"
+            t = GROUP_TRACKING.search(group)
+            if t:
+                tracking = t.group(1)
+            m = re.search(r"/card/(\d+)", src)
+            cards.append({"date": date, "tracking": tracking, "name": name, "rarity": "", "number": "",
+                          "image": src, "card_id": m.group(1) if m else None})
+    return cards
+
+
 def parse_cards(pages: List[Dict]) -> List[Dict]:
+    """Karten aus pending/shipped. Neues Layout (Kartenknöpfe, Lesezeichen ab v9) zuerst, sonst der Seitentext."""
+    tiles = parse_card_tiles(pages)
+    return tiles if tiles else parse_cards_text(pages)
+
+
+def parse_cards_text(pages: List[Dict]) -> List[Dict]:
     """Karten aus pending/shipped: [{date, name, rarity, number, tracking, image}]."""
     """Jeder Artikel ist ein durch Leerzeilen getrennter Block (meist Name, Rarität, Nummer);
     Kopfzeilen (Datum, Sendungsnummer) gelten für die folgenden Blöcke. Ein Bild pro Artikel."""
