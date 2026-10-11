@@ -633,3 +633,14 @@ def test_many_hits_when_top_card_exists_several_times():
     small = summarize_cards([{"id": 1, "name": "A", "buy_point": 9000, "duplication": 1, "action_type": 0},
                              {"id": 9, "name": "N", "buy_point": 300, "duplication": 99, "action_type": 0}])
     assert not many_hits(small, 1000)
+
+
+def test_off_value_hit_prefers_hits_counted_lower():
+    """Seite zählt Hits meist niedriger als ihren Kartenwert (×0,64-0,93): 41.800 gezählt (45.980) bei Hits 65.780
+    und 20.900 -> nur der höhere Hit kommt in Frage (der niedrigere läge darüber)."""
+    from utils.card_pool import explain_batch
+    pool = summarize_cards([card(1, 65780, hit=True, name="Groß"), card(2, 20900, hit=True, name="Mittel"),
+                            card(3, 3190, copies=200, name="Normal")])
+    names = {u["key"]: u["name"] for u in tracked_units(pool)}
+    res = explain_batch(pool, 1, 41800, set())
+    assert res["kind"] == "hits" and [names[k] for k in res["certain"]] == ["Groß"] and res["off_value"]

@@ -16,11 +16,11 @@ export function Img({ url, w = 640, alt = "", eager = false }: { url?: string; w
   );
 }
 
-// Bannerbild; neue Banner haben auf der Seite keins mehr, dort wie auf der Seite die Top-Karten als Fächer
+// Wie die Seite seit dem Umbau: Fächer der Top-Karten (wertvollste in der Mitte); Bannerbild nur ohne Kartenliste
 export function Cover({ b, w = 640, alt = "", eager = false, max = 5 }:
   { b: { image?: string; cover?: string[] }; w?: number; alt?: string; eager?: boolean; max?: number }) {
-  if (b.image || !b.cover?.length) return <Img url={b.image} w={w} alt={alt} eager={eager} />;
-  const cards = b.cover.slice(0, max);
+  if ((b.cover?.length || 0) < Math.min(3, max)) return <Img url={b.image || b.cover?.[0]} w={w} alt={alt} eager={eager} />;
+  const cards = (b.cover || []).slice(0, max);
   return (
     <div class={`fan n${cards.length}`}>
       {cards.map((u, i) => <span class={`fan-card ${i === 0 ? "top" : ""}`} style={{ order: fanOrder(i, cards.length) }}>

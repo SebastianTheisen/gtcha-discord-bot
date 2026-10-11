@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 
 sys.path.insert(0, "/app")
 from utils.banner_info import berlin_time  # noqa: E402
-from utils.card_pool import explain_batch, fmt_coins  # noqa: E402
+from utils.card_pool import explain_batch, fmt_coins, tracked_units  # noqa: E402
 
 args = [a for a in sys.argv[1:] if a.isdigit()]
 days = int(args[0]) if args else 3
@@ -84,6 +84,13 @@ for b in batches:
         if hit:
             names = [c["name"] for c in cards if int(c.get("value") or 0) in hit][:3]
             verdict, note = "✅", f"Karte {fmt_coins(hit[0])}: {', '.join(n[:40] for n in names)}"
+        elif (off := explain_batch(pool, 1, b["coins"], set(), price=row["price_coins"])).get("off_value"):
+            # wie der Bot: Hit, für den die Seite einen anderen (meist niedrigeren) Wert zählt
+            units = {u["key"]: u for u in tracked_units(pool)}
+            keys = off["certain"] + [k for g in off["groups"] for k in g["keys"]]
+            shown = ", ".join(f"{units[k]['name'][:30]} {fmt_coins(units[k]['value'])} (×{gross / units[k]['value']:.2f})"
+                              for k in keys[:3] if k in units)
+            verdict, note = "🔶", f"Hit, Seite zählt anderen Wert: {shown}" + (" (eins davon)" if len(keys) > 1 else "")
         else:
             alt = [(f, near(values, b["coins"], f)) for f in (1.08, 1.0) if near(values, b["coins"], f)]
             verdict = "❓"
@@ -112,7 +119,7 @@ for b in batches:
     print(f"{verdict} {head}\n     {note}")
 
 total = sum(verdicts.values())
-print(f"\nERGEBNIS: {total} Schübe · ✅ {verdicts['✅']} passen · ⏳ {verdicts['⏳']} Teilschritte · "
+print(f"\nERGEBNIS: {total} Schübe · ✅ {verdicts['✅']} passen · 🔶 {verdicts['🔶']} Hit mit anderem Wert · ⏳ {verdicts['⏳']} Teilschritte · "
       f"❓ {verdicts['❓']} unklar · ❌ {verdicts['❌']} unmöglich")
 if cross:
     print(f"Einzelkarten ohne Treffer im eigenen Banner, aber mit gleichem Wert in einem anderen: {sum(cross.values())}")

@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 126;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 127;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -63,11 +63,12 @@ const imgSrc = (u, w = 640) => (/^https:\/\/([\w-]+\.)*gtchaxonline\.com\//.test
   ? `/img?v=${IMG_VERSION}&w=${w}&u=${encodeURIComponent(u)}` : u);
 const img = (u, alt = "", eager = false, w = 640) => (safeUrl(u)
   ? `<img src="${esc(imgSrc(u, w))}" data-orig="${esc(u)}" alt="${esc(alt)}" loading="eager">` : "");
-// Bannerbild; neue Banner haben auf der Seite keins mehr - dann wie dort die Top-Karten als Fächer
+// Wie die Seite seit dem Umbau: Fächer der Top-Karten (wertvollste in der Mitte); Bannerbild nur ohne Kartenliste
 const fanOrder = (i, n) => (i === 0 ? n : i % 2 ? n - i : n + i);
 const cover = (b, alt = "", eager = false, w = 640, max = 5) => {
-  const cards = (b.image ? [] : (b.cover || []).filter(safeUrl)).slice(0, max);
-  if (!cards.length) return img(b.image, alt, eager, w);
+  const cover = (b.cover || []).filter(safeUrl);
+  const cards = (cover.length >= Math.min(3, max) ? cover : []).slice(0, max);
+  if (!cards.length) return img(b.image || cover[0], alt, eager, w);
   return `<div class="fan">${cards.map((u, i) =>
     `<span class="fan-card ${i === 0 ? "top" : ""}" style="order:${fanOrder(i, cards.length)}">${img(u, i ? "" : alt, eager, 320)}</span>`).join("")}</div>`;
 };
