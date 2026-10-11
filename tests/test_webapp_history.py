@@ -618,3 +618,11 @@ def test_shipped_card_gets_coin_value_from_purchase_detail():
            "send_card": [{"card_id": 77, "name": "Mega Chandelure ex", "num": 1, "buy_point": 45980}]}
     out = build_from_stored({"shipped": {"items": cards}, "pulls": {"items": pulls_from_details([det])}}, {}, {})
     assert out["shipped"][0]["value"] == 45980 and out["shipped"][0]["site_value"] is None
+
+
+def test_old_card_with_site_value_counts_in_balance():
+    """Alte Karte ohne Kauf-Details und ohne Kartenliste: Wert laut Seite zählt in der Bilanz mit."""
+    from webapp.history import add_hits
+    summary = {"since": "2026-01-01", "banners": [], "total": {"balance": -1000}}
+    add_hits(summary, [{"date": "2026-05-01", "card_id": "9", "price": 45980}], {})
+    assert summary["total"]["hits_value"] == 45980 and summary["total"]["balance_with_hits"] == 44980
