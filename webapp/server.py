@@ -779,6 +779,8 @@ class App:
                                    user["user_id"], await self.bridge.auto_claim_keys(user["user_id"]))
         for p in planned:
             await self.bridge.add_auto_claim(user, p["key"], p["pack_id"], p["tier"], action="pull_claim")
+            if p["confirm"]:   # schon eigene Medaille - kein Push
+                await self.bridge.mark_auto_claim_notified(user["user_id"], p["key"])
             logger.info(f"Medaille aus Kauf-Details für {user['name']}: {p['card']} -> {p['pack_id']} {p['tier']}"
                         + (" (bestätigt)" if p["confirm"] else " (ersetzt)" if p["replace"] else ""))
         return [p for p in planned if not p["confirm"]]
@@ -1180,7 +1182,16 @@ class App:
             row = await self.view.db.get_banner(c["pack_id"]) or {}
             title = banner_label(row.get("title"), row.get("best_hit"), row.get("category"), row.get("price_coins")) \
                 or f"Banner {c['pack_id']}"
-            if c["status"] == "ok":
+            if str(c["card_key"]).startswith("pull:"):
+                # Medaille aus den Kauf-Details: das ist ein eigener Hit
+                if c["status"] == "ok":
+                    await self.push.send_user(c["discord_user_id"], "own_hit", f"🎉 Hit gezogen: {c['tier']}",
+                                              f"{title} · Medaille ist eingetragen", f"/#/banner/{c['pack_id']}")
+                else:
+                    await self.push.send_user(c["discord_user_id"], "own_hit", f"🎉 Hit gezogen: {c['tier']}",
+                                              f"{title} · {c.get('reason') or 'Medaille nicht eingetragen'}",
+                                              f"/#/banner/{c['pack_id']}")
+            elif c["status"] == "ok":
                 await self.push.send_user(c["discord_user_id"], "auto_ok", f"🏅 Medaille {c['tier']} gemeldet",
                                           f"Automatisch aus deinen angeforderten Karten · {title}",
                                           f"/#/banner/{c['pack_id']}")
