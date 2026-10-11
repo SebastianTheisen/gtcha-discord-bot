@@ -2,6 +2,7 @@
 
 import asyncio
 
+import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from tests.test_ui_smoke import _seed
@@ -53,22 +54,45 @@ def test_live_has_no_beta_prefix(tmp_path):
 
 
 def test_beta_bookmarklet_matches_live_app():
-    """Beide Apps müssen dasselbe Lesezeichen erzeugen (gleicher Code, gleiche Version, gleiche Seiten)."""
+    """Beide Apps müssen dasselbe Lesezeichen erzeugen (gleicher Code, gleiche Version)."""
     import re
     from pathlib import Path
     root = Path(__file__).resolve().parent.parent / "webapp"
     live = (root / "static" / "app.js").read_text()
     beta = (root / "beta" / "src" / "bookmarklet.ts").read_text()
 
-    def body(src):
-        return re.search(r"const src = `(.*?)`;", src, re.S).group(1)
-
     def const(src, name):
-        return re.search(rf"const {name} = ([^;]+);", src, re.S).group(1).split("//")[0].strip()
+        return re.search(rf"^(?:export )?const {name} = (.+?);", src, re.M).group(1).split("  //")[0].strip()
 
-    assert body(live) == body(beta)
-    for name in ("SYNC_PAGES", "SYNC_INCREMENTAL", "SYNC_PARALLEL", "SYNC_VERSION"):
-        assert re.sub(r"\s+", "", const(live, name)) == re.sub(r"\s+", "", const(beta, name)), name
+    for name in ("SYNC_CODE", "SYNC_VERSION"):
+        assert const(live, name) == const(beta, name), name
+
+
+def test_bookmarklet_fits_android():
+    """Android (Chrome/Gboard) schneidet eingefügte Lesezeichen nach 5000 Zeichen ab - dann passiert beim Antippen
+    nichts. Mit Schlüssel und App-Adresse muss das Lesezeichen deutlich darunter bleiben."""
+    import json
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent / "webapp"
+    code = json.loads(re.search(r"^const SYNC_CODE = (.+);$", (root / "static" / "app.js").read_text(), re.M).group(1))
+    values = {"GT_FULL": "false", "GT_ORIGIN": json.dumps("https://gtcha.tail6f0d61.ts.net"),
+              "GT_TOKEN": json.dumps("x" * 64), "GT_V": "18"}
+    assert sorted(set(re.findall(r"\bGT_[A-Z]+\b", code))) == sorted(values)
+    bookmarklet = "javascript:" + re.sub(r"\bGT_[A-Z]+\b", lambda m: values[m.group(0)], code)
+    assert len(bookmarklet) < 4900 and "\n" not in bookmarklet and "%" not in bookmarklet
+
+
+def test_bookmarklet_build_is_current():
+    """SYNC_CODE muss aus webapp/bookmarklet/sync.js erzeugt sein (node webapp/bookmarklet/build.mjs)."""
+    import shutil
+    import subprocess
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent / "webapp"
+    if not shutil.which("node") or not (root / "beta" / "node_modules" / "rolldown").exists():
+        pytest.skip("node bzw. Abhängigkeiten der Beta fehlen")
+    r = subprocess.run(["node", str(root / "bookmarklet" / "build.mjs"), "--check"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
 
 
 def test_link_code_for_another_app(tmp_path):

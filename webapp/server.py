@@ -38,7 +38,7 @@ BETA_DIST = Path(__file__).parent / "beta" / "dist"   # neue Oberfläche (Vite-B
 ROLE = os.getenv("WEBAPP_ROLE", "live")
 STREAM_HEARTBEAT = 25
 REFRESH_SECONDS = 20
-BOOKMARKLET_VERSION = 17   # = SYNC_VERSION in app.js; ältere Lesezeichen bekommen einen Hinweis
+BOOKMARKLET_VERSION = 18   # = SYNC_VERSION in app.js; ältere Lesezeichen bekommen einen Hinweis
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
        "img-src 'self' data: https://gtchaxonline.com https://*.gtchaxonline.com; connect-src 'self'; "
        "manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; "
@@ -521,6 +521,10 @@ class App:
                 # Bereich nicht geladen: nichts überschreiben (ein leerer Münzverlauf würde sonst alles ersetzen)
                 report.append((path, None, str(entry.get("error") or "keine Seite")))
                 continue
+            for pg in entry.get("pages") or []:
+                # ab v18 schickt das Lesezeichen (Platz sparen) keine eigene Bilderliste mehr: aus den Karten bilden
+                if isinstance(pg, dict) and not pg.get("images") and pg.get("cards"):
+                    pg["images"] = [str(c.get("src")) for c in pg["cards"] if isinstance(c, dict) and c.get("src")][:400]
             entries.append({"path": path, "pages": entry.get("pages") or [], "partial": bool(entry.get("partial"))})
             report.append((path, n, "nur Neues" if entry.get("partial") else "komplett"))
             saved += 1
@@ -596,7 +600,7 @@ class App:
                 sync_now = sync_rule(await self.bridge.sync_state(user["user_id"]))
                 sync_now["this"] = acc
                 logger.info(f"Sync von {user['name']}: Konto-Kennung {acc or 'FEHLT'} "
-                            f"(Quelle {data.get('accsrc') or '–'}, Lesezeichen v{data.get('v')})")
+                            f"(Quelle {data.get('accsrc') or ('api' if data.get('mid') else '–')}, Lesezeichen v{data.get('v')})")
             gap = any(a.get("gap") for a in changed.values())
             added = {a: len(changed[a]["items"]) - before[a] for a in before if a in changed and a != "pending"}
             totals = {a: len(changed[a]["items"]) for a in ("coins", "shipped", "pending") if a in changed}

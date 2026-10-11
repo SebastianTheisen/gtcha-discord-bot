@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 119;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 120;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -1340,58 +1340,19 @@ function haptic() {
   navigator.vibrate?.(12);
 }
 
-// "Alles übertragen": lädt die eigenen Verlaufsseiten nacheinander unsichtbar (iframe, gleiche Seite),
-// blättert jeweils durch alle Seitenzahlen und schickt alles per Formular an den VPS. change-member
-// liefert die Ausgaben in Yen; von dort gehen nur Zeilen mit Beträgen/Rang/Datum mit (keine Name/Adresse).
-const SYNC_PAGES = ["undecided-detail", "pending-detail", "shipped-detail", "downloaded-detail",
-                    "buy-point-history", "purchase-history", "ticket-history", "change-member"];
+// "Alles übertragen": lädt die eigenen Verlaufsseiten unsichtbar (iframes auf gtchaxonline.com), blättert durch
+// alle Seitenzahlen und schickt alles per Formular an den VPS. change-member liefert die Ausgaben in Yen; von dort
+// gehen nur Zeilen mit Beträgen/Rang/Datum mit (kein Name/Adresse).
 // Nur Neues: Das Lesezeichen merkt sich (im Speicher von gtchaxonline.com auf diesem Gerät) den neuesten
 // Eintrag je Verlaufsbereich und hört auf zu blättern, sobald eine Seite ihn enthält. Der VPS hängt dann
 // nur das Neue an. Alle 30 Tage (oder mit "komplett") wird wieder alles übertragen.
-const SYNC_VERSION = 17;    // mit BOOKMARKLET_VERSION in webapp/server.py erhöhen, wenn sich das Lesezeichen ändert
-const SYNC_PARALLEL = 4;   // Bereiche gleichzeitig (je ein unsichtbares Fenster)
-const SYNC_INCREMENTAL = ["buy-point-history", "shipped-detail", "ticket-history", "purchase-history", "downloaded-detail"];
+const SYNC_VERSION = 18;    // mit BOOKMARKLET_VERSION in webapp/server.py erhöhen, wenn sich das Lesezeichen ändert
+// Quelle: webapp/bookmarklet/sync.js. Verkleinert, weil Android eingefügte Lesezeichen nach 5000 Zeichen
+// abschneidet - neu erzeugen mit: node webapp/bookmarklet/build.mjs
+const SYNC_CODE = "(async()=>{if(!/gtchaxonline\\.com$/.test(location.hostname)){alert(`Bitte auf gtchaxonline.com öffnen`);return}let e=`undecided pending shipped downloaded`.split(` `).map(e=>e+`-detail`).concat(`buy-point-history purchase-history ticket-history change-member`.split(` `)),t=document,n=`gtchaTracker.marks`,r=`img[src*=\"/card/\"]`,i={};try{i=JSON.parse(localStorage.getItem(n)||`{}`)}catch{}let a=GT_FULL||!i.at||Date.now()-i.at>2592e6,o={at:a?Date.now():i.at},s=Date.now(),c=e=>e.body?e.body.innerText:``,l=e=>e.split(`\\n`).map(e=>e.trim()).filter(Boolean),u=e=>l(e).join(`\\n`),d=e=>{let t=l(e),n=t.findIndex(e=>/^\\d{1,2}\\.\\d{1,2}\\.\\d{4}$/.test(e));if(n>=0&&/^\\d{1,2}:\\d{2}/.test(t[n+2]||``))return t.slice(n+1,n+4).join(`\\n`);let r=t.findIndex(e=>/\\d{2,4}\\/\\d{2}\\/\\d{2}/.test(e));return r<0?``:t.slice(r,r+4).join(`\\n`)},f=t.createElement(`div`);f.style.cssText=`position:fixed;z-index:9999999;inset:9px 9px auto;padding:12px;background:#1f3a6e;color:#fff;font:15px sans-serif;border-radius:9px`,t.body.appendChild(f);let p=e=>{f.textContent=`GTCHA Tracker: `+e},m=e=>new Promise(t=>setTimeout(t,e)),h=(e,t)=>[...e.querySelectorAll(t)],g=(e,t,n)=>h(e,t).find(e=>!e.children.length&&n(e.textContent.trim())),_=/[¥￥円]|coin|münz|ausgaben|rang|rank|20\\d{2}[\\/.-]\\d{1,2}[\\/.-]\\d{1,2}|^[\\d.,]{1,9}$/i,v=e=>h(e,r).slice(0,800).map(e=>{let t=e.closest(`button,a,[aria-label]`),n=e.closest(`section`),r=n&&n.querySelector(`header`);return{src:e.getAttribute(`src`),alt:e.alt,label:t&&t.getAttribute(`aria-label`)||``,group:r?r.textContent.replace(/\\s+/g,` `).trim():``,showcase:!!e.closest(`.c3d,.cshow`)}}),y=(e,t)=>{let n=c(e),r=n.indexOf(`HISTORY`);return{cards:t?v(e):void 0,text:(/member/.test(e.location.pathname)?n.split(`\\n`).filter(e=>_.test(e)).join(`\\n`):r>=0&&/point/.test(e.location.pathname)?n.slice(r):n).slice(0,4e4)}},b=async(e,t,n=6)=>{for(let i=0,a=``,o=0;i<80;i++){await m(400);let s=e.contentDocument,l=s?c(s):``,u=!t||i>=38||!!(s&&(s.querySelector(r)||i>=10&&s.querySelector(`.hpage`)));if(l&&l===a&&u){if(++o>=n)return}else o=0;a=l}},x=e=>h(e,r).length*1e6+c(e).length,S=async(e,t)=>{for(let n=0,r=0;n<120&&r<2;n++){if(t&&t())return;let n=x(e),i=g(e,`button,a,div,span`,e=>/^((mehr|weitere) anzeigen|show more|load more|もっと見る)$/i.test(e));i&&i.click();try{e.defaultView.scrollTo(0,e.body.scrollHeight),h(e,`main,.v-main,.contents`).forEach(e=>{e.scrollTop=e.scrollHeight})}catch{}let a=!1;for(let t=0;t<5&&!a;t++)await m(300),a=x(e)>n;r=a?0:r+1}},C=async(e,t,n,r)=>{for(let i=0;i<n;i++)if(await m(r),c(e)!==t)return!0},w=async(e,t,n)=>{let r=g(t,`button,a,li,div,span`,e=>e===n);if(!r)return;let i=c(t);return r.click(),await C(t,i,20,400),await b(e,1),1},T=e=>!e.children.length&&/^\\d+$/.test(e.textContent.trim()),E=[],D=0,O=0,k=async(n,s)=>{let l=t.createElement(`iframe`),f=s<4,m=s>1&&s<7,g=s==2;l.style.cssText=`position:fixed;inset:0;width:420px;height:900px;opacity:.01;pointer-events:none;border:0;z-index:9999998`,t.body.appendChild(l);try{await new Promise(e=>{l.onload=e,l.src=`/`+n}),await b(l,f);let e=l.contentDocument;if(f&&e&&!e.querySelector(r)&&!e.querySelector(`.hpage`)&&(await new Promise(e=>{l.onload=e,l.contentWindow.location.reload()}),await b(l,1),e=l.contentDocument),!e||!e.body){E[s]={path:n,error:`kein Zugriff`};return}let t=!a&&m&&i[n];(f||m)&&(!g||a)&&await S(e,()=>!!t&&u(c(e)).includes(t));let p=[y(e,f)];g&&await w(l,e,`Sendungen`)&&(await S(e),p.push(y(e,1)));let _=e=>e.group+`|`+e.label,v=e=>t&&(g?(e.cards||[]).some(e=>e.group&&_(e)===t):u(e.text).includes(t)),x=p[p.length-1];if(m){let e=g&&(x.cards||[]).find(e=>e.group&&!e.showcase);o[n]=(g?e&&_(e):d(p[0].text))||i[n]||``}let D=!!v(x);for(let t=2;t<=(a?5e3:60)&&!D;t++){let n=h(e,`a,button,li,span,div`).find(e=>T(e)&&e.textContent.trim()==t&&h(e.parentElement&&e.parentElement.parentElement||e,`*`).filter(T).length>=3);if(!n)break;let r=c(e);if(n.click(),!await C(e,r,30,500))break;await b(l,f,3);let i=y(e,f);p.push(i),D=!!v(i)}E[s]={path:n,pages:p,partial:D}}finally{l.remove(),p(++D+` von `+e.length+` Bereichen geladen …`)}};p(`lade `+e.length+` Bereiche gleichzeitig …`),await Promise.all([1,2,3,4].map(async()=>{for(;O<e.length;){let t=O++;await k(e[t],t)}})),p(`sende …`);try{localStorage.setItem(n,JSON.stringify(o))}catch{}let A=null;try{let e=(await(await fetch(`/api/user/detail`,{credentials:`include`})).json()).detail;A=String(e.id||e.member_id||e.user_id||``)||null}catch{}let j=t.createElement(`form`),M=t.createElement(`input`);j.method=`POST`,j.action=GT_ORIGIN+`/api/import-form`,M.type=`hidden`,M.name=`d`,M.value=JSON.stringify({t:GT_TOKEN,v:GT_V,mid:A,ms:Date.now()-s,pages:E.filter(Boolean)}),j.appendChild(M),t.body.appendChild(j),j.submit()})()";
 function bookmarkletSync(token, full = false) {
-  const src = `(async()=>{
-if(!/gtchaxonline\\.com$/.test(location.hostname)){alert('Bitte auf gtchaxonline.com öffnen');return}
-const P=${JSON.stringify(SYNC_PAGES)};const INC=${JSON.stringify(SYNC_INCREMENTAL)};const LS='gtchaTracker.marks';
-let M={};try{M=JSON.parse(localStorage.getItem(LS)||'{}')}catch(e){}
-const FULL=${full ? "true" : "false"}||!M.at||Date.now()-M.at>30*864e5;
-const lines=t=>t.split('\\n').map(l=>l.trim()).filter(Boolean);
-const sig=t=>{const L=lines(t);const k=L.findIndex(l=>/^\\d{1,2}\\.\\d{1,2}\\.\\d{4}$/.test(l));if(k>=0&&/^\\d{1,2}:\\d{2}/.test(L[k+2]||''))return [L[k+1],L[k+2],L[k+3]].join('\\n');const i=L.findIndex(l=>/\\d{2,4}\\/\\d{2}\\/\\d{2}/.test(l));return i<0?'':L.slice(i,i+4).join('\\n')};
-const NM={at:FULL?Date.now():M.at};const PAR=${SYNC_PARALLEL};const T0=Date.now();
-const box=document.createElement('div');box.style.cssText='position:fixed;z-index:2147483647;left:10px;right:10px;top:10px;padding:12px;background:#1f3a6e;color:#fff;font:15px sans-serif;border-radius:10px';document.body.appendChild(box);
-const say=t=>{box.textContent='GTCHA Tracker: '+t};
-const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-const keep=/[¥￥円]|coin|münz|ausgaben|rang|rank|20\\d{2}[\\/.-]\\d{1,2}[\\/.-]\\d{1,2}|^[\\d.,]{1,9}$/i;
-const grab=d=>({cards:CP.some(c=>d.location.pathname.includes(c))?per(d):undefined,skel:CP.some(c=>d.location.pathname.includes(c))?skel(d):undefined,text:(d.location.pathname.includes('change-member')?d.body.innerText.split('\\n').filter(l=>keep.test(l)).join('\\n'):d.location.pathname.includes('buy-point-history')&&d.body.innerText.includes('HISTORY')?d.body.innerText.slice(d.body.innerText.indexOf('HISTORY')):d.body.innerText).slice(0,40000),images:[...d.querySelectorAll('img')].map(i=>i.getAttribute('src')).filter(s=>s&&s.includes('/card/')).slice(0,400)});
-const CP=['undecided-detail','pending-detail','shipped-detail','downloaded-detail'];const tile=(d,im)=>{let el=im,best=im;while(el.parentElement&&el.parentElement!==d.body){const p=el.parentElement;if(p.querySelectorAll('img[src*="/card/"]').length>1)break;best=p;el=p}return best};const per=d=>[...d.querySelectorAll('img[src*="/card/"]')].slice(0,800).map(im=>{const b=im.closest('button,a,[aria-label]');const sec=im.closest('section');const h=sec&&sec.querySelector('header');return{src:im.getAttribute('src'),alt:im.getAttribute('alt')||'',label:(b&&b.getAttribute('aria-label'))||'',group:h?(h.textContent||'').replace(/\\s+/g,' ').trim():'',showcase:!!im.closest('.c3d,.cshow'),text:(tile(d,im).innerText||'').slice(0,400)}});const skel=d=>[...d.querySelectorAll('img[src*="/card/"]')].slice(0,4).map(im=>{const t=tile(d,im);const ch=[];let x=t;while(x&&x!==d.body){ch.unshift(x.tagName.toLowerCase()+(typeof x.className==='string'&&x.className.trim()?'.'+x.className.trim().split(/\\s+/).join('.'):''));x=x.parentElement}return ch.join(' > ')+'\\n'+t.outerHTML.replace(/<script[\\s\\S]*?<\\/script>/gi,'').slice(0,3000)});const size=d=>d.querySelectorAll('img[src*="/card/"]').length*1e6+(d.body?d.body.innerText.length:0);const more=async(d,stop)=>{let still=0;for(let k=0;k<120&&still<2;k++){if(stop&&stop())return;const n=size(d);const b=[...d.querySelectorAll('button,a,div,span')].find(e=>e.children.length===0&&/^(Mehr anzeigen|Weitere anzeigen|Show more|Load more|もっと見る)$/i.test(e.textContent.trim()));if(b)b.click();try{d.defaultView.scrollTo(0,d.body.scrollHeight);d.querySelectorAll('main,.v-main,.contents').forEach(x=>{x.scrollTop=x.scrollHeight})}catch(e){}let grew=false;for(let w=0;w<5;w++){await sleep(300);if(size(d)>n){grew=true;break}}still=grew?0:still+1}};const tab=async(fr,d,label)=>{const b=[...d.querySelectorAll('button,a,li,div,span')].find(e=>e.children.length===0&&e.textContent.trim()===label);if(!b)return false;const before=d.body.innerText;b.click();for(let w=0;w<20;w++){await sleep(400);if(d.body.innerText!==before)break}await settle(fr,true);return true};const settle=async(fr,want,calm=6)=>{let last='',same=0;for(let i=0;i<80;i++){await sleep(400);const d=fr.contentDocument;const t=d&&d.body?d.body.innerText:'';const ready=!want||i>=38||!!(d&&(d.querySelector('img[src*="/card/"]')||(i>=10&&d.querySelector('.hpage'))));if(t&&t===last&&ready){if(++same>=calm)return}else same=0;last=t}};
-const isNum=x=>x.children.length===0&&/^\\d+$/.test(x.textContent.trim());
-const out=[];let done=0;
-const area=async(p,i)=>{
-const fr=document.createElement('iframe');fr.style.cssText='position:fixed;left:0;top:0;width:420px;height:900px;opacity:0.01;pointer-events:none;border:0;z-index:2147483646';document.body.appendChild(fr);
-try{await new Promise(r=>{fr.onload=r;fr.src='/'+p});await settle(fr,CP.includes(p));if(CP.includes(p)&&fr.contentDocument&&!fr.contentDocument.querySelector('img[src*="/card/"]')&&!fr.contentDocument.querySelector('.hpage')){await new Promise(r=>{fr.onload=r;fr.contentWindow.location.reload()});await settle(fr,true)}
-const d=fr.contentDocument;if(!d||!d.body){out[i]={path:p,error:'kein Zugriff'};return}
-const mark=!FULL&&INC.includes(p)&&M[p];const seen=()=>!!mark&&lines(d.body.innerText).join('\\n').includes(mark);if((CP.includes(p)||INC.includes(p))&&!(p==='shipped-detail'&&!FULL))await more(d,seen);const pages=[grab(d)];if(p==='shipped-detail'&&await tab(fr,d,'Sendungen')){await more(d);pages.push({...grab(d),view:'sendungen'})}let partial=false;
-const ck=g=>{const c=((g&&g.cards)||[]).find(c=>c.group&&!c.showcase);return c?c.group+'|'+c.label:''};const known=g=>mark&&(p==='shipped-detail'?((g.cards||[]).some(c=>c.group&&c.group+'|'+c.label===mark)):lines(g.text).join('\\n').includes(mark));
-if(INC.includes(p))NM[p]=(p==='shipped-detail'?ck(pages[pages.length-1]):sig(pages[0].text))||M[p]||'';
-if(known(pages[pages.length-1]))partial=true;
-for(let n=2;n<=(FULL?5000:60)&&!partial;n++){
-const btn=[...d.querySelectorAll('a,button,li,span,div')].find(e=>isNum(e)&&e.textContent.trim()===String(n)&&[...((e.parentElement&&e.parentElement.parentElement)||e).querySelectorAll('*')].filter(isNum).length>=3);
-if(!btn)break;const before=d.body.innerText;btn.click();
-let g=null;for(let w=0;w<30;w++){await sleep(500);if(d.body.innerText!==before){await settle(fr,CP.includes(p),3);g=grab(d);break}}
-if(!g)break;pages.push(g);if(known(g))partial=true}
-out[i]={path:p,pages,partial}}finally{fr.remove();say((++done)+' von '+P.length+' Bereichen geladen …')}};
-say('lade '+P.length+' Bereiche gleichzeitig …');
-let next=0;await Promise.all(Array.from({length:PAR},async()=>{while(next<P.length){const i=next++;await area(P[i],i)}}));
-say('sende …');try{localStorage.setItem(LS,JSON.stringify(NM))}catch(e){}
-let ACC=null,AS=null,MID=null;try{const r=await fetch('/api/user/detail',{credentials:'include'});const j=await r.json();const v=j&&j.detail&&(j.detail.id||j.detail.member_id||j.detail.user_id);if(v){MID=String(v);AS='api'}}catch(e){}
-if(!MID){const m=(document.body.textContent||'').match(/(?:Mitglieds-ID|Member ID|会員ID|会員番号)\\s*[:：]?\\s*([0-9]{4,})/i);if(m){MID=m[1];AS='text'}}
-try{if(MID){const h=await crypto.subtle.digest('SHA-256',new TextEncoder().encode('gtcha-tracker:'+MID));ACC=[...new Uint8Array(h)].slice(0,8).map(b=>b.toString(16).padStart(2,'0')).join('')}}catch(e){AS='hash-fehler'}
-const f=document.createElement('form');f.method='POST';f.action=${JSON.stringify(location.origin)}+'/api/import-form';
-const i=document.createElement('input');i.type='hidden';i.name='d';i.value=JSON.stringify({t:${JSON.stringify(token)},v:${SYNC_VERSION},mid:MID,acc:ACC,accsrc:AS,at:new Date().toISOString(),ms:Date.now()-T0,pages:out.filter(Boolean)});
-f.appendChild(i);document.body.appendChild(f);f.submit()})()`;
-  return "javascript:" + src.replace(/\n/g, "");
+  const values = { GT_FULL: full, GT_ORIGIN: location.origin, GT_TOKEN: token, GT_V: SYNC_VERSION };
+  return "javascript:" + SYNC_CODE.replace(/\bGT_[A-Z]+\b/g, (k) => JSON.stringify(values[k]));
 }
 
 // --- Mein Verlauf (aus "Alles übertragen") ---
