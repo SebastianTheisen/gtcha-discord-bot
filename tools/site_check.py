@@ -1,129 +1,328 @@
-"""Prüft, ob der Bot nach einem Umbau von gtchaxonline.com noch alles bekommt. Ändert nichts.
+"""Komplette Prüfung nach einem Umbau von gtchaxonline.com: bekommen Bot, App und Lesezeichen noch alles? Ändert nichts.
 
-1. Datenbank: Wie frisch sind die Daten (letzte Pack-Bewegung, letzte Rohdaten der Seite, neue Banner,
-   Kartenpools, Bilder)?
-2. Seite (genau wie der Bot, gleicher Browser/Proxy): pack/list, Kartenliste eines Banners, Banner auf der
-   Startseite - mit allen Feldern, die der Bot benutzt. Fehlt ein Feld, steht es unter ❌.
+Geprüft wird alles, was der Bot von der Seite liest - genau wie der Bot (gleicher Browser, gleicher Proxy/Tor):
+  1. Datenbank: wie frisch sind die Daten
+  2. pack/list (normaler Abruf und schneller Abruf): Banner, alle benutzten Felder, Werte plausibel
+     (Pack-Zahlen, Preis, Kategorie, Start/Ende, Bild, Kaufbedingungen, Versand/Umwandlung)
+  3. Abgleich mit der Datenbank (gleiche Banner, gleiche Pack-Zahlen)
+  4. Kartenlisten (je Kategorie ein Banner): Seiten, Felder, Summe der Karten = Packs des Banners
+  5. Store-Seite (Schmuck & Co.)
+  6. Startseite mit Kategorie-Reitern (Titel, Bild, Enddatum, Zuglimit aus den Kacheln)
+  7. Detailseite eines Banners (Link "Öffnen" in App und Discord)
+  8. Bilder (Banner und Karte): laden vollständig
+  9. Lesezeichen-Seiten und Mitglieds-Abfrage (ohne Login nur Erreichbarkeit - Inhalt prüft das Lesezeichen selbst)
 
-Aufruf auf dem VPS:
+Aufruf auf dem VPS (dauert 2-5 Minuten):
     docker exec -i gtcha-discord-bot python - < tools/site_check.py
 """
 
 import asyncio
-import json
 import sqlite3
 import sys
+from collections import Counter
 from datetime import datetime, timedelta
 
 sys.path.insert(0, "/app")
 
 DB = "/app/data/gtcha_bot.db"
-# Felder aus pack/list, die der Bot liest (Pack-Zahlen, Preis, Versand/Umwandlung, Kategorie, Start/Ende ...)
+BASE = "https://gtchaxonline.com"
 PACK_FIELDS = ["id", "name", "point", "pack_count", "total_pack_count", "total_sendcount", "total_sendprice",
                "total_kangen", "total_sendpeople", "start_date", "end_date", "image", "max_buy_count",
                "is_before", "is_bonus", "card_type", "password_flag", "min_charge_amount", "badges"]
-# wichtig = ohne das geht Erkennung/Ø Rückgabe nicht
-PACK_REQUIRED = ["id", "point", "pack_count", "total_pack_count", "total_sendcount", "total_sendprice", "total_kangen"]
+PACK_REQUIRED = ["id", "point", "pack_count", "total_pack_count", "total_sendcount", "total_sendprice",
+                 "total_kangen", "card_type", "end_date"]
 CARD_FIELDS = ["id", "name", "buy_point", "duplication", "action_type", "image_url", "model_number", "rarity"]
 CARD_REQUIRED = ["id", "name", "buy_point", "duplication", "action_type"]
+SYNC_PAGES = ["undecided-detail", "pending-detail", "shipped-detail", "downloaded-detail",
+              "buy-point-history", "purchase-history", "ticket-history", "change-member"]
+
+results = []   # (Bereich, Status, Text)
 
 
-def ago(iso):
+def report(area, status, text):
+    results.append((area, status, text))
+    print(f"  {status} {area}: {text}")
+
+
+def num(v):
     try:
-        mins = (datetime.now() - datetime.fromisoformat(iso)).total_seconds() / 60
+        return int(float(v))
     except (TypeError, ValueError):
-        return "nie"
-    return f"vor {mins:.0f} Min" if mins < 120 else f"vor {mins / 60:.1f} Std"
+        return None
 
 
-def fields(name, items, wanted, required):
-    present = {k for it in items for k in it}
-    missing = [k for k in wanted if k not in present]
-    bad = [k for k in required if k in missing]
-    print(f"  {name}: {len(items)} Einträge, Felder fehlen: {', '.join(missing) or 'keine'}")
-    if bad:
-        print(f"  ❌ WICHTIGE Felder fehlen: {', '.join(bad)}")
-    new = sorted(present - set(wanted))
-    if new:
-        print(f"  (weitere Felder der Seite: {', '.join(new[:25])}{' …' if len(new) > 25 else ''})")
-    return not bad
+def ago_min(iso):
+    try:
+        return (datetime.now() - datetime.fromisoformat(iso)).total_seconds() / 60
+    except (TypeError, ValueError):
+        return None
 
 
-def db_check():
-    print("== 1. Datenbank (was der Bot zuletzt bekommen hat)")
+# --- 1. Datenbank ---
+def check_db():
+    print("\n== 1. Datenbank (was der Bot zuletzt bekommen hat)")
     db = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
     q = lambda sql, *a: db.execute(sql, a).fetchone()
     active = q("SELECT count(*) FROM banners WHERE is_active = 1")[0]
-    print(f"  aktive Banner: {active}")
-    print(f"  letzte Pack-Bewegung: {ago(q('SELECT max(changed_at) FROM pack_history')[0])}")
-    print(f"  letzte Rohdaten-Änderung (pack/list): {ago(q('SELECT max(changed_at) FROM api_log')[0])}")
-    since = (datetime.now() - timedelta(hours=1)).isoformat()
-    print(f"  Banner mit Änderungen in der letzten Stunde: {q('SELECT count(DISTINCT banner_id) FROM api_log WHERE changed_at > ?', since)[0]}")
+    move = ago_min(q("SELECT max(changed_at) FROM pack_history")[0])
+    raw = ago_min(q("SELECT max(changed_at) FROM api_log")[0])
+    report("Aktive Banner", "✅" if active else "❌", str(active))
+    report("Letzte Pack-Bewegung", "✅" if move is not None and move < 60 else "⚠️",
+           "nie" if move is None else f"vor {move:.0f} Min")
+    report("Letzte Rohdaten der Seite", "✅" if raw is not None and raw < 60 else "⚠️",
+           "nie" if raw is None else f"vor {raw:.0f} Min")
     day = (datetime.now() - timedelta(days=1)).isoformat()
-    new = db.execute("SELECT pack_id, created_at, card_pool IS NOT NULL, image_url IS NOT NULL, price_coins, "
-                     "total_packs FROM banners WHERE created_at > ? ORDER BY pack_id DESC", (day,)).fetchall()
-    print(f"  neue Banner (24 Std): {len(new)}")
-    for pid, created, pool, img, price, total in new[:10]:
-        print(f"    {pid}: {ago(created)} · Kartenpool {'✅' if pool else '❌'} · Bild {'✅' if img else '❌'} · "
-              f"Preis {price} · Packs {total}")
+    new = db.execute("SELECT pack_id, card_pool IS NOT NULL, image_url IS NOT NULL, sale_end_date IS NOT NULL "
+                     "FROM banners WHERE created_at > ? ORDER BY pack_id DESC", (day,)).fetchall()
+    bad = [str(p) for p, pool, img, end in new if not (pool and img and end)]
+    report("Neue Banner (24 Std)", "✅" if not bad else "⚠️",
+           f"{len(new)} neu" + (f", unvollständig (Pool/Bild/Ende fehlt): {', '.join(bad[:10])}" if bad else ""))
     nopool = q("SELECT count(*) FROM banners WHERE is_active = 1 AND card_pool IS NULL")[0]
-    print(f"  aktive Banner ohne Kartenpool: {nopool}")
+    report("Aktive Banner ohne Kartenpool", "✅" if not nopool else "⚠️", str(nopool))
+    return {r[0]: r[1] for r in db.execute("SELECT pack_id, current_packs FROM banners WHERE is_active = 1")}
 
 
-async def site_check():
-    print("\n== 2. Seite (live abgefragt wie der Bot)")
-    from scraper.gtcha_scraper import FETCH_CARD_LIST_JS, GTCHAScraper
-    ok = True
-    async with GTCHAScraper() as s:
-        items = await s.fetch_pack_list()
-        if not items:
-            print("  ❌ pack/list liefert KEINE Banner - der Bot bekommt keine Pack-Zahlen mehr")
-            return False
-        lst = list(items.values())
-        ok &= fields("pack/list", lst, PACK_FIELDS, PACK_REQUIRED)
-        sample = lst[0]
-        print("  Beispiel:", json.dumps({k: sample.get(k) for k in PACK_REQUIRED + ["name"]}, ensure_ascii=False)[:300])
-        pid = int(sample["id"])
-        page = await s._context.new_page()
+# --- 2./3. pack/list ---
+def check_pack_list(items, db_packs):
+    from utils.banner_info import category_for, jst_timestamp, sale_end_timestamp
+    print("\n== 2. pack/list (Banner-Liste der Seite)")
+    lst = list(items.values())
+    report("Banner in pack/list", "✅" if lst else "❌", str(len(lst)))
+    if not lst:
+        return
+    present = {k for it in lst for k in it}
+    missing = [k for k in PACK_FIELDS if k not in present]
+    hard = [k for k in PACK_REQUIRED if k in missing]
+    report("Felder", "❌" if hard else ("⚠️" if missing else "✅"),
+           f"fehlen: {', '.join(missing) or 'keine'}" + (f" (WICHTIG: {', '.join(hard)})" if hard else ""))
+    extra = sorted(present - set(PACK_FIELDS))
+    if extra:
+        print(f"     weitere Felder der Seite: {', '.join(extra[:30])}")
+    # Werte
+    bad_packs = [it["id"] for it in lst if num(it.get("pack_count")) is None or num(it.get("total_pack_count")) is None
+                 or num(it.get("pack_count")) > num(it.get("total_pack_count"))]
+    report("Pack-Zahlen", "✅" if not bad_packs else "❌", "plausibel" if not bad_packs
+           else f"unlesbar/zu groß bei {bad_packs[:10]}")
+    bad_price = [it["id"] for it in lst if num(it.get("point")) is None]
+    report("Preise", "✅" if not bad_price else "❌", "lesbar" if not bad_price else f"unlesbar bei {bad_price[:10]}")
+    cats = Counter(category_for(it) or f"unbekannt(card_type={it.get('card_type')}, bonus={it.get('is_bonus')})"
+                   for it in lst)
+    unknown = {k: v for k, v in cats.items() if k.startswith("unbekannt")}
+    report("Kategorien", "✅" if not unknown else "⚠️", ", ".join(f"{k}: {v}" for k, v in cats.most_common()))
+    end_bad = [it["id"] for it in lst if it.get("end_date") and not sale_end_timestamp(it.get("end_date"))]
+    report("Verkaufsende", "✅" if not end_bad else "❌", "lesbar" if not end_bad
+           else f"Format unbekannt bei {end_bad[:5]}: {items[end_bad[0]].get('end_date')!r}")
+    start_bad = [it["id"] for it in lst if it.get("start_date") and not jst_timestamp(it.get("start_date"))]
+    upcoming = sum(1 for it in lst if it.get("is_before"))
+    report("Verkaufsstart", "✅" if not start_bad else "❌",
+           f"{upcoming} angekündigt" if not start_bad
+           else f"Format unbekannt bei {start_bad[:5]}: {items[start_bad[0]].get('start_date')!r}")
+    no_img = [it["id"] for it in lst if not (isinstance(it.get("image"), list) and it["image"])]
+    report("Bannerbilder", "✅" if not no_img else "⚠️", "vorhanden" if not no_img
+           else f"fehlen/anderes Format bei {no_img[:10]} (Beispiel: {items[no_img[0]].get('image')!r})")
+    badges = [it["id"] for it in lst if it.get("badges") is not None and not isinstance(it.get("badges"), list)]
+    report("Kaufbedingungen (Rang)", "✅" if not badges else "⚠️", "lesbar" if not badges
+           else f"anderes Format bei {badges[:5]}")
+    ship_bad = [it["id"] for it in lst if any(it.get(k) is not None and num(it.get(k)) is None
+                                              for k in ("total_sendcount", "total_sendprice", "total_kangen"))]
+    report("Versand/Umwandlung (Hit-Erkennung)", "✅" if not ship_bad else "❌", "lesbar" if not ship_bad
+           else f"unlesbar bei {ship_bad[:10]}")
+
+    print("\n== 3. Abgleich mit der Datenbank")
+    ids, known = set(items), set(db_packs)
+    gone = known - ids
+    report("Aktive Banner auch in pack/list", "✅" if not gone else "⚠️",
+           "alle" if not gone else f"{len(gone)} fehlen in pack/list: {sorted(gone)[:10]}")
+    diff = [pid for pid in ids & known if db_packs[pid] is not None
+            and abs((num(items[pid].get("pack_count")) or 0) - db_packs[pid]) > 20]
+    report("Pack-Zahlen wie in der Datenbank", "✅" if not diff else "⚠️",
+           "passen" if not diff else f"weichen stark ab bei {diff[:10]}")
+
+
+# --- 4. Kartenlisten ---
+async def check_card_lists(page, items):
+    from scraper.gtcha_scraper import FETCH_CARD_LIST_JS
+    from utils.banner_info import category_for
+    from utils.card_pool import summarize_cards
+    print("\n== 4. Kartenlisten (je Kategorie ein Banner)")
+    picked = {}
+    for it in items.values():
+        cat = category_for(it)
+        if cat and cat not in picked and num(it.get("total_pack_count")):
+            picked[cat] = it
+    for cat, it in picked.items():
+        pid = int(it["id"])
         try:
-            await page.goto(f"{s.base_url}/api/user/point", wait_until="domcontentloaded", timeout=60000)
             cards = await page.evaluate(FETCH_CARD_LIST_JS, pid)
-            if not cards:
-                print(f"  ❌ Kartenliste von {pid} leer/nicht abrufbar - keine Hit-Listen/Erkennung für neue Banner")
-                ok = False
-            else:
-                ok &= fields(f"Kartenliste {pid}", cards, CARD_FIELDS, CARD_REQUIRED)
-            # Startseite: Banner-Kacheln und Kategorie-Reiter (Tab-Scrape alle 15 Min, Titel/Bild/Ende)
-            await page.goto(s.base_url, wait_until="domcontentloaded", timeout=90000)
+        except Exception as e:
+            report(f"Karten {pid} ({cat})", "❌", f"Fehler: {e}")
+            continue
+        if not cards:
+            report(f"Karten {pid} ({cat})", "❌", "leer/nicht abrufbar")
+            continue
+        present = {k for c in cards for k in c}
+        hard = [k for k in CARD_REQUIRED if k not in present]
+        soft = [k for k in CARD_FIELDS if k not in present and k not in hard]
+        pool = summarize_cards(cards)
+        total = num(it.get("total_pack_count"))
+        count_ok = pool and abs(pool["total_count"] - total) <= max(2, total // 100)
+        kinds = Counter(str(c.get("action_type")) for c in cards)
+        report(f"Karten {pid} ({cat})", "❌" if hard or not pool else ("⚠️" if soft or not count_ok else "✅"),
+               f"{len(cards)} Karten, Summe {pool['total_count'] if pool else '–'} / {total} Packs"
+               + (f", WICHTIGE Felder fehlen: {', '.join(hard)}" if hard else "")
+               + (f", fehlen: {', '.join(soft)}" if soft else "")
+               + f", Arten (action_type): {dict(kinds)}")
+    return picked
+
+
+# --- 5. Store ---
+async def check_store():
+    print("\n== 5. Store-Seite")
+    from config import SCRAPER_PROXY
+    from utils.store_client import StoreClient
+    client = StoreClient(BASE, SCRAPER_PROXY)
+    try:
+        items, types, ok = await client.fetch_store([], discover=True)
+        report("Store", "✅" if ok and items else "⚠️",
+               f"{len(items)} Packs, Kartenarten {sorted(types)}" if ok else "Store-Seite fragt keine Pack-Liste mehr ab")
+    except Exception as e:
+        report("Store", "❌", f"Fehler: {type(e).__name__}: {e}")
+    finally:
+        await client.close()
+
+
+# --- 6. Startseite / Reiter ---
+async def check_tabs(items):
+    print("\n== 6. Startseite mit Kategorie-Reitern (Titel, Bild, Ende, Zuglimit)")
+    from scraper.gtcha_scraper import GTCHAScraper
+    try:
+        async with GTCHAScraper() as s:
+            banners = await s.scrape_all_banners()
+    except Exception as e:
+        report("Startseite", "❌", f"Fehler: {type(e).__name__}: {e}")
+        return
+    report("Banner auf der Startseite", "✅" if banners else "❌",
+           f"{len(banners)} gefunden (pack/list: {len(items)})")
+    if not banners:
+        return
+    for field, label in (("title", "Titel"), ("image_url", "Bild"), ("sale_end_date", "Enddatum"),
+                         ("price_coins", "Preis"), ("current_packs", "Pack-Zahl")):
+        missing = [b.pack_id for b in banners if not getattr(b, field)]
+        share = len(missing) / len(banners)
+        report(f"Kacheln: {label}", "✅" if share < 0.1 else ("⚠️" if share < 0.5 else "❌"),
+               f"bei {len(banners) - len(missing)} von {len(banners)}"
+               + (f" (fehlt z. B. bei {missing[:5]})" if missing else ""))
+
+
+# --- 7./8./9. Detailseite, Bilder, Lesezeichen-Seiten ---
+async def check_pages(page, items, picked):
+    print("\n== 7. Detailseite (Link „Öffnen“)")
+    pid = next(iter(picked.values()))["id"] if picked else next(iter(items))
+    try:
+        resp = await page.goto(f"{BASE}/pack-detail?packId={pid}", wait_until="domcontentloaded", timeout=60000)
+        await page.wait_for_timeout(3000)
+        text = await page.evaluate("document.body ? document.body.innerText.length : 0")
+        report("Detailseite", "✅" if resp and resp.status < 400 and text > 200 else "⚠️",
+               f"HTTP {resp.status if resp else '–'}, {text} Zeichen Text, Adresse {page.url}")
+    except Exception as e:
+        report("Detailseite", "❌", f"Fehler: {type(e).__name__}: {e}")
+
+    print("\n== 8. Bilder")
+    import aiohttp
+    try:
+        from webapp.images import complete
+    except Exception:
+        complete = lambda data: len(data) > 0
+    urls = []
+    it = items.get(int(pid)) or next(iter(items.values()))
+    if isinstance(it.get("image"), list) and it["image"]:
+        urls.append(("Bannerbild", BASE + it["image"][0].split("?")[0]))
+    from scraper.gtcha_scraper import FETCH_CARD_LIST_JS
+    try:
+        await page.goto(f"{BASE}/api/user/point", wait_until="domcontentloaded", timeout=60000)
+        cards = await page.evaluate(FETCH_CARD_LIST_JS, int(pid)) or []
+        img = next((c.get("image_url") for c in cards if c.get("image_url")), None)
+        if img:
+            urls.append(("Kartenbild", img if img.startswith("http") else BASE + img))
+    except Exception:
+        pass
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30),
+                                     headers={"User-Agent": "Mozilla/5.0"}) as session:
+        for label, url in urls:
             try:
-                await page.wait_for_selector("[data-pack-id]", timeout=30000)
-            except Exception:
-                pass
-            tiles = await page.eval_on_selector_all("[data-pack-id]", "els => els.length")
-            tabs = await page.eval_on_selector_all(".pack_menu_list .pack_menu", "els => els.map(e => e.innerText.trim())")
-            print(f"  Startseite: {tiles} Banner-Kacheln ([data-pack-id]), Reiter: {', '.join(tabs) or 'KEINE'}")
-            if not tiles or not tabs:
-                print("  ⚠️ Startseite anders aufgebaut - der Tab-Scrape (Titel, Bild, Enddatum) greift evtl. nicht mehr; "
-                      "Pack-Zahlen kommen trotzdem aus pack/list")
-            detail = await page.evaluate("""async () => {
-                const r = await fetch('/api/user/detail', {credentials: 'include'});
-                return r.status;
-            }""")
-            print(f"  /api/user/detail (Lesezeichen, Mitglieds-ID): HTTP {detail} "
-                  f"{'(ohne Login normal: 401/403)' if detail in (401, 403) else ''}")
-        finally:
-            await page.close()
-    return ok
+                async with session.get(url) as r:
+                    data = await r.read()
+                    ok = r.status == 200 and complete(data)
+                    report(label, "✅" if ok else "❌",
+                           f"HTTP {r.status}, {r.headers.get('Content-Type')}, {len(data)} Bytes"
+                           + ("" if ok else " (unvollständig/kein Bild)") + f" · {url}")
+            except Exception as e:
+                report(label, "❌", f"Fehler: {type(e).__name__}: {e} · {url}")
+    if not urls:
+        report("Bilder", "⚠️", "keine Bildadresse gefunden")
+
+    print("\n== 9. Lesezeichen-Seiten (ohne Login: nur Erreichbarkeit)")
+    for path in SYNC_PAGES:
+        try:
+            resp = await page.goto(f"{BASE}/{path}", wait_until="domcontentloaded", timeout=45000)
+            moved = page.url.rstrip("/") != f"{BASE}/{path}"
+            status = resp.status if resp else None
+            report(f"/{path}", "✅" if status and status < 400 else "❌",
+                   f"HTTP {status}" + (f" → weitergeleitet nach {page.url}" if moved else ""))
+        except Exception as e:
+            report(f"/{path}", "❌", f"Fehler: {type(e).__name__}: {e}")
+    try:
+        status = await page.evaluate("""async () => (await fetch('/api/user/detail', {credentials: 'include'})).status""")
+        report("/api/user/detail (Mitglieds-ID)", "✅" if status in (200, 401, 403) else "⚠️",
+               f"HTTP {status} (ohne Login sind 401/403 normal)")
+    except Exception as e:
+        report("/api/user/detail", "❌", f"Fehler: {e}")
 
 
 async def main():
-    db_check()
+    db_packs = {}
     try:
-        ok = await site_check()
+        db_packs = check_db()
     except Exception as e:
-        print(f"  ❌ Abfrage fehlgeschlagen: {type(e).__name__}: {e}")
-        ok = False
-    print("\n== Ergebnis:", "✅ alles Wichtige kommt an" if ok else "❌ etwas Wichtiges fehlt (siehe oben)")
+        report("Datenbank", "❌", f"{type(e).__name__}: {e}")
+    from config import SCRAPER_PROXY
+    from scraper.gtcha_scraper import GTCHAScraper
+    from utils.pack_list_client import PackListClient
+    items, picked = {}, {}
+    try:
+        fast = PackListClient(BASE, SCRAPER_PROXY)
+        try:
+            quick = await fast.fetch()
+        finally:
+            await fast.close()
+        report("Schneller Abruf (jede Minute)", "✅" if quick else "❌", f"{len(quick)} Banner")
+    except Exception as e:
+        report("Schneller Abruf (jede Minute)", "❌", f"{type(e).__name__}: {e}")
+    try:
+        async with GTCHAScraper() as s:
+            items = await s.fetch_pack_list()
+            check_pack_list(items, db_packs)
+            if items:
+                page = await s._context.new_page()
+                try:
+                    await page.goto(f"{BASE}/api/user/point", wait_until="domcontentloaded", timeout=60000)
+                    picked = await check_card_lists(page, items)
+                    await check_pages(page, items, picked)
+                finally:
+                    await page.close()
+    except Exception as e:
+        report("pack/list", "❌", f"{type(e).__name__}: {e}")
+    await check_store()
+    await check_tabs(items)
+
+    print("\n================ ERGEBNIS ================")
+    bad = [r for r in results if r[1] == "❌"]
+    warn = [r for r in results if r[1] == "⚠️"]
+    print(f"✅ {sum(1 for r in results if r[1] == '✅')}   ⚠️ {len(warn)}   ❌ {len(bad)}")
+    for area, status, text in bad + warn:
+        print(f"{status} {area}: {text}")
+    if not bad and not warn:
+        print("Alles kommt an wie vorher.")
 
 
 asyncio.run(main())
