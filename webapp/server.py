@@ -38,7 +38,7 @@ BETA_DIST = Path(__file__).parent / "beta" / "dist"   # neue Oberfläche (Vite-B
 ROLE = os.getenv("WEBAPP_ROLE", "live")
 STREAM_HEARTBEAT = 25
 REFRESH_SECONDS = 20
-BOOKMARKLET_VERSION = 12   # = SYNC_VERSION in app.js; ältere Lesezeichen bekommen einen Hinweis
+BOOKMARKLET_VERSION = 13   # = SYNC_VERSION in app.js; ältere Lesezeichen bekommen einen Hinweis
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
        "img-src 'self' data: https://gtchaxonline.com https://*.gtchaxonline.com; connect-src 'self'; "
        "manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; "
@@ -570,6 +570,16 @@ class App:
                         del changed[area]
                         logger.warning(f"Sync von {user['name']}: {path} nicht erkannt - gespeicherte "
                                        f"{before[area]} Karten bleiben")
+            # Kompletter Lauf mit deutlich weniger als vorher (z. B. nur Seite 1 geladen): nicht überschreiben
+            for area, label in (("coins", "Münzverlauf"), ("shipped", "Versendet")):
+                entry = next((e for e in entries if e["path"] == ("buy-point-history" if area == "coins" else "shipped-detail")), None)
+                n_new = len((changed.get(area) or {}).get("items") or [])
+                if (entry and not entry.get("partial") and area in changed and n_new
+                        and before.get(area, 0) >= 20 and n_new < before[area] * 0.5):
+                    del changed[area]
+                    warnings.append(f"⚠️ {label}: nur {n_new} statt bisher {before[area]} gelesen – gespeicherte bleiben. "
+                                    f"Bitte „Komplett übertragen“ erneut ausführen und die Seite offen lassen.")
+                    logger.warning(f"Sync von {user['name']}: {area} nur {n_new} statt {before[area]} - nicht übernommen")
             # Münzverlauf: Seite geladen, aber keine Buchung erkannt (z. B. neues Layout) - gespeicherte behalten
             coins_entry = next((e for e in entries if e["path"] == "buy-point-history"), None)
             if coins_entry and "coins" in changed and not changed["coins"]["items"]:
