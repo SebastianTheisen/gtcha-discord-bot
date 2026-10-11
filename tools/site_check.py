@@ -11,6 +11,11 @@ Geprüft wird alles, was der Bot von der Seite liest - genau wie der Bot (gleich
   7. Detailseite eines Banners (Link "Öffnen" in App und Discord)
   8. Bilder (Banner und Karte): laden vollständig
   9. Lesezeichen-Seiten und Mitglieds-Abfrage (ohne Login nur Erreichbarkeit - Inhalt prüft das Lesezeichen selbst)
+ 10. Neue Banner ohne Kartenliste / ohne Bild: Werte der Seite (card_hide_flag usw.) und was die öffentliche
+     Detailseite einem Besucher zeigt - mit den Abfragen, die die Seite dabei selbst lädt (nur mitgelesen,
+     keine eigenen Versuche). Versteckt GTCHA eine Kartenliste, bleibt sie versteckt.
+
+Das Ergebnis landet in data/site_check.txt und wird automatisch in den Admin-Kanal von Discord geschickt.
 
 Aufruf auf dem VPS (dauert 2-5 Minuten):
     docker exec -i gtcha-discord-bot python - < tools/site_check.py
@@ -286,6 +291,70 @@ async def check_pages(page, items, picked):
         report("/api/user/detail", "❌", f"Fehler: {e}")
 
 
+# --- 10. Banner ohne Kartenliste / Bild ---
+async def check_hidden(page, items):
+    print("\n== 10. Banner ohne Kartenliste oder Bild")
+    import json as _json
+    db = sqlite3.connect(DB)
+    pools = {r[0]: r[1] for r in db.execute("SELECT pack_id, card_pool FROM banners WHERE is_active = 1")}
+    empty = [pid for pid in items if not (pools.get(pid) and '"cards": [' in pools[pid] and '"cards": []' not in pools[pid])]
+    flags = Counter(f"card_hide_flag={it.get('card_hide_flag')!r}" for it in items.values())
+    report("card_hide_flag in pack/list", "ℹ️", ", ".join(f"{k}: {n}" for k, n in flags.most_common()))
+    no_image = [pid for pid, it in items.items() if not it.get("image")]
+    report("Banner ohne eigenes Bild", "ℹ️", f"{len(no_image)} von {len(items)}"
+           + (f" (z. B. {', '.join(map(str, sorted(no_image)[:8]))})" if no_image else ""))
+    report("Banner ohne Kartenliste", "✅" if not empty else "ℹ️", f"{len(empty)}"
+           + (f": {', '.join(map(str, sorted(empty)[:15]))}" if empty else ""))
+    for pid in sorted(empty)[:3]:
+        it = items[pid]
+        fields = {k: it.get(k) for k in ("card_hide_flag", "show_list_count", "is_before", "is_countdown",
+                                          "rule_type", "lottery_method", "stock_count", "start_date")}
+        report(f"{pid}: Werte der Seite", "ℹ️", _json.dumps(fields, ensure_ascii=False))
+        seen = []   # Abfragen, die die Detailseite selbst lädt (nur mitgelesen)
+
+        def on_response(r, seen=seen):
+            if "/api/" in r.url:
+                seen.append(f"{r.request.method} {r.url.replace(BASE, '')} -> {r.status}")
+        page.on("response", on_response)
+        try:
+            await page.goto(f"{BASE}/pack-detail?packId={pid}", wait_until="domcontentloaded", timeout=60000)
+            try:
+                await page.wait_for_load_state("networkidle", timeout=20000)
+            except Exception:
+                pass
+            await page.wait_for_timeout(2500)
+            shown = await page.evaluate("""() => ({cards: document.querySelectorAll('img[src*="/card/"]').length,
+                text: (document.body ? document.body.innerText : '').replace(/\\s+/g, ' ').slice(0, 300)})""")
+            report(f"{pid}: Detailseite zeigt", "ℹ️", f"{shown['cards']} Kartenbilder · Text: {shown['text']!r}")
+            report(f"{pid}: Abfragen der Detailseite", "ℹ️", " | ".join(dict.fromkeys(seen)) or "keine")
+        except Exception as e:
+            report(f"{pid}: Detailseite", "❌", f"Fehler: {type(e).__name__}: {e}")
+        finally:
+            page.remove_listener("response", on_response)
+
+
+def post_to_discord(path):
+    """Ergebnis als Datei in den Admin-Kanal (wie tools/post_file.py)."""
+    import json as _json
+    import os
+    import aiohttp
+    token, channel = os.getenv("DISCORD_TOKEN", ""), os.getenv("ADMIN_CHANNEL_ID", "")
+    if not token or not channel.isdigit():
+        print("Discord: DISCORD_TOKEN oder ADMIN_CHANNEL_ID fehlt - Datei liegt in data/site_check.txt")
+        return
+
+    async def send():
+        form = aiohttp.FormData()
+        form.add_field("payload_json", _json.dumps({"content": "🔎 Seiten-Prüfung (site_check)"}))
+        with open(path, "rb") as f:
+            form.add_field("files[0]", f.read(), filename=os.path.basename(path), content_type="text/plain")
+        async with aiohttp.ClientSession() as session:
+            async with session.post(f"https://discord.com/api/v10/channels/{channel}/messages", data=form,
+                                    headers={"Authorization": f"Bot {token}"}) as r:
+                print("Discord: gesendet" if r.status < 300 else f"Discord: Fehler {r.status} {await r.text()}")
+    asyncio.run(send())
+
+
 async def main():
     db_packs = {}
     try:
@@ -315,6 +384,7 @@ async def main():
                     await page.goto(f"{BASE}/api/user/point", wait_until="domcontentloaded", timeout=60000)
                     picked = await check_card_lists(page, items)
                     await check_pages(page, items, picked)
+                    await check_hidden(page, items)
                 finally:
                     await page.close()
     except Exception as e:
@@ -333,4 +403,26 @@ async def main():
         print("Alles kommt an wie vorher.")
 
 
-asyncio.run(main())
+class Tee:
+    """Ausgabe zusätzlich in data/site_check.txt schreiben."""
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, text):
+        for st in self.streams:
+            st.write(text)
+
+    def flush(self):
+        for st in self.streams:
+            st.flush()
+
+
+OUT = "/app/data/site_check.txt"
+with open(OUT, "w", encoding="utf-8") as out:
+    stdout, sys.stdout = sys.stdout, Tee(sys.stdout, out)
+    try:
+        print(f"Seiten-Prüfung {datetime.now():%d.%m.%Y %H:%M}")
+        asyncio.run(main())
+    finally:
+        sys.stdout = stdout
+post_to_discord(OUT)
