@@ -321,6 +321,13 @@ def test_failed_area_keeps_stored_history(tmp_path):
                                                                "images": [IMG.format(1)]}]}])
         assert "keine Karten erkannt" in await res.text()
         assert len((await app.bridge.get_history("42"))["pending"]["items"]) == 3
+        # kompletter Lauf mit viel weniger Buchungen (nur Seite 1): gespeicherter Verlauf bleibt
+        many = HEAD + "\n".join(f"2026/09/{d:02d} 10:{m:02d}\n-100\n¥0\nÖffnen" for d in range(1, 29) for m in (1, 2)) + "\n" + FOOT
+        await post([{"path": "buy-point-history", "pages": [{"text": many}]}])
+        assert len((await app.bridge.get_history("42"))["coins"]["items"]) == 56
+        res = await post([{"path": "buy-point-history", "pages": [{"text": COINS}]}])
+        assert "statt bisher 56" in await res.text()
+        assert len((await app.bridge.get_history("42"))["coins"]["items"]) == 56
         # wirklich leer (keine Kartenbilder): darf leer werden (alles verschickt)
         await post([{"path": "pending-detail", "pages": [{"text": HEAD + "Keine Daten\n" + FOOT}]}])
         assert (await app.bridge.get_history("42")).get("pending", {}).get("items") in ([], None)

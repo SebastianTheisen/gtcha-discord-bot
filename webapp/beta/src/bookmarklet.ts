@@ -2,7 +2,7 @@
 // dasselbe Lesezeichen erzeugen. Es läuft auf gtchaxonline.com und schickt an <Ursprung>/api/import-form.
 const SYNC_PAGES = ["undecided-detail", "pending-detail", "shipped-detail", "downloaded-detail",
                     "buy-point-history", "purchase-history", "ticket-history", "change-member"];
-export const SYNC_VERSION = 12;    // mit BOOKMARKLET_VERSION in webapp/server.py und app.js der Live-App erhöhen
+export const SYNC_VERSION = 13;    // mit BOOKMARKLET_VERSION in webapp/server.py und app.js der Live-App erhöhen
 const SYNC_PARALLEL = 4;
 const SYNC_INCREMENTAL = ["buy-point-history", "shipped-detail", "ticket-history", "purchase-history", "downloaded-detail"];
 export function bookmarkletSync(token: string, full = false): string {
@@ -26,11 +26,11 @@ const area=async(p,i)=>{
 const fr=document.createElement('iframe');fr.style.cssText='position:fixed;left:0;top:0;width:420px;height:900px;opacity:0.01;pointer-events:none;border:0;z-index:2147483646';document.body.appendChild(fr);
 try{await new Promise(r=>{fr.onload=r;fr.src='/'+p});await settle(fr,CP.includes(p));if(CP.includes(p)&&fr.contentDocument&&!fr.contentDocument.querySelector('img[src*="/card/"]')){await new Promise(r=>{fr.onload=r;fr.contentWindow.location.reload()});await settle(fr,true)}
 const d=fr.contentDocument;if(!d||!d.body){out[i]={path:p,error:'kein Zugriff'};return}
-const mark=!FULL&&INC.includes(p)&&M[p];const seen=()=>!!mark&&lines(d.body.innerText).join('\\n').includes(mark);if(CP.includes(p)||INC.includes(p))await more(d,seen);const pages=[grab(d)];if(p==='shipped-detail'&&await tab(fr,d,'Sendungen')){await more(d);pages.push({...grab(d),view:'sendungen'})}let partial=false;const NEWUI=!!d.querySelector('.v-application');
+const mark=!FULL&&INC.includes(p)&&M[p];const seen=()=>!!mark&&lines(d.body.innerText).join('\\n').includes(mark);if(CP.includes(p)||INC.includes(p))await more(d,seen);const pages=[grab(d)];if(p==='shipped-detail'&&await tab(fr,d,'Sendungen')){await more(d);pages.push({...grab(d),view:'sendungen'})}let partial=false;
 const known=g=>mark&&lines(g.text).join('\\n').includes(mark);
 if(INC.includes(p))NM[p]=sig(pages[0].text)||M[p]||'';
 if(known(pages[0]))partial=true;
-for(let n=2;n<=40&&!partial&&!NEWUI;n++){
+for(let n=2;n<=60&&!partial;n++){
 const btn=[...d.querySelectorAll('a,button,li,span,div')].find(e=>isNum(e)&&e.textContent.trim()===String(n)&&[...((e.parentElement&&e.parentElement.parentElement)||e).querySelectorAll('*')].filter(isNum).length>=3);
 if(!btn)break;const before=d.body.innerText;btn.click();
 let g=null;for(let w=0;w<30;w++){await sleep(500);if(d.body.innerText!==before){await settle(fr,CP.includes(p));g=grab(d);break}}
