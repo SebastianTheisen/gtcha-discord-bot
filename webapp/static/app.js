@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 121;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 122;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -63,6 +63,14 @@ const imgSrc = (u, w = 640) => (/^https:\/\/([\w-]+\.)*gtchaxonline\.com\//.test
   ? `/img?v=${IMG_VERSION}&w=${w}&u=${encodeURIComponent(u)}` : u);
 const img = (u, alt = "", eager = false, w = 640) => (safeUrl(u)
   ? `<img src="${esc(imgSrc(u, w))}" data-orig="${esc(u)}" alt="${esc(alt)}" loading="eager">` : "");
+// Bannerbild; neue Banner haben auf der Seite keins mehr - dann wie dort die Top-Karten als Fächer
+const fanOrder = (i, n) => (i === 0 ? n : i % 2 ? n - i : n + i);
+const cover = (b, alt = "", eager = false, w = 640, max = 5) => {
+  const cards = (b.image ? [] : (b.cover || []).filter(safeUrl)).slice(0, max);
+  if (!cards.length) return img(b.image, alt, eager, w);
+  return `<div class="fan">${cards.map((u, i) =>
+    `<span class="fan-card ${i === 0 ? "top" : ""}" style="order:${fanOrder(i, cards.length)}">${img(u, i ? "" : alt, eager, 320)}</span>`).join("")}</div>`;
+};
 const evClass = (p) => (p == null ? "" : p >= 100 ? "good" : p >= 70 ? "ok" : "");
 const time = (t) => new Date(t * 1000).toLocaleString("de-DE", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 const coins = (n) => `<span class="coin"></span>${n ? num(n) : "Gratis"}`;
@@ -220,7 +228,7 @@ function row(b, rank) {
       <div class="row-card ${b.status === "hits_out" ? "done" : ""}" data-href="#/banner/${b.id}">
         ${b.headline ? `<div class="row-title">${esc(b.headline)}</div>` : ""}
         <div class="media">
-          ${img(b.image, b.title)}
+          ${cover(b, b.title)}
           ${b.status !== "running" ? `<span class="status ${b.status}">${icon} ${label}</span>` : ""}
           <span class="price-pill">${coins(b.price)}</span>
         </div>
@@ -247,7 +255,7 @@ function compactRow(b) {
   const [icon] = STATUS[b.status] || STATUS.running;
   const left = b.total ? Math.max(0, Math.min(100, (b.remaining / b.total) * 100)) : 0;
   return `<div class="crow ${b.status === "hits_out" ? "done" : ""} ${canBuy(b) === false ? "not-mine" : ""}" data-href="#/banner/${b.id}">
-    <div class="crow-img">${img(b.image, b.title)}</div>
+    <div class="crow-img">${cover(b, b.title, false, 320, 1)}</div>
     <div class="crow-main">
       <div class="crow-top"><b>${b.id}</b> <span class="muted">${esc(b.category || "")}</span>
         ${b.status !== "running" ? `<span class="crow-status">${icon}</span>` : ""}</div>
@@ -668,7 +676,7 @@ async function showBanner(id) {
   view.innerHTML = `
     <a class="back" href="#/" data-back>‹ Zurück</a>
     ${flags(b)}
-    <div class="hero">${img(b.image, b.title, true)}${b.status !== "running" ? `<span class="status ${b.status}">${icon} ${label}</span>` : ""}
+    <div class="hero">${cover(b, b.title, true)}${b.status !== "running" ? `<span class="status ${b.status}">${icon} ${label}</span>` : ""}
       <span class="price-pill">${coins(b.price)}</span></div>
     ${b.headline ? `<h1 class="d-title">${esc(b.headline)}</h1>` : ""}
     ${notMineNote(b)}

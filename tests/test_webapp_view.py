@@ -101,3 +101,12 @@ def test_implausible_shipment_is_flagged():
     assert implausible_shipment(pool, 2, 660) is None
     assert implausible_shipment(pool, 0, 736) is None          # Korrektur ohne Karte: nichts zu prüfen
     assert implausible_shipment(None, 1, 46) is None
+
+
+def test_cover_images_for_banner_without_image():
+    """Neue Banner haben auf der Seite kein eigenes Bild mehr, sondern einen Fächer der Top-Karten."""
+    from webapp.view import cover_images
+    pool = {"hits": [{"image": "a", "value": 100}, {"image": "b", "value": 900}],
+            "top": [{"image": "b", "value": 900}, {"image": "c", "value": 50}, {"value": 9999}]}
+    assert cover_images(pool) == ["b", "a", "c"]
+    assert cover_images(None) == []

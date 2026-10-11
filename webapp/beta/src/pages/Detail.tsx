@@ -4,7 +4,7 @@ import { LockedError } from "../api";
 import { Flags, hitsText, STATUS, verdict } from "../components/BannerCard";
 import { CardSheet, type CardInfo } from "../components/CardSheet";
 import { AreaChart } from "../components/Chart";
-import { Img } from "../components/Img";
+import { Cover, Img } from "../components/Img";
 import { Lock } from "../components/Lock";
 import { cardName, compact, countdown, dateTime, day, evTone, hhmm, num, pct, shortTime, untilText } from "../format";
 import { cardCode } from "../links";
@@ -74,7 +74,7 @@ export function Detail({ id }: { id: string }) {
   return (
     <div style={{ paddingBottom: b.archived ? 0 : "90px" }}>
       <div class="hero">
-        <Img url={b.image} w={960} alt="" eager />
+        <Cover b={b} w={960} eager />
         <a class="back glass" href="#/" onClick={(e) => { if (history.length > 1) { e.preventDefault(); history.back(); } }}>‹ Zurück</a>
       </div>
       <div class="detail-head">

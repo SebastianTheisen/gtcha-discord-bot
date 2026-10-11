@@ -521,3 +521,15 @@ details.section > summary small { font-size: 13px; color: var(--muted); font-wei
 .ann-quick { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
 .ann-quick .btn { padding: 6px 10px; font-size: 13px; }
 .ann-preview { font-size: 14px; color: var(--blue); font-weight: 600; margin-top: 4px; }
+
+/* Banner ohne eigenes Bild: Top-Karten als Fächer (wie die Seite) */
+.fan { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 2%; padding: 3%;
+  background: radial-gradient(ellipse at 50% 45%, rgba(212, 175, 55, .22), transparent 65%), #20283d; }
+.fan-card { flex: 0 0 16%; display: flex; align-items: center; }
+.fan-card.top { flex-basis: 23%; position: relative; z-index: 1; }
+.media .fan img, .hero .fan img, .crow-img .fan img { position: static; width: 100%; height: auto; max-height: 100%;
+  object-fit: contain; background: none; border-radius: 5px; box-shadow: 0 6px 18px rgba(0, 0, 0, .5); filter: none; }
+.crow-img { position: relative; }
+.crow-img .fan { padding: 3px; }
+.crow-img .fan-card.top { flex-basis: auto; height: 100%; }
+.crow-img .fan img { width: auto; height: 100%; }

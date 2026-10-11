@@ -2,7 +2,7 @@ import { countdown, evTone, num, pct, untilText, type Tone } from "../format";
 import { canBuy } from "../local";
 import { changedIds, prefetchDetail, wishBanners } from "../store";
 import type { Banner, Status } from "../types";
-import { Img } from "./Img";
+import { Cover } from "./Img";
 
 export const STATUS: Record<Status, [string, string]> = {
   running: ["🎯", "Läuft"],
@@ -66,7 +66,7 @@ export function BannerCard({ b, rank, eager = false }: { b: Banner; rank?: numbe
       <a class={`bcard ${changedIds.value.has(b.id) ? "flash" : ""} ${b.status === "hits_out" ? "done" : ""}`} href={`#/banner/${b.id}`}
         onPointerDown={() => prefetchDetail(b.id)}>
         <div class="media">
-          <Img url={b.image} w={640} alt={b.title} eager={eager} />
+          <Cover b={b} w={640} alt={b.title} eager={eager} />
           <div class="badges">
             <span class="pill glass">{rank ? <b class={`rank-no r${rank}`}>#{rank}</b> : null} {icon} {label}</span>
             {b.ev_pct != null && !b.archived && (
@@ -105,7 +105,7 @@ export function CompactRow({ b, rank, eager = false }: { b: Banner; rank?: numbe
   return (
     <a class={`crow ${b.status === "hits_out" ? "done" : ""} ${canBuy(b) === false ? "not-mine" : ""} ${changedIds.value.has(b.id) ? "flash" : ""}`}
       href={`#/banner/${b.id}`} onPointerDown={() => prefetchDetail(b.id)}>
-      <div class="crow-img"><Img url={b.image} w={320} alt="" eager={eager} /></div>
+      <div class="crow-img"><Cover b={b} w={320} eager={eager} max={1} /></div>
       <div class="crow-main">
         <div class="small"><b>{rank ? `#${rank} · ` : ""}{b.id}</b> <span class="muted">{b.category}</span> {b.status !== "running" ? icon : ""}</div>
         <div class="crow-title">{b.headline || b.title}</div>
