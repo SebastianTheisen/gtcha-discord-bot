@@ -497,3 +497,47 @@ def test_diagnose_only_for_admins(tmp_path, monkeypatch):
             await client.close()
 
     asyncio.run(run())
+
+
+# --- ab Lesezeichen v19: Daten, die die Seiten selbst laden ---
+SHIPPED_JSON = {"page": [], "state": 200, "list": {
+    "2026/08/03_876408943256": {"delivery_code": "876408943256", "date": "2026/08/03", "url": "x", "cards": [
+        {"id": 1034580, "name": "Pikachu ex", "model_number": "SV-P 001", "rarity": "SAR", "num": 2,
+         "image": "/card/1034580_small.jpg"}]},
+    "2026/04/14_Narita": {"delivery_code": "Narita", "date": "2026/04/14", "url": "", "cards": [
+        {"id": 7, "name": "Nami", "model_number": "OP01-016", "rarity": "SR", "num": 1, "image": "https://x/7.jpg"}]}}}
+PENDING_JSON = {"page": [], "state": 200, "list": {"2026/10/03": [
+    {"id": 9, "name": "Luffy", "model_number": "OP16-015", "rarity": "SR", "num": 1, "image": "/card/9.jpg"}]}}
+
+
+def test_cards_from_site_json():
+    from webapp.history import cards_from_json
+    cards = cards_from_json([SHIPPED_JSON, SHIPPED_JSON])   # doppelt mitgelesen: nur einmal
+    assert [(c["date"], c["tracking"], c["name"], c["number"]) for c in cards] == [
+        ("2026-08-03", "876408943256", "Pikachu ex", "SV-P 001"), ("2026-08-03", "876408943256", "Pikachu ex", "SV-P 001"),
+        ("2026-04-14", "Narita", "Nami", "OP01-016")]
+    assert cards[0]["image"] == "https://gtchaxonline.com/card/1034580_small.jpg" and cards[0]["card_id"] == "1034580"
+    pending = cards_from_json([PENDING_JSON])
+    assert [(c["date"], c["tracking"], c["name"]) for c in pending] == [("2026-10-03", None, "Luffy")]
+
+
+def test_coins_from_site_json_keeps_same_minute_bookings():
+    """Gleiche Buchungen in derselben Minute (mehrere Packs) bleiben getrennt - sie haben eigene IDs."""
+    from webapp.history import coins_from_json, coins_total, ingest
+    page1 = {"page": {"all": 4, "all_page": 2}, "list": [
+        {"id": 13, "bonusPoint": 500, "money": 0, "memo": "コインへ還元", "created": "2026/10/12 01:46"},
+        {"id": 12, "bonusPoint": -88, "money": 0, "memo": "ガチャ", "created": "2026/10/12 01:40"},
+        {"id": 11, "bonusPoint": -88, "money": 0, "memo": "ガチャ", "created": "2026/10/12 01:40"}]}
+    page2 = {"page": {"all": 4}, "list": [
+        {"id": 10, "bonusPoint": 10000, "money": 10000, "memo": "コイン購入", "created": "2026/10/11 23:00"}]}
+    coins = coins_from_json([page1, page2, page1])
+    assert [(c["id"], c["t"], c["amount"], c["kind"]) for c in coins] == [
+        (13, "2026-10-12 01:46", 500, "convert"), (12, "2026-10-12 01:40", -88, "open"),
+        (11, "2026-10-12 01:40", -88, "open"), (10, "2026-10-11 23:00", 10000, "buy")]
+    assert coins_total([page1]) == 4
+    stored = ingest({}, [{"path": "buy-point-history", "pages": [{"text": ""}], "json": [page1, page2]}])
+    assert len(stored["coins"]["items"]) == 4
+    # danach nur Neues: neue Buchung oben, Rest per ID erkannt
+    page0 = {"list": [{"id": 14, "bonusPoint": -88, "money": 0, "memo": "ガチャ", "created": "2026/10/12 02:00"}] + page1["list"]}
+    again = ingest(stored, [{"path": "buy-point-history", "pages": [{"text": ""}], "json": [page0], "partial": True}])
+    assert [c["id"] for c in again["coins"]["items"]] == [14, 13, 12, 11, 10] and not again["coins"]["gap"]

@@ -26,7 +26,7 @@ from database.db import Database
 from utils.app_bridge import MAX_DELAY_MINUTES, MAX_IMPORT_BYTES, AppBridge
 from utils.banner_info import berlin_time, berlin_to_ts
 from webapp.accuracy import AccuracyStore
-from webapp.history import (JST_OFFSET, build_from_stored, ingest, local_time, plan_claims, profile, stored_events,
+from webapp.history import (JST_OFFSET, coins_total, build_from_stored, ingest, local_time, plan_claims, profile, stored_events,
                             summarize, attribute_opens, opens_by_banner, CLAIM_OPEN_DAYS)
 from webapp.images import ImageCache, content_type
 from webapp.push import DEFAULTS, EVENTS, WATCH_EVENTS, PushService, build_events
@@ -39,7 +39,7 @@ BETA_DIST = Path(__file__).parent / "beta" / "dist"   # neue Oberfläche (Vite-B
 ROLE = os.getenv("WEBAPP_ROLE", "live")
 STREAM_HEARTBEAT = 25
 REFRESH_SECONDS = 20
-BOOKMARKLET_VERSION = 18   # = SYNC_VERSION in app.js; ältere Lesezeichen bekommen einen Hinweis
+BOOKMARKLET_VERSION = 19   # = SYNC_VERSION in app.js; ältere Lesezeichen bekommen einen Hinweis
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
        "img-src 'self' data: https://gtchaxonline.com https://*.gtchaxonline.com; connect-src 'self'; "
        "manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; "
@@ -515,6 +515,36 @@ class App:
         except Exception as e:
             logger.debug(f"Seite nicht abgelegt: {e}")
 
+    def _check_coin_json(self, user, responses, changed, before, stored, warnings, entry):
+        """Münzverlauf aus den Daten der Seite (Lesezeichen v19): Vollständigkeit gegen die Zahl der Seite prüfen,
+        unplausible Vorzeichen abfangen, Übersicht der Vermerke für die Fehlersuche ablegen (ohne persönliche Daten)."""
+        from collections import Counter
+        items = changed["coins"]["items"]
+        total = coins_total(responses)
+        memos = Counter((e.get("note"), e.get("kind"), "+" if e.get("amount", 0) > 0 else "-" if e.get("amount", 0) < 0 else "0")
+                        for e in items)
+        try:
+            folder = Path(self.data_dir) / "sync_debug"
+            folder.mkdir(exist_ok=True)
+            (folder / f"{user['user_id']}-coins-json.txt").write_text(
+                f"{len(items)} Buchungen, laut Seite {total}\n" + "\n".join(f"{n:6d}  {k}  {v}  {sign}" for (k, v, sign), n
+                                                                          in memos.most_common()), encoding="utf-8")
+        except Exception as e:
+            logger.debug(f"Übersicht nicht abgelegt: {e}")
+        had_minus = any((e.get("amount") or 0) < 0 for e in (stored.get("coins") or {}).get("items") or [])
+        if items and had_minus and not any((e.get("amount") or 0) < 0 for e in items):
+            # keine einzige Ausgabe: Vorzeichen der Seite anders als gedacht - lieber nichts überschreiben
+            del changed["coins"]
+            warnings.append("⚠️ Münzverlauf: Daten der Seite sehen anders aus als erwartet – gespeicherte Buchungen "
+                            "bleiben, bitte dem Admin Bescheid geben.")
+            logger.warning(f"Sync von {user['name']}: Münz-Daten ohne Ausgaben - nicht übernommen")
+            return
+        if total and not entry.get("partial") and len(items) < total * 0.98:
+            warnings.append(f"⚠️ Münzverlauf: {len(items):,} von {total:,} Buchungen gelesen – bitte „Komplett übertragen“ "
+                            f"erneut ausführen und die Seite offen lassen.".replace(",", "."))
+        logger.info(f"Sync von {user['name']}: Münzverlauf aus den Daten der Seite: {len(items)} Buchungen"
+                    + (f" (laut Seite {total})" if total else ""))
+
     async def api_import_diag(self, request):
         """Diagnose-Lesezeichen (nur Admins): Aufbau der Verlaufs-Daten der Seite - als Datei in data/ und in den
         Admin-Kanal von Discord, damit "Alles übertragen" diese Daten künftig direkt lesen kann."""
@@ -563,11 +593,14 @@ class App:
                 # Bereich nicht geladen: nichts überschreiben (ein leerer Münzverlauf würde sonst alles ersetzen)
                 report.append((path, None, str(entry.get("error") or "keine Seite")))
                 continue
+            site_json = [j for j in entry.get("json") or [] if isinstance(j, dict)][:5000]   # ab v19: Daten der Seite
+            n = max(n, len(site_json))
             for pg in entry.get("pages") or []:
                 # ab v18 schickt das Lesezeichen (Platz sparen) keine eigene Bilderliste mehr: aus den Karten bilden
                 if isinstance(pg, dict) and not pg.get("images") and pg.get("cards"):
                     pg["images"] = [str(c.get("src")) for c in pg["cards"] if isinstance(c, dict) and c.get("src")][:400]
-            entries.append({"path": path, "pages": entry.get("pages") or [], "partial": bool(entry.get("partial"))})
+            entries.append({"path": path, "pages": entry.get("pages") or [], "json": site_json,
+                            "partial": bool(entry.get("partial"))})
             report.append((path, n, "nur Neues" if entry.get("partial") else "komplett"))
             saved += 1
             partial += bool(entry.get("partial"))
@@ -626,6 +659,11 @@ class App:
                     warnings.append(f"⚠️ {label}: nur {n_new} statt bisher {before[area]} gelesen – gespeicherte bleiben. "
                                     f"Bitte „Komplett übertragen“ erneut ausführen und die Seite offen lassen.")
                     logger.warning(f"Sync von {user['name']}: {area} nur {n_new} statt {before[area]} - nicht übernommen")
+            # ab v19: Münzverlauf aus den Daten der Seite - prüfen und Übersicht der Vermerke ablegen
+            coins_json = next((e["json"] for e in entries if e["path"] == "buy-point-history" and e.get("json")), None)
+            if coins_json and "coins" in changed:
+                self._check_coin_json(user, coins_json, changed, before, stored, warnings,
+                                      next(e for e in entries if e["path"] == "buy-point-history"))
             # Münzverlauf: Seite geladen, aber keine Buchung erkannt (z. B. neues Layout) - gespeicherte behalten
             coins_entry = next((e for e in entries if e["path"] == "buy-point-history"), None)
             if coins_entry and "coins" in changed and not changed["coins"]["items"]:
