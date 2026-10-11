@@ -36,6 +36,23 @@ def epoch(iso: Optional[str]) -> Optional[int]:
         return None
 
 
+SHOWN_ICONS = ("✅", "❓", "📮", "⚠️")   # Erklärungen eines Versandschubs, die der Pack-Verlauf zeigt
+
+
+def implausible_shipment(pool: Optional[Dict], cards: int, value: int) -> Optional[str]:
+    """Hinweis, wenn die Seite für einen Versand weniger Coins zählt, als die billigsten Karten wert sind
+    (z. B. 1 Karte mit 46 Coins, kleinste Karte 330) - dann hat sich der Zähler der Seite verzählt."""
+    values = [to_int(c.get("value")) for c in (pool or {}).get("cards") or []]
+    values = [v for v in values if v]
+    if cards <= 0 or not values:
+        return None
+    lowest = min(values)
+    if value >= cards * lowest * 0.9:
+        return None
+    return (f"Seite zählt nur {fmt_coins(value)} Coins – passt zu keiner Karte "
+            f"(billigste {fmt_coins(lowest)} Coins), Zähler der Seite wohl falsch")
+
+
 def pack_timeline(moves: List[tuple], converts: List[tuple], shipments: List[Dict], limit: int = 800) -> List[Dict]:
     """Pack-Verlauf wie in Discord: jedes Pack-Update einzeln, dazwischen jeder Lauf der Seite, in dem Versand
     oder Umwandlung gezählt wurden - mit Coins und dem Pack-Stand zu dem Zeitpunkt.
@@ -55,7 +72,7 @@ def pack_timeline(moves: List[tuple], converts: List[tuple], shipments: List[Dic
             o["ship_cards"] += v.get("cards") or 0
             o["ship_value"] += v.get("value") or 0
             o["players"] += v.get("players") or 0
-            o["explain"] += [l for l in v.get("explain") or [] if l.get("icon") in ("✅", "❓", "📮")]
+            o["explain"] += [l for l in v.get("explain") or [] if l.get("icon") in SHOWN_ICONS]
     packs = [{"kind": "pack", "t": t, "old": old, "new": new} for t, old, new in moves if t and new < old]
     timeline = sorted(packs + outs, key=lambda e: (e["t"], e["kind"] == "out"))
     current = None
@@ -69,7 +86,7 @@ def pack_timeline(moves: List[tuple], converts: List[tuple], shipments: List[Dic
         if s.get("before"):
             events.append({"kind": "out", "t": None, "before": True, "converted": 0, "ship_cards": s.get("cards") or 0,
                            "ship_value": s.get("value") or 0, "players": s.get("players") or 0, "packs": None,
-                           "explain": [l for l in s.get("explain") or [] if l.get("icon") in ("✅", "❓", "📮")]})
+                           "explain": [l for l in s.get("explain") or [] if l.get("icon") in SHOWN_ICONS]})
     return events
 
 
@@ -527,7 +544,8 @@ class BannerView:
         if not pool or not pool.get('hits'):
             for s in shipments:
                 s["value"] = card_value(max(0, s["coins"]))
-                s["explain"] = []
+                odd = implausible_shipment(pool, s["cards"], s["value"])
+                s["explain"] = [{"icon": "⚠️", "text": odd}] if odd else []
             return shipments
         _, _, winners, _, _ = await self._pulled(data.get("medal_thread") or 0, row['pack_id'], pool)
         units = {u["key"]: u for u in tracked_units(pool)}
@@ -581,7 +599,8 @@ class BannerView:
                 lines.append({"icon": "·", "text": "zu viele Karten auf einmal – nicht zerlegbar"})
             elif res["kind"] == "unclear":
                 lines.append({"icon": "·", "text": "keine passende Kombination"})
-            s["explain"] = lines
+            odd = implausible_shipment(pool, s["cards"], s["value"])
+            s["explain"] = [{"icon": "⚠️", "text": odd}] if odd else lines
         data["_key_odds"] = key_odds
         data["_key_ship"] = key_ship
         return shipments

@@ -90,3 +90,14 @@ def test_pack_timeline_shows_shipments_from_before_recording_last():
     events = pack_timeline([(1000, 10, 9)], [], ships)
     assert events[-1]["before"] and events[-1]["t"] is None and events[-1]["ship_cards"] == 5
     assert [e["kind"] for e in events] == ["out", "pack", "out"]
+
+
+def test_implausible_shipment_is_flagged():
+    """Seite zählt für 1 Karte 46 Coins, die billigste Karte ist 330 wert (Banner 24237): Hinweis statt Erklärung."""
+    from webapp.view import implausible_shipment
+    pool = {"cards": [{"value": 330}, {"value": 770}, {"value": 118560}]}
+    assert "billigste 330" in implausible_shipment(pool, 1, 46)
+    assert implausible_shipment(pool, 1, 330) is None
+    assert implausible_shipment(pool, 2, 660) is None
+    assert implausible_shipment(pool, 0, 736) is None          # Korrektur ohne Karte: nichts zu prüfen
+    assert implausible_shipment(None, 1, 46) is None
