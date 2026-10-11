@@ -90,6 +90,14 @@ def pack_timeline(moves: List[tuple], converts: List[tuple], shipments: List[Dic
     return events
 
 
+def cover_images(pool: Optional[Dict], n: int = 5) -> List[str]:
+    """Banner ohne eigenes Bild (neue Banner seit dem Umbau der Seite): wie die Seite die wertvollsten Karten
+    als Fächer zeigen - Bilder der Top-Karten, wertvollste zuerst."""
+    cards = [c for c in ((pool or {}).get('hits') or []) + ((pool or {}).get('top') or []) if c.get('image')]
+    cards.sort(key=lambda c: -(to_int(c.get('value')) or 0))
+    return list(dict.fromkeys(c['image'] for c in cards))[:n]
+
+
 def buy_url(row: Dict) -> str:
     return row.get('detail_page_url') or f"{BASE_URL}/pack-detail?packId={row['pack_id']}"
 
@@ -192,6 +200,7 @@ class BannerView:
         medal_thread = store_thread_id(pid) if store else thread_id   # Store-Pack: Medaillen ohne Discord-Thread
         price, remaining, total = (to_int(row.get(k)) for k in ('price_coins', 'current_packs', 'total_packs'))
         pool = json.loads(row['card_pool']) if row.get('card_pool') else None
+        cover = [] if row.get('image_url') else cover_images(pool)
         stats, sure, winners, open_groups, unsure, pulled, held = None, set(), {}, [], [], set(), set()
         shipped_keys = set()
         if pool and pool.get('total_count'):
@@ -210,6 +219,7 @@ class BannerView:
                                                      row.get('price_coins')) or f"Pack {pid}", "category": row.get('category'),
             "price": price, "remaining": remaining, "total": total,
             "per_day": row.get('entries_per_day'), "image": row.get('image_url'), "buy_url": buy_url(row),
+            "cover": cover,
             "end": row.get('sale_end_date'), "end_ts": sale_end_timestamp(row.get('sale_end_date')),
             "starts_at": row.get('starts_at'),
             "status": self._status(row, thread, stats, pool, sure, winners),
