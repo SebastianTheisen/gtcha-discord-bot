@@ -200,9 +200,16 @@ class ScrapingMixin:
                 # === KARTENPOOL (Top 5, Ø Rückgabe) ===
                 # Die Kartenliste ändert sich nicht; pro Scrape nur wenige fehlende Pools nachladen
                 # (neue Banner zuerst), damit der Scrape kurz bleibt.
+                # Banner mit neuem Versand zuerst: Kartenwerte frisch, bevor der Schub erklärt wird
+                shipped = sorted(self.db.__dict__.get("shipped_pids") or set())
+                self.db.__dict__["shipped_pids"] = set()
+                for pid in shipped:
+                    await self.db.mark_pool_stale(pid)
                 missing_pools = await self.db.get_banners_without_pool(
-                    limit=POOL_FETCH_PER_SCRAPE, prefer_ids=new_banner_ids,
+                    limit=POOL_FETCH_PER_SCRAPE + len(shipped), prefer_ids=list(new_banner_ids) + shipped,
                     forums=[c for c, cid in CHANNEL_IDS.items() if cid])
+                if shipped:
+                    logger.info(f"[POOL] Versand bei {', '.join(map(str, shipped))}: Kartenlisten werden neu geladen")
                 if missing_pools:
                     try:
                         pools = await scraper.fetch_card_pools(missing_pools)
