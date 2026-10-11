@@ -450,19 +450,41 @@ def merge_newest_first(old: List[Dict], new: List[Dict], key: tuple) -> tuple:
     """Neue Einträge vor die gespeicherten setzen (beide neueste zuerst).
 
     Das Lesezeichen hört auf zu blättern, sobald eine Seite den zuletzt bekannten Eintrag enthält - die
-    neuen Daten enden also mit einem Anfang der alten Liste. Den längsten solchen Überlapp abschneiden.
+    neuen Daten enden also mit einem Anfang der alten Liste; dieser Teil wird nicht noch einmal angehängt.
     Rückgabe: (zusammengeführt, Überlapp gefunden). Ohne Überlapp fehlt evtl. etwas dazwischen.
     """
     if not old:
         # nichts gespeichert (z. B. Konto vom Admin zurückgesetzt), aber das Lesezeichen kennt den letzten Stand
         # noch und hat nur die neuesten Seiten geholt: älteres fehlt -> Lücke ("Komplett übertragen")
         return list(new), False
+    from collections import Counter
     sig = lambda e: tuple(e.get(k) for k in key)
-    new_s, old_s = [sig(e) for e in new], [sig(e) for e in old]
-    for k in range(min(len(new_s), len(old_s)), 0, -1):
-        if new_s[-k:] == old_s[:k]:
-            return list(new[:-k]) + list(old), True
-    return list(new) + list(old), not new
+    times = [e.get("t") for e in new if isinstance(e.get("t"), str)]
+    if new and len(times) == len(new):
+        # Münzverlauf: die neue Seite deckt die Zeit von ihrer ältesten bis zur neuesten Buchung vollständig ab - in
+        # diesem Zeitraum gilt nur sie (räumt auch früher entstandene Doppelte auf). In der ältesten Minute kann die
+        # Seite abgeschnitten sein: dort die größere Anzahl je Buchung behalten.
+        oldest = min(times)
+        if any(e.get("t", "") >= oldest for e in old):   # Überlapp: die Seite reicht bis in den gespeicherten Verlauf
+            at_edge = Counter(sig(e) for e in new if e["t"] == oldest)
+            edge_old = Counter(sig(e) for e in old if e.get("t") == oldest)
+            extra = []
+            for k, n in edge_old.items():
+                extra += [next(e for e in old if sig(e) == k)] * max(0, n - at_edge[k])
+            rest = [e for e in old if e.get("t", "") < oldest]
+            return list(new) + extra + rest, True
+    # Zählen statt Reihenfolge: viele Buchungen in derselben Minute (mehrere Packs) stehen nicht in jedem Lauf in
+    # derselben Reihenfolge - der Vergleich der Reihenfolge fand den Überlapp dann nur teilweise (+2 Doppelte je Lauf).
+    # Neu ist, was auf den neuen Seiten öfter vorkommt als oben im gespeicherten Verlauf.
+    known = Counter(sig(e) for e in old[:len(new) * 2 + 50])
+    seen: Counter = Counter()
+    fresh = []
+    for e in new:
+        k = sig(e)
+        seen[k] += 1
+        if seen[k] > known[k]:
+            fresh.append(e)
+    return fresh + list(old), (not new) or len(fresh) < len(new)
 
 
 def ingest(stored: Dict[str, Dict], entries: List[Dict], now: Optional[datetime] = None) -> Dict[str, Dict]:

@@ -166,6 +166,13 @@ def test_merge_newest_first_cuts_overlap():
     assert ok and [e["t"] for e in merged] == list("EDCBA")
     merged, ok = merge_newest_first(old, [{"t": x} for x in "ZY"], key)      # kein Überlapp -> Lücke
     assert not ok and [e["t"] for e in merged] == list("ZYEDCBA")
+    # ohne Zeitstempel (z. B. Karten): zählen statt Reihenfolge - andere Reihenfolge, nichts Neues, keine Doppelten
+    key = ("x",)
+    old = [{"x": x} for x in "DCCBA"]
+    merged, ok = merge_newest_first(old, [{"x": x} for x in "CDC"], key)
+    assert ok and [e["x"] for e in merged] == list("DCCBA")
+    merged, ok = merge_newest_first(old, [{"x": x} for x in "ECDCC"], key)    # E neu, ein drittes C neu
+    assert ok and [e["x"] for e in merged] == list("ECDCCBA")
 
 
 def test_ingest_incremental_coins_and_member():
@@ -442,3 +449,16 @@ def test_parse_card_tiles_page_transition():
         ("Yamato", "2026-08-01"), ("Booster", "2026-08-01"), ("Booster", "2026-08-01"),
         ("Storm Emeralda", "2026-07-29"), ("Mew", "2026-07-29")]
     assert cards[0]["tracking"] == "876350975697"
+
+
+def test_merge_coins_replaces_covered_time_span():
+    """Münzverlauf: im Zeitraum der neuen Seite gilt nur sie - früher entstandene Doppelte verschwinden, ältere
+    Buchungen bleiben; in der ältesten Minute der Seite (evtl. abgeschnitten) bleibt die größere Anzahl."""
+    key = ("t", "amount", "note")
+    e = lambda t, a: {"t": t, "amount": a, "note": "Kaufen"}
+    old = [e("2026-10-11 14:10", -88), e("2026-10-11 14:10", -88), e("2026-10-11 14:10", -88),   # 1 Doppelter
+           e("2026-10-11 14:05", -88), e("2026-10-11 14:05", -88), e("2026-10-10 09:00", 100)]
+    new = [e("2026-10-11 14:12", -88), e("2026-10-11 14:10", -88), e("2026-10-11 14:10", -88), e("2026-10-11 14:05", -88)]
+    merged, ok = merge_newest_first(old, new, key)
+    assert ok and [(x["t"][-5:], x["amount"]) for x in merged] == [
+        ("14:12", -88), ("14:10", -88), ("14:10", -88), ("14:05", -88), ("14:05", -88), ("09:00", 100)]
