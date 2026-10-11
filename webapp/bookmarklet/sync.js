@@ -16,7 +16,8 @@
   try { M = JSON.parse(localStorage.getItem(LS) || '{}') } catch (e) {}
   // ab v19 merkt es sich die ID der neuesten Münzbuchung - ältere Merker (Text): einmal alles übertragen
   const FULL = GT_FULL || !M.at || Date.now() - M.at > 30 * 864e5 || !+M['buy-point-history'];
-  const NM = { at: FULL ? Date.now() : M.at }, T0 = Date.now();
+  const NM = { at: FULL ? Date.now() : M.at, d: FULL ? [] : M.d || [] }, T0 = Date.now();
+  let BAL = null;
   const text = d => d.body ? d.body.innerText : '';
   const box = D.createElement('div');
   box.style.cssText = 'position:fixed;z-index:9999999;inset:9px 9px auto;padding:12px;background:#1f3a6e;color:#fff;font:15px sans-serif;border-radius:9px';
@@ -38,7 +39,11 @@
           X.open = function (m, u) { this.__u = String(u); return open.apply(this, arguments) };
           X.send = function () {
             this.addEventListener('load', () => {
-              if (DATA.test(this.__u)) try { cap.push(JSON.parse(this.responseText)) } catch (e) {}
+              try {
+                if (DATA.test(this.__u)) cap.push(JSON.parse(this.responseText));
+                // Coin- und Ticket-Stand (nur diese Felder - die Antwort enthält auch den Namen)
+                else if (/\/api\/user\/point$/.test(this.__u)) { const j = JSON.parse(this.responseText); BAL = { coin: j.coin, ticket: j.ticket, rank: j.rank_name } }
+              } catch (e) {}
             });
             return send.apply(this, arguments);
           };
@@ -96,26 +101,27 @@
         if (cap.length == had) break;
         if (coins) say('Münzen: Seite ' + n + ' …');
       }
-      // Details der Käufe (welche Karten gezogen, umgewandelt, angefordert) - wie beim Antippen eines "Kaufen"-
-      // Eintrags auf der Seite; nur neue Käufe (komplett: die letzten 30 Tage), höchstens 400
+      // Details der Käufe (gezogene Karten mit Coin-Wert beim Ziehen, umgewandelt / angefordert, Banner-Name) - wie beim
+      // Antippen eines Eintrags auf der Seite. Münzen: neue Käufe (komplett: 30 Tage); Versendet/Angefordert: jede Karte
+      // einmal (gemerkt), höchstens 400 je Bereich
+      const since = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10).replace(/-/g, '/');
+      const want = [...new Set(coins
+        ? cap.flatMap(j => Array.isArray(j && j.list) ? j.list : [])
+          .filter(x => x && x.history_id > 0 && (FULL ? String(x.created) >= since : x.id > (+M[p] || 0))).map(x => x.history_id)
+        : i == 1 || i == 2 ? [...JSON.stringify(cap).matchAll(/"history_id":(\d+)/g)].map(m => +m[1]).filter(h => h && !NM.d.includes(h))
+          : [])].slice(0, 400);
       const det = [];
-      if (coins) {
-        const since = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10).replace(/-/g, '/');
-        const want = [...new Set(cap.flatMap(j => Array.isArray(j && j.list) ? j.list : [])
-          .filter(x => x && x.history_id > 0 && (FULL ? String(x.created) >= since : x.id > (+M[p] || 0)))
-          .map(x => x.history_id))].slice(0, 400);
-        let k = 0;
-        await Promise.all([1, 2, 3, 4].map(async () => {
-          while (k < want.length) {
-            const h = want[k++];
-            try {
-              const j = await (await fr.contentWindow.fetch('/api/user/history/detail/' + h, { credentials: 'include' })).json();
-              if (j && j.detail) det.push({ hid: h, ...j.detail });
-            } catch (e) {}
-            say('Käufe: ' + k + ' von ' + want.length + ' …');
-          }
-        }));
-      }
+      let k = 0;
+      await Promise.all([1, 2, 3, 4].map(async () => {
+        while (k < want.length) {
+          const h = want[k++];
+          try {
+            const j = await (await fr.contentWindow.fetch('/api/user/history/detail/' + h, { credentials: 'include' })).json();
+            if (j && j.detail) { det.push({ hid: h, ...j.detail }); if (!coins) NM.d.push(h) }
+          } catch (e) {}
+          say('Käufe: ' + k + ' von ' + want.length + ' …');
+        }
+      }));
       const t = text(d);
       out[i] = { path: p, json: cap, partial: known(), details: det,
         pages: [{ text: (member ? t.split('\n').filter(l => keep.test(l)).join('\n') : cap.length ? '' : t).slice(0, 40000) }] };
@@ -137,7 +143,7 @@
   f.action = GT_ORIGIN + '/api/import-form';
   inp.type = 'hidden';
   inp.name = 'd';
-  inp.value = JSON.stringify({ t: GT_TOKEN, v: GT_V, mid: MID, ms: Date.now() - T0, pages: out.filter(Boolean) });
+  inp.value = JSON.stringify({ t: GT_TOKEN, v: GT_V, mid: MID, bal: BAL, ms: Date.now() - T0, pages: out.filter(Boolean) });
   f.appendChild(inp);
   D.body.appendChild(f);
   f.submit();

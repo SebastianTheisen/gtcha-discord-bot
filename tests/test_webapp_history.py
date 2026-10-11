@@ -605,3 +605,16 @@ def test_shipped_card_without_pool_shows_site_value():
             "card_id": "999", "price": 45980}
     out = build_from_stored({"shipped": {"items": [card]}}, {}, {})
     assert out["shipped"][0]["value"] is None and out["shipped"][0]["site_value"] == 45980
+
+
+def test_shipped_card_gets_coin_value_from_purchase_detail():
+    """Versendete Karte mit history_id: Coin-Wert beim Ziehen aus den Kauf-Details (auch ohne Kartenliste)."""
+    from webapp.history import build_from_stored, cards_from_json, pulls_from_details
+    ship = {"list": {"2026/08/03_1": {"delivery_code": "1", "date": "2026/08/03", "cards": [
+        {"id": 77, "name": "Mega Chandelure ex", "num": 1, "history_id": 900, "stock_sale_price": 40000}]}}}
+    cards = cards_from_json([ship])
+    assert cards[0]["hid"] == 900
+    det = {"hid": 900, "created": "2026/08/01 10:00", "pack_name": "x", "reduction_point": 0,
+           "send_card": [{"card_id": 77, "name": "Mega Chandelure ex", "num": 1, "buy_point": 45980}]}
+    out = build_from_stored({"shipped": {"items": cards}, "pulls": {"items": pulls_from_details([det])}}, {}, {})
+    assert out["shipped"][0]["value"] == 45980 and out["shipped"][0]["site_value"] is None
