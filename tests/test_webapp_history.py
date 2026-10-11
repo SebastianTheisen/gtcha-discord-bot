@@ -541,3 +541,59 @@ def test_coins_from_site_json_keeps_same_minute_bookings():
     page0 = {"list": [{"id": 14, "bonusPoint": -88, "money": 0, "memo": "ガチャ", "created": "2026/10/12 02:00"}] + page1["list"]}
     again = ingest(stored, [{"path": "buy-point-history", "pages": [{"text": ""}], "json": [page0], "partial": True}])
     assert [c["id"] for c in again["coins"]["items"]] == [14, 13, 12, 11, 10] and not again["coins"]["gap"]
+
+
+DETAIL = {"hid": 1136902, "id": "1136902", "pack_name": "成田　全員", "created": "2026/10/12 05:10", "reduction_point": 50,
+          "cards": [], "send_card": [{"card_id": 1, "name": "Hit &amp; Co", "num": 1, "buy_point": 98780, "image": "/card/1.jpg"}],
+          "reduction_card": [{"card_id": 2, "name": "10 coin", "num": 5, "buy_point": 10, "rarity_label": "C"}],
+          "delivery_code": "", "status": "1"}
+
+
+def test_pulls_from_purchase_details():
+    from webapp.history import ingest, merge_pulls, pulls_from_details
+    pulls = pulls_from_details([DETAIL, DETAIL])
+    assert len(pulls) == 1 and pulls[0]["t"] == "2026-10-12 05:10" and pulls[0]["coins_back"] == 50
+    assert [(c["name"], c["state"], c["num"], c["value"]) for c in pulls[0]["cards"]] == [
+        ("Hit & Co", "angefordert", 1, 98780), ("10 coin", "umgewandelt", 5, 10)]
+    assert pulls[0]["cards"][0]["image"] == "https://gtchaxonline.com/card/1.jpg"
+    older = {**DETAIL, "hid": 5, "created": "2026/10/01 10:00"}
+    assert [p["hid"] for p in merge_pulls(pulls, pulls_from_details([older]))] == [1136902, 5]
+    changed = ingest({}, [{"path": "buy-point-history", "pages": [{"text": ""}], "json": [], "details": [DETAIL]}])
+    assert changed["pulls"]["items"][0]["hid"] == 1136902
+
+
+def test_my_pulls_per_banner(tmp_path):
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from database.db import Database
+    from scraper.models import ScrapedBanner
+    from utils.card_pool import summarize_cards
+    from webapp.history import pulls_from_details
+    from webapp.server import App, make_app
+
+    async def run():
+        db = Database(str(tmp_path / "gtcha_bot.db"))
+        await db.init()
+        await db.save_banner(ScrapedBanner(pack_id=24247, category="MIX", price_coins=10, current_packs=9, total_packs=10))
+        await db.save_card_pool(24247, summarize_cards([
+            {"id": 1, "name": "Hit", "buy_point": 98780, "duplication": 1, "action_type": 2},
+            {"id": 2, "name": "10 coin", "buy_point": 10, "duplication": 9, "action_type": 1}]))
+        app = App(str(tmp_path / "gtcha_bot.db"), str(tmp_path), "x")
+        await app.bridge.init()
+        token = (await app.bridge.redeem_code(await app.bridge.create_code(42, "Basti")))["token"]
+        await app.bridge.set_history("42", {"pulls": {"items": pulls_from_details([DETAIL]), "gap": False}})
+        web_app = make_app(app)
+        web_app.on_startup.clear()
+        web_app.on_cleanup.clear()
+        client = TestClient(TestServer(web_app))
+        await client.start_server()
+        try:
+            h = {"X-Device-Token": token}
+            data = await (await client.get("/api/me/pulls?banner=24247", headers=h)).json()
+            assert (data["purchases"], data["cards"], data["converted"], data["requested"], data["coins_back"]) == (1, 6, 5, 1, 50)
+            other = await (await client.get("/api/me/pulls?banner=1", headers=h)).json()
+            assert other["purchases"] == 0
+        finally:
+            await client.close()
+
+    asyncio.run(run())

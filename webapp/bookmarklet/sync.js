@@ -26,7 +26,7 @@
   const all = (d, s) => [...d.querySelectorAll(s)];
   const keep = /[¥￥円]|coin|münz|ausgaben|rang|rank|20\d{2}[\/.-]\d{1,2}[\/.-]\d{1,2}|^[\d.,]{1,9}$/i;
   // Verlaufs-Daten, die die Seite lädt (nicht Konto- oder Punkte-Abfragen mit Name/Adresse)
-  const DATA = /\/api\/user\/(history|point\/list|rewards\/history|purchase_list)\//;
+  const DATA = /\/api\/user\/(history\/(?!detail)|point\/list|rewards\/history|purchase_list)/;
   // mitlesen: sobald das Fenster der Seite existiert, ihre Abfragen beobachten (bevor die Seite lädt)
   const hook = async (fr, p, cap) => {
     for (let i = 0; i < 2000; i++) {
@@ -96,8 +96,28 @@
         if (cap.length == had) break;
         if (coins) say('Münzen: Seite ' + n + ' …');
       }
+      // Details der Käufe (welche Karten gezogen, umgewandelt, angefordert) - wie beim Antippen eines "Kaufen"-
+      // Eintrags auf der Seite; nur neue Käufe (komplett: die letzten 30 Tage), höchstens 400
+      const det = [];
+      if (coins) {
+        const since = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10).replace(/-/g, '/');
+        const want = [...new Set(cap.flatMap(j => Array.isArray(j && j.list) ? j.list : [])
+          .filter(x => x && x.history_id > 0 && (FULL ? String(x.created) >= since : x.id > (+M[p] || 0)))
+          .map(x => x.history_id))].slice(0, 400);
+        let k = 0;
+        await Promise.all([1, 2, 3, 4].map(async () => {
+          while (k < want.length) {
+            const h = want[k++];
+            try {
+              const j = await (await fr.contentWindow.fetch('/api/user/history/detail/' + h, { credentials: 'include' })).json();
+              if (j && j.detail) det.push({ hid: h, ...j.detail });
+            } catch (e) {}
+            say('Käufe: ' + k + ' von ' + want.length + ' …');
+          }
+        }));
+      }
       const t = text(d);
-      out[i] = { path: p, json: cap, partial: known(),
+      out[i] = { path: p, json: cap, partial: known(), details: det,
         pages: [{ text: (member ? t.split('\n').filter(l => keep.test(l)).join('\n') : cap.length ? '' : t).slice(0, 40000) }] };
     } finally { fr.remove(); say(++done + ' von ' + P.length + ' Bereichen geladen …') }
   };

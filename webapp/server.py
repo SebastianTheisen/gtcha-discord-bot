@@ -39,7 +39,7 @@ BETA_DIST = Path(__file__).parent / "beta" / "dist"   # neue Oberfläche (Vite-B
 ROLE = os.getenv("WEBAPP_ROLE", "live")
 STREAM_HEARTBEAT = 25
 REFRESH_SECONDS = 20
-BOOKMARKLET_VERSION = 19   # = SYNC_VERSION in app.js; ältere Lesezeichen bekommen einen Hinweis
+BOOKMARKLET_VERSION = 20   # = SYNC_VERSION in app.js; ältere Lesezeichen bekommen einen Hinweis
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
        "img-src 'self' data: https://gtchaxonline.com https://*.gtchaxonline.com; connect-src 'self'; "
        "manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; "
@@ -599,7 +599,8 @@ class App:
                 # ab v18 schickt das Lesezeichen (Platz sparen) keine eigene Bilderliste mehr: aus den Karten bilden
                 if isinstance(pg, dict) and not pg.get("images") and pg.get("cards"):
                     pg["images"] = [str(c.get("src")) for c in pg["cards"] if isinstance(c, dict) and c.get("src")][:400]
-            entries.append({"path": path, "pages": entry.get("pages") or [], "json": site_json,
+            details = [d for d in entry.get("details") or [] if isinstance(d, dict)][:1000]   # ab v20: Kauf-Details
+            entries.append({"path": path, "pages": entry.get("pages") or [], "json": site_json, "details": details,
                             "partial": bool(entry.get("partial"))})
             report.append((path, n, "nur Neues" if entry.get("partial") else "komplett"))
             saved += 1
@@ -683,7 +684,7 @@ class App:
                             f"(Quelle {data.get('accsrc') or ('api' if data.get('mid') else '–')}, Lesezeichen v{data.get('v')})")
             gap = any(a.get("gap") for a in changed.values())
             added = {a: len(changed[a]["items"]) - before[a] for a in before if a in changed and a != "pending"}
-            totals = {a: len(changed[a]["items"]) for a in ("coins", "shipped", "pending") if a in changed}
+            totals = {a: len(changed[a]["items"]) for a in ("coins", "shipped", "pending", "pulls") if a in changed}
         except Exception as e:
             logger.warning(f"Verlauf nicht übernommen: {type(e).__name__}: {e}")
         claims = 0
@@ -703,6 +704,10 @@ class App:
             lines.append(f"📦 Versendet: {totals['shipped']} Karten{change(added.get('shipped', 0))}.")
         if "pending" in totals:
             lines.append(f"⏳ Versand ausstehend: {totals['pending']} Karte(n).")
+        sent_details = sum(len(e.get("details") or []) for e in entries)
+        if sent_details or "pulls" in totals:
+            lines.append(f"🎰 Käufe mit Details: {sent_details} gelesen, {totals.get('pulls', 0)} gespeichert "
+                         f"(in der App je Banner unter „Meine Ziehungen“).")
         if int(data.get("v") or 0) < BOOKMARKLET_VERSION:
             lines.append("🔁 Dein Lesezeichen ist veraltet – in der App unter „Ich“ → „Eigene GTCHA-Daten“ neu "
                          "kopieren und das Lesezeichen in jedem Browser ersetzen.")
@@ -776,6 +781,51 @@ class App:
         if not user:
             raise web.HTTPUnauthorized(text="Gerät nicht mit Discord verknüpft")
         return web.json_response(profile(await self.history(user)))
+
+    async def _card_banners(self) -> Dict[str, list]:
+        """Karten-ID -> [(Banner, Start)] aus allen gespeicherten Kartenlisten (10 Minuten zwischengespeichert)."""
+        cached = getattr(self, "_card_map", None)
+        if cached and time.time() - cached[0] < 600:
+            return cached[1]
+        out: Dict[str, list] = {}
+        async with aiosqlite.connect(self.view.db.db_path) as conn:
+            cur = await conn.execute("SELECT pack_id, card_pool, COALESCE(starts_at, 0) FROM banners WHERE card_pool IS NOT NULL")
+            for pid, raw, start in await cur.fetchall():
+                try:
+                    for c in json.loads(raw).get("cards") or []:
+                        out.setdefault(str(c.get("id")), []).append((pid, start or 0))
+                except ValueError:
+                    continue
+        self._card_map = (time.time(), out)
+        return out
+
+    async def api_my_pulls(self, request):
+        """Meine Ziehungen bei einem Banner (aus den Kauf-Details von "Alles übertragen"): je Kauf die Karten."""
+        user = await self._user(request)
+        if not user:
+            raise web.HTTPUnauthorized(text="Gerät nicht mit Discord verknüpft")
+        try:
+            pid = int(request.query.get("banner", ""))
+        except ValueError:
+            raise web.HTTPBadRequest(text="banner fehlt")
+        stored = await self.bridge.get_history(user["user_id"])
+        pulls = (stored.get("pulls") or {}).get("items") or []
+        cmap = await self._card_banners()
+        mine = []
+        for p in pulls:
+            ids = [c["card_id"] for c in p.get("cards") or [] if c.get("card_id")]
+            # Banner = der, in dessen Kartenliste alle gezogenen Karten stehen (bei mehreren: der zuletzt gestartete)
+            sets = [{b for b, _ in cmap.get(i, [])} for i in ids]
+            common = set.intersection(*sets) if sets else set()
+            if pid in common:
+                mine.append(p)
+        cards = [c for p in mine for c in p.get("cards") or []]
+        count = lambda state: sum(c.get("num") or 1 for c in cards if c.get("state") == state)
+        return web.json_response({
+            "pulls": mine[:200], "purchases": len(mine), "cards": sum(c.get("num") or 1 for c in cards),
+            "converted": count("umgewandelt"), "requested": count("angefordert"), "open": count("offen"),
+            "coins_back": sum(p.get("coins_back") or 0 for p in mine),
+            "since": min((p["t"] for p in mine if p.get("t")), default=None), "stored": len(pulls)})
 
     async def api_my_history(self, request):
         """Eigener Verlauf aus allen "Alles übertragen"-Läufen (nur für die verknüpfte Person)."""
@@ -1196,6 +1246,7 @@ def make_app(app: App) -> web.Application:
         web.post("/api/me/link_code", app.api_link_code),
         web.get("/api/me/medals", app.api_my_medals),
         web.get("/api/me/history", app.api_my_history),
+        web.get("/api/me/pulls", app.api_my_pulls),
         web.get("/api/me/profile", app.api_my_profile),
         web.post("/api/unlink", app.api_unlink),
         web.get("/api/me/devices", app.api_my_devices),
