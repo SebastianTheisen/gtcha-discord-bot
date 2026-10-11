@@ -316,6 +316,14 @@ def test_failed_area_keeps_stored_history(tmp_path):
         assert "Nicht geladen: Münzen" in text and "kein Zugriff" in text
         stored = await app.bridge.get_history("42")
         assert len(stored["coins"]["items"]) == 6 and len(stored["pending"]["items"]) == 3
+        # neues Layout: Kartenbilder auf der Seite, aber keine Karte erkannt -> gespeicherte Karten bleiben
+        res = await post([{"path": "pending-detail", "pages": [{"text": HEAD + "Neues Layout\n" + FOOT,
+                                                               "images": [IMG.format(1)]}]}])
+        assert "keine Karten erkannt" in await res.text()
+        assert len((await app.bridge.get_history("42"))["pending"]["items"]) == 3
+        # wirklich leer (keine Kartenbilder): darf leer werden (alles verschickt)
+        await post([{"path": "pending-detail", "pages": [{"text": HEAD + "Keine Daten\n" + FOOT}]}])
+        assert (await app.bridge.get_history("42")).get("pending", {}).get("items") in ([], None)
         await client.close()
 
     asyncio.run(run())

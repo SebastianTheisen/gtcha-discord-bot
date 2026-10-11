@@ -551,6 +551,12 @@ class App:
                     if before.get(area):
                         warnings.append(f"⚠️ {label}: auf der Seite keine Karten erkannt (vorher {before[area]}). "
                                         f"Falls dort Karten stehen, bitte dem Admin Bescheid geben.")
+                    # Kartenbilder auf der Seite, aber nichts erkannt: Erkennung passt nicht (z. B. neues Layout) -
+                    # dann den gespeicherten Stand behalten statt ihn durch eine leere Liste zu ersetzen
+                    if before.get(area) and any(e.get("images") for e in entry["pages"]):
+                        del changed[area]
+                        logger.warning(f"Sync von {user['name']}: {path} nicht erkannt - gespeicherte "
+                                       f"{before[area]} Karten bleiben")
             await self.bridge.set_history(user["user_id"], changed, acc)
             if saved:   # zählt für die 7-Tage-Pflicht, je GTCHA-Konto
                 await self.bridge.mark_synced(user["user_id"], acc)

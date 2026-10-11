@@ -629,6 +629,15 @@ class Database:
             await db.commit()
             return changed > 0
 
+    async def clear_title_if(self, pack_id: int, title: Optional[str]) -> bool:
+        """Titel entfernen, wenn er genau dieser Text ist (interner Name aus pack/list, versehentlich übernommen)."""
+        if not title:
+            return False
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("UPDATE banners SET title = NULL WHERE pack_id = ? AND title = ?", (pack_id, title))
+            await db.commit()
+            return cur.rowcount > 0
+
     async def set_hit_list_sig(self, thread_id: int, sig: str) -> None:
         async with aiosqlite.connect(self.db_path) as db:
             for table in THREAD_TABLES:

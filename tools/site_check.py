@@ -210,10 +210,10 @@ async def check_tabs(items):
     for field, label in (("title", "Titel"), ("image_url", "Bild"), ("sale_end_date", "Enddatum"),
                          ("price_coins", "Preis")):
         missing = [b.pack_id for b in banners if not getattr(b, field)]
-        report(f"Kacheln: {label} (nur Hinweis, kommt aus pack/list)", "✅" if not missing else "ℹ️",
+        report(f"Kacheln: {label} (nur Hinweis; Bild/Preis/Ende kommen aus pack/list)", "✅" if not missing else "ℹ️",
                f"bei {len(banners) - len(missing)} von {len(banners)}")
     titles = sum(1 for it in items.values() if str(it.get("name") or "").strip())
-    report("Titel aus pack/list", "✅" if titles == len(items) else "⚠️", f"bei {titles} von {len(items)} "
+    report("Interner Name in pack/list (kein Titel)", "ℹ️", f"bei {titles} von {len(items)} "
            f"(z. B. {next((it.get('name') for it in items.values() if it.get('name')), '–')!r})")
 
 
