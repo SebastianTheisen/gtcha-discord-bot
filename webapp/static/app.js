@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 122;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 123;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -713,7 +713,7 @@ async function showBanner(id) {
         <div class="hint pane-hint">${b.share_above_price != null ? `${pct(b.share_above_price)} ≥ Packpreis (<b>gold</b>) · ` : ""}${b.archived ? "beendet" : "Antippen = melden"}</div>
         <div id="cards"></div>`
         : hits.length ? `<h2>🏆 Hits <small>${open} von ${hits.length} noch drin</small></h2>
-        <div class="hits">${hits.map(hitCard).join("")}</div>` : `<div class="empty">Kartenliste noch nicht geladen</div>`}
+        <div class="hits">${hits.map(hitCard).join("")}</div>` : `<div class="empty">${b.cards_hidden ? "🙈 GTCHA hält die Kartenliste dieses Banners geheim" : "Kartenliste noch nicht geladen"}</div>`}
     </section>
 
     <section class="pane" data-pane="history" ${tab === "history" ? "" : "hidden"}>

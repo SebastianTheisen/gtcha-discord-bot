@@ -210,6 +210,10 @@ class ScrapingMixin:
                         logger.warning(f"[POOL] Kartenpools nicht geladen: {e}")
                         pools = {}
                     for pid, pool in pools.items():
+                        if not pool.get('total_count'):
+                            item = (getattr(scraper, '_api_pack_data', {}) or {}).get(pid) or {}
+                            logger.info(f"[POOL] {pid}: leer - card_hide_flag={item.get('card_hide_flag')!r}, "
+                                        f"show_list_count={item.get('show_list_count')!r}")
                         old_pool = await self.db.get_card_pool(pid)
                         pool, _ = translate_pool(pool)   # deutsche Namen (was schon übersetzt ist)
                         await self.db.save_card_pool(pid, pool)

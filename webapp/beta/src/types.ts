@@ -12,7 +12,8 @@ export interface Banner {
   total: number;
   per_day?: number | null;
   image?: string;
-  cover?: string[];   // Top-Karten, wenn der Banner kein eigenes Bild hat
+  cover?: string[];
+  cards_hidden?: boolean;   // GTCHA zeigt die Kartenliste nicht (card_hide_flag)   // Top-Karten, wenn der Banner kein eigenes Bild hat
   buy_url?: string;
   end?: string | null;
   end_ts?: number | null;
