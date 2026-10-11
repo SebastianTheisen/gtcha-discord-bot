@@ -359,7 +359,7 @@ function Timeline({ events }: { events: TimelineEvent[] }) {
         const shipped = d.items.filter((e) => e.kind === "out").reduce((n, e) => n + (e.ship_value || 0), 0);
         return (
           <details open={i === 0}>
-            <summary><span>{d.day}</span><span class="muted small">−{num(sold)} Packs{shipped ? ` · ${compact(shipped)} verschickt` : ""}</span></summary>
+            <summary><span>{d.day}</span><span class="muted small">−{num(sold)} Packs{shipped ? ` · ${compact(shipped)} Coins verschickt` : ""}</span></summary>
             {d.items.map((e) => e.kind === "pack"
               ? <div class="tl-row"><span class="muted tnum">{e.t ? hhmm(e.t) : "–"}</span><span>📉 {num(e.old)} → {num(e.new)} <b>(−{num((e.old || 0) - (e.new || 0))})</b></span></div>
               : (
