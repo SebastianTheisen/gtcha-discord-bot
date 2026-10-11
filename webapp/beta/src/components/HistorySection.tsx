@@ -19,7 +19,8 @@ function CardLine({ c }: { c: any }) {
       <span class="claim-thumb"><Img url={c.image} w={320} alt="" /></span>
       <span><b>{c.name}</b>{c.rarity ? <span class="muted"> {c.rarity}</span> : null}<br />
         <span class="muted small">{c.number || ""}{c.date ? ` · ${dmy(c.date)}` : ""}</span>
-        {c.value ? <><br /><span class="small" style={{ color: "var(--accent)", fontWeight: 700 }}>{num(c.value)} Coins</span></> : null}</span>
+        {c.value || c.site_value ? <><br /><span class="small" style={{ color: "var(--accent)", fontWeight: 700 }}>{num(c.value || c.site_value)} Coins</span>
+          {c.value ? null : <span class="muted small"> laut Seite</span>}</> : null}</span>
     </div>
   );
 }

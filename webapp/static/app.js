@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 128;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 129;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -1408,7 +1408,8 @@ function cardLine(c) {
   return `<div class="line claim-row"><span class="claim-thumb">${img(c.image, c.name, false, 320)}</span>
     <span class="claim-text"><b>${esc(c.name)}</b>${c.rarity ? ` <span class="muted">${esc(c.rarity)}</span>` : ""}<br>
     <span class="muted">${esc(c.number || "")}${c.date ? " · " + esc(c.date.split("-").reverse().join(".")) : ""}</span>
-    ${c.value ? `<br><span class="claim-value">${num(c.value)} Coins</span>` : ""}</span></div>`;
+    ${c.value ? `<br><span class="claim-value">${num(c.value)} Coins</span>`
+      : c.site_value ? `<br><span class="claim-value">${num(c.site_value)} Coins</span> <span class="muted">laut Seite</span>` : ""}</span></div>`;
 }
 
 // Bilanz je Tag (Balken grün/rot) und aufsummiert (Linie), die letzten 30 Tage mit Daten
