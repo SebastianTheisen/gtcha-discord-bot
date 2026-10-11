@@ -53,7 +53,9 @@ def near(values, target, factor):
     return [v for v in values if abs(v - target * factor) <= max(2, v * 0.01)]
 
 
-verdicts, factors = Counter(), Counter()
+verdicts, factors, cross = Counter(), Counter(), Counter()
+all_cards = [(pid, int(c.get("value") or 0)) for pid, r in banners.items() if r["card_pool"]
+             for c in (json.loads(r["card_pool"]).get("cards") or []) if c.get("value")]
 print(f"Versand-Schübe der letzten {days} Tage: {len(batches)} (aus {len(rows)} Zähler-Änderungen)\n")
 for b in batches:
     row = banners.get(b["pid"])
@@ -86,6 +88,18 @@ for b in batches:
             alt = [(f, near(values, b["coins"], f)) for f in (1.08, 1.0) if near(values, b["coins"], f)]
             verdict = "❓"
             note = "kein Kartenwert passt" + (f" (aber bei ×{alt[0][0]}: {fmt_coins(alt[0][1][0])})" if alt else "")
+            # Spurensuche: nächstliegende Karten, frühere Werte (Preisänderung), Karten anderer Banner mit dem Wert
+            close = sorted(values, key=lambda v: abs(v - gross))[:2]
+            note += "\n     nächste Karten: " + ", ".join(f"{fmt_coins(v)} ({v / gross - 1:+.1%})" for v in close)
+            old = [r for r in db.execute("SELECT name, old_value, new_value, changed_at FROM card_value_history "
+                                         "WHERE banner_id = ?", (b["pid"],)) if near([r["old_value"]], b["coins"], 1.1)]
+            if old:
+                note += "\n     früherer Wert passt: " + ", ".join(
+                    f"{r['name'][:40]} ({fmt_coins(r['old_value'])} -> {fmt_coins(r['new_value'])} am {r['changed_at'][:10]})" for r in old[:3])
+            others = sorted({pid for pid, c in all_cards if near([c], b["coins"], 1.1) and pid != b["pid"]})
+            if others:
+                note += f"\n     Karte mit diesem Wert in anderen Bannern: {', '.join(map(str, others[:8]))}"
+                cross[b["pid"]] += 1
     else:
         res = explain_batch(pool, b["cards"], b["coins"], set(), price=row["price_coins"])
         ok = res["kind"] in ("hits", "normal", "maybe")
@@ -100,6 +114,8 @@ for b in batches:
 total = sum(verdicts.values())
 print(f"\nERGEBNIS: {total} Schübe · ✅ {verdicts['✅']} passen · ⏳ {verdicts['⏳']} Teilschritte · "
       f"❓ {verdicts['❓']} unklar · ❌ {verdicts['❌']} unmöglich")
+if cross:
+    print(f"Einzelkarten ohne Treffer im eigenen Banner, aber mit gleichem Wert in einem anderen: {sum(cross.values())}")
 if factors:
     print("Einzelkarten passen zu ×1,1: {} · ×1,08: {} · ×1,0: {}  (der Bot rechnet mit ×1,1)".format(
         factors[1.1], factors[1.08], factors[1.0]))
