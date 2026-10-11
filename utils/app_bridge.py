@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS auto_claims (
     discord_user_id TEXT, card_key TEXT, pack_id INTEGER, tier TEXT, request_id INTEGER, created_at TEXT,
     PRIMARY KEY (discord_user_id, card_key));
 """
-MAX_IMPORT_BYTES = 8_000_000
+MAX_IMPORT_BYTES = 40_000_000   # "Komplett" mit hunderten Münzseiten
 # Was Discord zu sehen bekommt (App und VPS haben immer alles):
 #   discord_mode  "slim" = abgespeckt, "full" = alles wie früher
 #   discord_delay Minuten, um die automatisch erkannte Hits und in der App gemeldete Medaillen in Discord später erscheinen
