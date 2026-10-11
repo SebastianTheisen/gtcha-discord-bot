@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 115;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 116;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -1348,7 +1348,7 @@ const SYNC_PAGES = ["undecided-detail", "pending-detail", "shipped-detail", "dow
 // Nur Neues: Das Lesezeichen merkt sich (im Speicher von gtchaxonline.com auf diesem Gerät) den neuesten
 // Eintrag je Verlaufsbereich und hört auf zu blättern, sobald eine Seite ihn enthält. Der VPS hängt dann
 // nur das Neue an. Alle 30 Tage (oder mit "komplett") wird wieder alles übertragen.
-const SYNC_VERSION = 13;    // mit BOOKMARKLET_VERSION in webapp/server.py erhöhen, wenn sich das Lesezeichen ändert
+const SYNC_VERSION = 14;    // mit BOOKMARKLET_VERSION in webapp/server.py erhöhen, wenn sich das Lesezeichen ändert
 const SYNC_PARALLEL = 4;   // Bereiche gleichzeitig (je ein unsichtbares Fenster)
 const SYNC_INCREMENTAL = ["buy-point-history", "shipped-detail", "ticket-history", "purchase-history", "downloaded-detail"];
 function bookmarkletSync(token, full = false) {
@@ -1376,7 +1376,7 @@ const mark=!FULL&&INC.includes(p)&&M[p];const seen=()=>!!mark&&lines(d.body.inne
 const known=g=>mark&&lines(g.text).join('\\n').includes(mark);
 if(INC.includes(p))NM[p]=sig(pages[0].text)||M[p]||'';
 if(known(pages[0]))partial=true;
-for(let n=2;n<=60&&!partial;n++){
+for(let n=2;n<=(FULL?250:60)&&!partial;n++){
 const btn=[...d.querySelectorAll('a,button,li,span,div')].find(e=>isNum(e)&&e.textContent.trim()===String(n)&&[...((e.parentElement&&e.parentElement.parentElement)||e).querySelectorAll('*')].filter(isNum).length>=3);
 if(!btn)break;const before=d.body.innerText;btn.click();
 let g=null;for(let w=0;w<30;w++){await sleep(500);if(d.body.innerText!==before){await settle(fr,CP.includes(p));g=grab(d);break}}

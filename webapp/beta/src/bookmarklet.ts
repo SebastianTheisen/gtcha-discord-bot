@@ -2,7 +2,7 @@
 // dasselbe Lesezeichen erzeugen. Es läuft auf gtchaxonline.com und schickt an <Ursprung>/api/import-form.
 const SYNC_PAGES = ["undecided-detail", "pending-detail", "shipped-detail", "downloaded-detail",
                     "buy-point-history", "purchase-history", "ticket-history", "change-member"];
-export const SYNC_VERSION = 13;    // mit BOOKMARKLET_VERSION in webapp/server.py und app.js der Live-App erhöhen
+export const SYNC_VERSION = 14;    // mit BOOKMARKLET_VERSION in webapp/server.py und app.js der Live-App erhöhen
 const SYNC_PARALLEL = 4;
 const SYNC_INCREMENTAL = ["buy-point-history", "shipped-detail", "ticket-history", "purchase-history", "downloaded-detail"];
 export function bookmarkletSync(token: string, full = false): string {
@@ -30,7 +30,7 @@ const mark=!FULL&&INC.includes(p)&&M[p];const seen=()=>!!mark&&lines(d.body.inne
 const known=g=>mark&&lines(g.text).join('\\n').includes(mark);
 if(INC.includes(p))NM[p]=sig(pages[0].text)||M[p]||'';
 if(known(pages[0]))partial=true;
-for(let n=2;n<=60&&!partial;n++){
+for(let n=2;n<=(FULL?250:60)&&!partial;n++){
 const btn=[...d.querySelectorAll('a,button,li,span,div')].find(e=>isNum(e)&&e.textContent.trim()===String(n)&&[...((e.parentElement&&e.parentElement.parentElement)||e).querySelectorAll('*')].filter(isNum).length>=3);
 if(!btn)break;const before=d.body.innerText;btn.click();
 let g=null;for(let w=0;w<30;w++){await sleep(500);if(d.body.innerText!==before){await settle(fr,CP.includes(p));g=grab(d);break}}
