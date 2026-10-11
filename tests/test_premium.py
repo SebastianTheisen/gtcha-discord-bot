@@ -246,3 +246,18 @@ def test_new_category_without_forum_still_gets_card_pool(tmp_path, env):
         assert await db.rename_category("Yu-Gi-Oh!", "Yu-Gi-Oh") == 1
 
     asyncio.run(run())
+
+
+def test_shipment_marks_card_pool_for_reload(tmp_path, env):
+    """Versand gezählt: Kartenliste des Banners wird beim nächsten Scrape zuerst neu geladen (frische Werte)."""
+    async def run():
+        db, _ = await setup(tmp_path)
+        await db.save_card_pool(7, {"version": 2, "cards": [{"id": 1, "value": 330}], "total_count": 1})
+        assert await db.get_banners_without_pool(10, []) == []                 # frisch geladen
+        await db.update_site_stats(7, {"cards": 0, "coins": 0, "players": 0})
+        await db.update_site_stats(7, {"cards": 1, "coins": 300, "players": 1})
+        assert db.__dict__.get("shipped_pids") == {7}
+        await db.mark_pool_stale(7)
+        assert await db.get_banners_without_pool(10, [7]) == [7]
+
+    asyncio.run(run())

@@ -353,6 +353,12 @@ class Database:
         rows.sort(key=lambda r: (r[0] not in preferred, not r[1], r[2]))
         return [r[0] for r in rows[:limit]]
 
+    async def mark_pool_stale(self, pack_id: int) -> None:
+        """Kartenliste beim nächsten Scrape neu laden (z. B. nach einem Versand)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE banners SET pool_updated_at = NULL WHERE pack_id = ?", (pack_id,))
+            await db.commit()
+
     async def rename_category(self, old: str, new: str) -> int:
         """Banner einer Kategorie umbenennen (neue Kategorie der Seite, deren Name erst später bekannt war)."""
         async with aiosqlite.connect(self.db_path) as db:
@@ -539,6 +545,8 @@ class Database:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """, (pack_id, old.get("cards"), stats.get("cards"), old.get("coins"), stats.get("coins"),
                       old.get("players"), stats.get("players"), datetime.now().isoformat()))
+                # Versand gezählt: Kartenliste vor der Auswertung neu laden (Werte können sich geändert haben)
+                self.__dict__.setdefault("shipped_pids", set()).add(pack_id)
                 counted = (stats.get('coins') or 0) - (old.get('coins') or 0)
                 logger.info(f"[VERSAND] {pack_id}: {old.get('cards')} -> {stats.get('cards')} Karten "
                             f"(+{fmt_coins(card_value(counted))} Coins Kartenwert, gezählt {fmt_coins(counted)}, "
