@@ -25,3 +25,15 @@ for bid, oc, nc, ocoins, ncoins, op, np_, at in rows:
     when = berlin_time(int(datetime.fromisoformat(at).timestamp()))
     coins = fmt_coins(card_value((ncoins or 0) - (ocoins or 0)))
     print(f"{when:%d.%m. %H:%M:%S}  Banner {bid}: {oc} -> {nc} Karten (+{coins} Coins Kartenwert), Spieler {op} -> {np_}")
+
+if args:
+    # Passt der gezählte Wert überhaupt zu einer Karte? (kleinster Kartenwert im Banner)
+    import json
+    row = db.execute("SELECT card_pool, site_stats, title, price_coins FROM banners WHERE pack_id = ?",
+                     (int(args[0]),)).fetchone()
+    if row:
+        pool = json.loads(row[0]) if row[0] else {}
+        values = sorted({c.get("value") for c in pool.get("cards") or [] if c.get("value")})
+        print(f"\nBanner {args[0]} ({row[2] or '–'}, {row[3]} Coins): Kartenwerte {values[:6]} … {values[-3:]}"
+              f" ({len(pool.get('cards') or [])} Karten)")
+        print(f"Versand laut Seite jetzt: {row[1]}")
