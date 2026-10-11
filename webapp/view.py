@@ -244,6 +244,7 @@ class BannerView:
             "conditions": format_conditions(row.get('conditions')),
             "rank": min_rank(row.get('conditions')), "password": needs_password(row.get('conditions')),
             **self._rank_info(row.get('conditions')),
+            "cards_hidden": bool(json.loads(row.get('conditions') or "{}").get("cards_hidden")) and not pool,
             "shipped": format_shipping(row.get('site_stats')),
             **self._shipping(row.get('site_stats')),
             **self._out_of_banner(row, pool, held, shipped_keys),

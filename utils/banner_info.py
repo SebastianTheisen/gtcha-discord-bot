@@ -40,6 +40,7 @@ def banner_conditions(item: dict) -> dict:
         "ranks": badges if isinstance(badges, list) else [],
         "min_charge": to_int(item.get("min_charge_amount")),
         "password": bool(item.get("password_flag")),
+        "cards_hidden": str(item.get("card_hide_flag") or "0") not in ("0", "", "None"),   # Kartenliste versteckt
     }
 
 

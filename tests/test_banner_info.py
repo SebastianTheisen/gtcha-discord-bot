@@ -105,3 +105,10 @@ def test_sale_end_formats_from_the_site():
     assert sale_end_timestamp("2026/10/31 23:59 まで販売") == expected
     assert sale_end_timestamp("2026/10/31") == expected                                # ohne Uhrzeit: 23:59
     assert sale_end_timestamp("bald") is None and sale_end_timestamp(None) is None
+
+
+def test_hidden_card_list_flag():
+    from utils.banner_info import banner_conditions
+    assert banner_conditions({"card_hide_flag": "1"})["cards_hidden"] is True
+    assert banner_conditions({"card_hide_flag": "0"})["cards_hidden"] is False
+    assert banner_conditions({})["cards_hidden"] is False

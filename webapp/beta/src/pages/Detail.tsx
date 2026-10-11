@@ -265,7 +265,7 @@ function Cards({ b, open }: { b: BannerDetail; open: (c: Card) => void }) {
       : filter === "hits" ? c.hit : true), [b.cards, filter, b.price]);
   const total = (b.cards || []).reduce((n, c) => n + c.copies, 0);
   const meId = me.value?.user_id;
-  if (!b.cards?.length) return <div class="empty">Kartenliste noch nicht geladen</div>;
+  if (!b.cards?.length) return <div class="empty">{b.cards_hidden ? "🙈 GTCHA hält die Kartenliste dieses Banners geheim" : "Kartenliste noch nicht geladen"}</div>;
   return (
     <div>
       <p class="muted small" style={{ margin: "10px 2px 6px" }}>
