@@ -113,16 +113,35 @@ class AppLinkMixin:
             await self._post_app_medal(pack_id, emoji, add=False, silent=True,
                                        text=f"↩️ {tier} von <@{user_id}> zurückgenommen")
             logger.info(f"App-Medaille zurückgenommen: {tier} von {req['discord_name']} bei {pack_id}")
-        else:
+        else:   # claim (von Hand in der App), auto_claim (geschlossen), pull_claim (Kauf-Details, sicher)
             problem = await self._invalid_medal_reason(pack_id, tier)
             if problem:
                 return False, problem.replace("❌ ", "")
+            sure = req["action"] == "pull_claim"
+            source = {"auto_claim": "auto", "pull_claim": "pull"}.get(req["action"], "app")
+            text = f"{emoji} {tier} geht an <@{user_id}>!" + (" *(laut Kauf-Details)*" if sure else "")
             if existing:
-                return False, f"{tier} ist schon vergeben"
-            await self.db.save_medal(thread_id, tier, user_id, source="app")
-            await self._post_app_medal(pack_id, emoji, add=True, silent=False,
-                                       text=f"{emoji} {tier} geht an <@{user_id}>!")
-            logger.info(f"App-Medaille: {tier} an {req['discord_name']} bei {pack_id}")
+                old = int(existing.get("user_id") or 0)
+                if not sure:
+                    return False, f"{tier} ist schon vergeben"
+                if old == user_id:   # eigene Medaille: jetzt bestätigt
+                    if existing.get("source") != "pull":
+                        await self.db.delete_medal(thread_id, tier)
+                        await self.db.save_medal(thread_id, tier, user_id, source="pull")
+                    return True, None
+                # nur automatisch gesetzte oder ohne Person abgehakte Medaillen werden ersetzt
+                replaceable = (not old or existing.get("source") in ("auto", "admin")
+                               or await self.app_bridge.is_auto_claim(pack_id, tier, old))
+                if not replaceable:
+                    logger.warning(f"Kauf-Details: {tier} bei {pack_id} gezogen von {req['discord_name']}, "
+                                   f"aber von <{old}> gemeldet - nicht ersetzt")
+                    return False, f"{tier} hat schon jemand anderes gemeldet – laut Kauf-Details von {req['discord_name']}"
+                await self.db.delete_medal(thread_id, tier)
+                text = (f"🔁 {tier} geht an <@{user_id}> statt <@{old}> *(laut Kauf-Details)*" if old
+                        else f"🔁 {tier} (abgehakt) geht an <@{user_id}> *(laut Kauf-Details)*")
+            await self.db.save_medal(thread_id, tier, user_id, source=source)
+            await self._post_app_medal(pack_id, emoji, add=not existing, silent=bool(existing), text=text)
+            logger.info(f"App-Medaille ({req['action']}): {tier} an {req['discord_name']} bei {pack_id}")
 
         await self._update_probability_message(thread_id, pack_id)
         await self._refresh_pool_views(pack_id)
@@ -143,11 +162,12 @@ class AppLinkMixin:
             problem = await self._invalid_medal_reason(pack_id, tier)
             if problem:
                 return False, problem.replace("❌ ", "")
-            if existing and action in ("claim", "admin_mark"):
+            if existing and action in ("claim", "auto_claim", "pull_claim", "admin_mark"):
                 return False, f"{tier} ist schon vergeben"
             if existing:
                 await self.db.delete_medal(medal_thread, tier)
-            await self.db.save_medal(medal_thread, tier, user_id, source="admin" if action == "admin_mark" else "app")
+            await self.db.save_medal(medal_thread, tier, user_id, source={"admin_mark": "admin", "auto_claim": "auto",
+                                                                          "pull_claim": "pull"}.get(action, "app"))
         logger.info(f"Store-Medaille: {action} {tier} bei {pack_id} ({req.get('discord_name')})")
         return True, None
 

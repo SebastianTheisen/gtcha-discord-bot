@@ -152,7 +152,7 @@ def test_bridge_latest_sync_and_auto_claims(tmp_path):
         assert await bridge.auto_claim_keys("42") == {"10@2026-09-28#0"}
         claims = await bridge.auto_claims("42")
         assert claims[0]["status"] == "pending" and claims[0]["tier"] == "T2"
-        assert [r["action"] for r in await bridge.pending()] == ["claim"]
+        assert [r["action"] for r in await bridge.pending()] == ["auto_claim"]
 
     asyncio.run(run())
 
@@ -626,3 +626,20 @@ def test_old_card_with_site_value_counts_in_balance():
     summary = {"since": "2026-01-01", "banners": [], "total": {"balance": -1000}}
     add_hits(summary, [{"date": "2026-05-01", "card_id": "9", "price": 45980}], {})
     assert summary["total"]["hits_value"] == 45980 and summary["total"]["balance_with_hits"] == 44980
+
+
+def test_plan_pull_claims_from_purchase_details():
+    """Kauf-Details: gezogene meldbare Karte -> Medaille; fremde Medaille -> geplant als Ersatz (Bot entscheidet);
+    eigene -> nur bestätigen; Banner über die Karten-IDs, bei mehreren der beim Kauf zuletzt gestartete."""
+    from webapp.history import plan_pull_claims, pull_banner
+    units = [{"key": "1", "tier": "T1"}, {"key": "2", "tier": "T2"}]
+    pull = {"hid": 7, "t": "2026-10-12 05:10", "cards": [{"card_id": "1", "num": 1}, {"card_id": "9", "num": 3}]}
+    cmap = {"1": [(100, 1000), (200, 1_900_000_000)], "9": [(100, 1000), (200, 1_900_000_000)]}
+    assert pull_banner(pull, cmap) == 100          # 200 startete erst nach dem Kauf
+    free = plan_pull_claims([pull], cmap, {100: {"units": units, "medals": {}}}, "42", set())
+    assert [(p["tier"], p["replace"], p["confirm"]) for p in free] == [("T1", False, False)]
+    taken = plan_pull_claims([pull], cmap, {100: {"units": units, "medals": {"T1": 7}}}, "42", set())
+    assert [(p["tier"], p["replace"]) for p in taken] == [("T1", True)]
+    mine = plan_pull_claims([pull], cmap, {100: {"units": units, "medals": {"T1": "42"}}}, "42", set())
+    assert mine[0]["confirm"] and not plan_pull_claims([pull], cmap, {100: {"units": units, "medals": {}}}, "42",
+                                                       {"pull:7:1:0"})

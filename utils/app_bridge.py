@@ -404,14 +404,22 @@ class AppBridge:
             cur = await db.execute("SELECT card_key FROM auto_claims WHERE discord_user_id = ?", (str(user_id),))
             return {r[0] for r in await cur.fetchall()}
 
-    async def add_auto_claim(self, user: Dict, card_key: str, pack_id: int, tier: str) -> int:
-        request_id = await self.add_request(pack_id, tier, user, "claim")
+    async def add_auto_claim(self, user: Dict, card_key: str, pack_id: int, tier: str, action: str = "auto_claim") -> int:
+        """action: "auto_claim" (aus angeforderten Karten geschlossen) oder "pull_claim" (Kauf-Details, sicher)."""
+        request_id = await self.add_request(pack_id, tier, user, action)
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("INSERT OR IGNORE INTO auto_claims (discord_user_id, card_key, pack_id, tier, request_id, "
                              "created_at) VALUES (?, ?, ?, ?, ?, ?)",
                              (user["user_id"], card_key, pack_id, tier, request_id, _now()))
             await db.commit()
         return request_id
+
+    async def is_auto_claim(self, pack_id: int, tier: str, user_id) -> bool:
+        """Wurde diese Medaille automatisch (aus angeforderten Karten geschlossen) gemeldet?"""
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT 1 FROM auto_claims WHERE pack_id = ? AND tier = ? AND discord_user_id = ? "
+                                   "AND card_key NOT LIKE 'pull:%'", (pack_id, tier, str(user_id)))
+            return await cur.fetchone() is not None
 
     async def auto_claims_for(self, pack_id: int) -> Dict[str, Dict]:
         """Per Lesezeichen gemeldete Medaillen eines Banners: Stufe -> {user_id, pulled_on (Anfragedatum)}."""

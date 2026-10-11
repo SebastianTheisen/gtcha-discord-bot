@@ -26,7 +26,7 @@ from database.db import Database
 from utils.app_bridge import MAX_DELAY_MINUTES, MAX_IMPORT_BYTES, AppBridge
 from utils.banner_info import berlin_time, berlin_to_ts
 from webapp.accuracy import AccuracyStore
-from webapp.history import (JST_OFFSET, coins_total, build_from_stored, ingest, local_time, plan_claims, profile, stored_events,
+from webapp.history import (JST_OFFSET, coins_total, plan_pull_claims, build_from_stored, ingest, local_time, plan_claims, profile, stored_events,
                             summarize, attribute_opens, opens_by_banner, CLAIM_OPEN_DAYS)
 from webapp.images import ImageCache, content_type
 from webapp.push import DEFAULTS, EVENTS, WATCH_EVENTS, PushService, build_events
@@ -738,24 +738,43 @@ class App:
     async def auto_claim(self, user: Dict) -> list:
         """Angeforderte Karten (noch nicht verschickt) automatisch als Medaille melden, wenn eindeutig."""
         stored = await self.history(user)
+        planned = await self._pull_claims(user, stored)
         cards = (stored.get("pending") or {}).get("items") or []
         if not cards:
-            return []
+            return planned
         # eigene Öffnungen je Banner (aus dem Münzverlauf) - ohne Verlauf wird nichts automatisch gemeldet
         events = stored_events(stored)
         if not events:
-            return []
+            return planned
         first = min(c.get("date") or "9999" for c in cards)
         since = datetime.strptime(first[:10], "%Y-%m-%d") - timedelta(days=CLAIM_OPEN_DAYS + 1) \
             if first != "9999" else datetime.now() - timedelta(days=60)
         banners, moves = await self.view.history_context(since)
         attribute_opens(events, banners, moves)
-        planned = plan_claims(cards, banners, await self.view.claim_targets(), user["user_id"],
-                              await self.bridge.auto_claim_keys(user["user_id"]), opens_by_banner(events))
+        targets = await self.view.claim_targets()
+        # Plätze, die die Kauf-Details gerade sicher vergeben haben, nicht nochmal geschätzt melden
         for p in planned:
+            targets.get(p["pack_id"], {}).get("medals", {}).setdefault(p["tier"], user["user_id"])
+        guessed = plan_claims(cards, banners, targets, user["user_id"],
+                              await self.bridge.auto_claim_keys(user["user_id"]), opens_by_banner(events))
+        for p in guessed:
             await self.bridge.add_auto_claim(user, p["key"], p["pack_id"], p["tier"])
             logger.info(f"Automatische Medaille für {user['name']}: {p['card']} -> {p['pack_id']} {p['tier']}")
-        return planned
+        return planned + guessed
+
+    async def _pull_claims(self, user: Dict, stored: Dict) -> list:
+        """Sichere Medaillen aus den Kauf-Details: gezogene meldbare Karte -> Medaille mit Namen (ersetzt im Bot
+        automatisch gesetzte oder ohne Person abgehakte, nie eine von Hand gemeldete einer anderen Person)."""
+        pulls = (stored.get("pulls") or {}).get("items") or []
+        if not pulls:
+            return []
+        planned = plan_pull_claims(pulls, await self._card_banners(), await self.view.claim_targets(),
+                                   user["user_id"], await self.bridge.auto_claim_keys(user["user_id"]))
+        for p in planned:
+            await self.bridge.add_auto_claim(user, p["key"], p["pack_id"], p["tier"], action="pull_claim")
+            logger.info(f"Medaille aus Kauf-Details für {user['name']}: {p['card']} -> {p['pack_id']} {p['tier']}"
+                        + (" (bestätigt)" if p["confirm"] else " (ersetzt)" if p["replace"] else ""))
+        return [p for p in planned if not p["confirm"]]
 
     async def migrate_raw_imports(self):
         """Einmalig: alte Rohdaten der Lesezeichen in den ausgewerteten Verlauf übernehmen (falls noch nicht
@@ -795,7 +814,8 @@ class App:
             return cached[1]
         out: Dict[str, list] = {}
         async with aiosqlite.connect(self.view.db.db_path) as conn:
-            cur = await conn.execute("SELECT pack_id, card_pool, COALESCE(starts_at, 0) FROM banners WHERE card_pool IS NOT NULL")
+            cur = await conn.execute("SELECT pack_id, card_pool, COALESCE(starts_at, CAST(strftime('%s', created_at) AS INTEGER), 0) "
+                                     "FROM banners WHERE card_pool IS NOT NULL")
             for pid, raw, start in await cur.fetchall():
                 try:
                     for c in json.loads(raw).get("cards") or []:

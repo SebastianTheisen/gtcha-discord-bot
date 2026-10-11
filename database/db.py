@@ -771,7 +771,7 @@ class Database:
                 "SELECT t1_claimed, t2_claimed, t3_claimed FROM discord_threads WHERE thread_id = ?", (thread_id,))
             row = await cursor.fetchone()
         hidden = {t for t, _, src, created in rows
-                  if hide_app_since and src == "app" and (created or "") > hide_app_since}
+                  if hide_app_since and src in ("app", "auto", "pull") and (created or "") > hide_app_since}
         medals = {t: u or 0 for t, u, _, _ in rows if t not in hidden}
         for tier, claimed in zip(("T1", "T2", "T3"), row or ()):
             if claimed and tier not in hidden:

@@ -497,7 +497,7 @@ const unitsOf = (b, card) => (b.hits || []).filter((h) => h.key === card.id || h
 
 // Unter der Karte: wer hat sie, wann und wie (Medaille aus Discord/App/Lesezeichen) oder wann verschickt
 // kurz, weil die Kachel schmal ist: Platz nur bei mehreren Exemplaren, Weg als Symbol (💬 Discord, 📱 App, 🔖 Lesezeichen)
-const VIA = { discord: "💬", app: "📱", lesezeichen: "🔖" };
+const VIA = { discord: "💬", app: "📱", lesezeichen: "🔖", auto: "🔖", pull: "🎰" };
 const shortTime = (t) => new Date(t * 1000).toLocaleString("de-DE",
   { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).replace(",", "");
 function originLines(units, meId) {

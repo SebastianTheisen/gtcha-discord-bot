@@ -853,3 +853,61 @@ def plan_claims(cards: List[Dict], banners: Dict[int, Dict], targets: Dict[int, 
             used[pid].add(free[0]["tier"])
             planned.append({"key": key, "pack_id": pid, "tier": free[0]["tier"], "card": card.get("name")})
     return planned
+
+
+def pull_banner(pull: Dict, card_map: Dict[str, list]) -> Optional[int]:
+    """Banner eines Kaufs: der, in dessen Kartenliste alle gezogenen Karten stehen. Bei mehreren der zuletzt
+    gestartete, der beim Kauf schon lief; nicht eindeutig -> None. card_map: Karten-ID -> [(Banner, Start)]."""
+    ids = [c["card_id"] for c in pull.get("cards") or [] if c.get("card_id")]
+    if not ids:
+        return None
+    sets = [{b for b, _ in card_map.get(i, [])} for i in ids]
+    common = set.intersection(*sets)
+    if len(common) <= 1:
+        return next(iter(common), None)
+    try:
+        t = datetime.strptime(pull.get("t") or "", TIME_FMT).timestamp() - JST_OFFSET.total_seconds()
+    except ValueError:
+        return None
+    starts = {b: s for i in ids for b, s in card_map.get(i, []) if b in common}
+    running = sorted((s, b) for b, s in starts.items() if s and s <= t)
+    if running and (len(running) == 1 or running[-1][0] != running[-2][0]):
+        return running[-1][1]
+    return None
+
+
+def plan_pull_claims(pulls: List[Dict], card_map: Dict[str, list], targets: Dict[int, Dict], user_id: str,
+                     done: set) -> List[Dict]:
+    """Medaillen aus den Kauf-Details (Lesezeichen ab v20): jede gezogene meldbare Karte gehört sicher dieser Person.
+    Freier Platz -> melden; Platz mit fremder Medaille -> trotzdem planen (der Bot ersetzt nur automatisch gesetzte
+    oder ohne Person abgehakte Medaillen, siehe AppLinkMixin). Hat die Person dort schon eine Medaille auf der Karte:
+    nichts. Rückgabe: [{key, pack_id, tier, card, replace}]"""
+    planned, used = [], defaultdict(set)
+    for pull in pulls:
+        pid = pull_banner(pull, card_map)
+        if pid is None or pid not in targets:
+            continue
+        units_all, medals = targets[pid]["units"], targets[pid]["medals"]
+        for card in pull.get("cards") or []:
+            cid = card.get("card_id")
+            for n in range(max(1, int(card.get("num") or 1))):
+                key = f"pull:{pull['hid']}:{cid}:{n}"
+                if not cid or key in done:
+                    continue
+                units = [u for u in units_all if str(u["key"]).split("#")[0] == cid]
+                if not units:
+                    continue
+                mine = [u for u in units if str(medals.get(u["tier"])) == str(user_id) and u["tier"] not in used[pid]]
+                if mine:   # schon gemeldet (von Hand oder automatisch) - als bestätigt verbrauchen
+                    used[pid].add(mine[0]["tier"])
+                    planned.append({"key": key, "pack_id": pid, "tier": mine[0]["tier"], "card": card.get("name"),
+                                    "replace": False, "confirm": True})
+                    continue
+                free = [u for u in units if u["tier"] not in medals and u["tier"] not in used[pid]]
+                taken = [u for u in units if u["tier"] in medals and u["tier"] not in used[pid]]
+                pick = (free or taken or [None])[0]
+                if pick:
+                    used[pid].add(pick["tier"])
+                    planned.append({"key": key, "pack_id": pid, "tier": pick["tier"], "card": card.get("name"),
+                                    "replace": not free, "confirm": False})
+    return planned
