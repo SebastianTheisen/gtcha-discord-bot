@@ -530,7 +530,7 @@ class App:
         logger.info(f"Sync von {user['name']}: {saved} Bereiche, {pages} Seiten ({partial} nur Neues)"
                     + (f" in {seconds} s" if seconds else "") + " · "
                     + ", ".join(f"{p}={n if n is not None else 'FEHLER ' + how}" for p, n, how in report))
-        gap, added, sync_now, warnings = False, {}, None, []
+        gap, added, totals, sync_now, warnings = False, {}, {}, None, []
         try:
             # Konto: Zuordnung über die GTCHA-Mitglieds-ID; ältere Lesezeichen schicken nur einen Fingerabdruck
             mid = str(data.get("mid") or "")
@@ -589,6 +589,7 @@ class App:
                             f"(Quelle {data.get('accsrc') or '–'}, Lesezeichen v{data.get('v')})")
             gap = any(a.get("gap") for a in changed.values())
             added = {a: len(changed[a]["items"]) - before[a] for a in before if a in changed and a != "pending"}
+            totals = {a: len(changed[a]["items"]) for a in ("coins", "shipped", "pending") if a in changed}
         except Exception as e:
             logger.warning(f"Verlauf nicht übernommen: {type(e).__name__}: {e}")
         claims = 0
@@ -601,10 +602,13 @@ class App:
                  + (f" in {seconds} Sekunden." if seconds else ".")]
         if partial:
             lines.append(f"➕ {partial} Bereich(e) nur mit neuen Einträgen.")
-        if "coins" in added:
-            lines.append(f"🪙 Münzverlauf: {max(0, added['coins'])} neue Buchung(en).")
-        if "shipped" in added:
-            lines.append(f"📦 Versand: {max(0, added['shipped'])} neue Karte(n).")
+        change = lambda n: f" ({'+' if n > 0 else ''}{n} gegenüber vorher)" if n else " (unverändert)"
+        if "coins" in totals:
+            lines.append(f"🪙 Münzverlauf: {totals['coins']} Buchungen{change(added.get('coins', 0))}.")
+        if "shipped" in totals:
+            lines.append(f"📦 Versendet: {totals['shipped']} Karten{change(added.get('shipped', 0))}.")
+        if "pending" in totals:
+            lines.append(f"⏳ Versand ausstehend: {totals['pending']} Karte(n).")
         if int(data.get("v") or 0) < BOOKMARKLET_VERSION:
             lines.append("🔁 Dein Lesezeichen ist veraltet – in der App unter „Ich“ → „Eigene GTCHA-Daten“ neu "
                          "kopieren und das Lesezeichen in jedem Browser ersetzen.")
