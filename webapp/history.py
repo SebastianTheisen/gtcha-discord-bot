@@ -88,8 +88,12 @@ TIME_LINE = re.compile(r"^(\d{1,2}):(\d{2})(?::\d{2})?$")
 def parse_coins_grouped(pages: List[Dict]) -> List[Dict]:
     """Neues Layout (Oktober 2026): Datumszeile "11.10.2026", darunter je Buchung Text ("In Coins umwandeln",
     "Kaufen"), Uhrzeit ("00:56") und Betrag ("+100", "−88"); ein Yen-Betrag steht ggf. direkt danach."""
-    events = []
+    from collections import Counter
+    best: Counter = Counter()   # je Buchung die höchste Anzahl auf einer Seite (nicht die Summe über Seiten)
+    order: List[tuple] = []
+    found: Dict[tuple, Dict] = {}
     for page in _unique(pages):
+        events = []
         lines, day = _lines(page), None
         for i, line in enumerate(lines):
             m = DAY_LINE.match(line)
@@ -107,7 +111,17 @@ def parse_coins_grouped(pages: List[Dict]) -> List[Dict]:
             yen_value = _int(re.sub(r"[^\d.]", "", yen) or "0")
             events.append({"t": datetime(*day, int(t.group(1)), int(t.group(2))), "amount": amount,
                            "yen": yen_value, "note": note, "kind": classify(amount, yen_value, note)})
-    return events
+        # Die neue Seite lädt beim Scrollen nach; das Lesezeichen kann dieselbe Liste mehrfach einlesen (Zahlen in der
+        # Liste wirken wie Seitenknöpfe). Doppelte nur einmal zählen; gleiche Buchungen innerhalb einer Seite bleiben.
+        counts = Counter((e["t"], e["amount"], e["note"]) for e in events)
+        for key in counts:
+            if key not in found:
+                order.append(key)
+                found[key] = next(e for e in events if (e["t"], e["amount"], e["note"]) == key)
+            best[key] = max(best[key], counts[key])
+    merged = [dict(found[k]) for k in order for _ in range(best[k])]
+    merged.sort(key=lambda e: e["t"], reverse=True)   # neueste zuerst, wie auf der Seite
+    return merged
 
 
 def parse_coins(pages: List[Dict]) -> List[Dict]:

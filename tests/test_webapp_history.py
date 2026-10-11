@@ -405,3 +405,13 @@ def test_parse_coins_new_grouped_layout():
         ("11.10. 00:56", 100, "convert"), ("10.10. 00:03", 300, "convert"), ("09.10. 04:30", 10, "convert"),
         ("09.10. 04:30", -88, "open"), ("09.10. 04:00", 10000, "buy")]
     assert events[-1]["yen"] == 8000
+
+
+def test_parse_coins_grouped_counts_repeated_list_once():
+    """Dieselbe Liste mehrfach eingelesen (Nachladen beim Scrollen): jede Buchung nur einmal; zwei gleiche
+    Buchungen in derselben Minute (zwei Packs gezogen) bleiben zwei."""
+    first = "11.10.2026\nKaufen\n04:30\n−88\nKaufen\n04:30\n−88\nIn Coins umwandeln\n04:29\n+10"
+    more = first + "\n10.10.2026\nIn Coins umwandeln\n00:03\n+300"
+    events = parse_coins([{"text": first}, {"text": more}, {"text": more}])
+    assert [(e["t"].strftime("%d.%m. %H:%M"), e["amount"]) for e in events] == [
+        ("11.10. 04:30", -88), ("11.10. 04:30", -88), ("11.10. 04:29", 10), ("10.10. 00:03", 300)]
