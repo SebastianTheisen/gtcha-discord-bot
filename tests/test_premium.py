@@ -304,3 +304,40 @@ def test_pull_claim_replaces_only_automatic_medals(tmp_path, env):
         assert (await db.get_medal(MAIN, "T2"))["source"] == "pull" and "statt <@55>" in posted[1]
 
     asyncio.run(run())
+
+
+def test_forum_ids_from_app_post_missing_banners(tmp_path, env, monkeypatch):
+    """In der App eingetragenes Forum (neue Kategorie): Bot übernimmt die ID und postet laufende Banner nach."""
+    import bot.common
+    import bot.discord_view as dv
+
+    async def run():
+        db, bridge = await setup(tmp_path)
+        async with aiosqlite.connect(db.db_path) as conn:
+            await conn.execute("INSERT INTO banners (pack_id, is_active, category) VALUES (8, 1, 'Yu-Gi-Oh!')")
+            await conn.commit()
+        monkeypatch.setattr(dv, "_ENV_CHANNELS", {})
+        monkeypatch.setattr(dv, "_ENV_PREMIUM", {})
+        monkeypatch.setattr(bot.common, "CHANNEL_IDS", {})
+        monkeypatch.setattr(dv, "CHANNEL_IDS", bot.common.CHANNEL_IDS)
+        monkeypatch.setattr(dv, "PREMIUM_CHANNEL_IDS", {})
+        await bridge.set_setting("forum_ids", '{"Yu-Gi-Oh!": {"main": "123456789012345678"}}')
+        posted = []
+
+        class Bot(dv.DiscordViewMixin):
+            def __init__(self):
+                self.db, self._app_bridge = db, bridge
+
+            @property
+            def app_bridge(self):
+                return self._app_bridge
+
+            async def _post_banner_to_discord(self, banner, starts_at=None):
+                posted.append((banner.pack_id, banner.category))
+
+        await Bot()._apply_forum_ids()
+        assert dv.CHANNEL_IDS["Yu-Gi-Oh!"] == 123456789012345678 and posted == [(8, "Yu-Gi-Oh!")]
+        await Bot()._apply_forum_ids()
+        assert posted == [(8, "Yu-Gi-Oh!")]          # nur beim Eintragen einmal
+
+    asyncio.run(run())

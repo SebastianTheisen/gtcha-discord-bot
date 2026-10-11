@@ -674,3 +674,35 @@ def test_outdated_bookmarklet_flag(tmp_path):
             await client.close()
 
     asyncio.run(run())
+
+
+def test_admin_forums(tmp_path, monkeypatch):
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from database.db import Database
+    from webapp.server import App, make_app
+    monkeypatch.setenv("APP_ADMIN_IDS", "42")
+    monkeypatch.setenv("CHANNEL_MIX", "111111111111111111")
+
+    async def run():
+        await Database(str(tmp_path / "gtcha_bot.db")).init()
+        app = App(str(tmp_path / "gtcha_bot.db"), str(tmp_path), "x")
+        await app.bridge.init()
+        token = (await app.bridge.redeem_code(await app.bridge.create_code(42, "Basti")))["token"]
+        web_app = make_app(app)
+        web_app.on_startup.clear()
+        web_app.on_cleanup.clear()
+        client = TestClient(TestServer(web_app))
+        await client.start_server()
+        try:
+            h = {"X-Device-Token": token}
+            res = await client.post("/api/admin/forums", headers=h,
+                                    json={"forums": {"Yu-Gi-Oh!": {"main": "222222222222222222", "premium": ""}}})
+            forums = {f["name"]: f for f in (await res.json())["forums"]}
+            assert forums["Yu-Gi-Oh!"]["main"] == "222222222222222222" and forums["MIX"]["main"] == "111111111111111111"
+            assert (await client.post("/api/admin/forums", headers=h, json={"forums": {"X": {"main": "abc"}}})).status == 400
+            assert await app.bridge.forum_ids() == {"Yu-Gi-Oh!": {"main": "222222222222222222"}}
+        finally:
+            await client.close()
+
+    asyncio.run(run())

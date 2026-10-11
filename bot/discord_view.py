@@ -18,6 +18,10 @@ from datetime import timezone
 
 from bot.common import *  # noqa: F401,F403
 
+# Foren aus der .env (Stand beim Start) - in der App eingetragene kommen dazu bzw. überschreiben sie
+_ENV_CHANNELS = dict(CHANNEL_IDS)
+_ENV_PREMIUM = dict(PREMIUM_CHANNEL_IDS)
+
 SETTINGS_CACHE_SECONDS = 20
 # Posts, die es im schlanken Modus nicht mehr gibt - beim Umstellen löscht der Bot seine alten
 # (Pack-Updates bleiben in Discord - die werden nie gelöscht)
@@ -41,6 +45,37 @@ def minimal_drop(content: str) -> bool:
 
 
 class DiscordViewMixin:
+    async def _apply_forum_ids(self):
+        """In der App eingetragene Discord-Foren übernehmen (zusätzlich zur .env, die App gewinnt). Neu eingetragenes
+        normales Forum: laufende Banner der Kategorie dort nachposten."""
+        try:
+            forums = await self.app_bridge.forum_ids()
+        except Exception as e:
+            logger.debug(f"Foren aus der App nicht lesbar: {e}")
+            return
+        added = []
+        for target, env, kind in ((CHANNEL_IDS, _ENV_CHANNELS, "main"), (PREMIUM_CHANNEL_IDS, _ENV_PREMIUM, "premium")):
+            wanted = {**env, **{c: int(ids[kind]) for c, ids in forums.items() if ids.get(kind)}}
+            for cat in set(target) | set(wanted):
+                new = wanted.get(cat, 0)
+                if target.get(cat, 0) != new:
+                    logger.info(f"[FOREN] {kind} {cat}: {target.get(cat, 0)} -> {new}")
+                    if new and kind == "main":
+                        added.append(cat)
+                    target[cat] = new
+        for pid in await self.db.thread_missing(added):
+            row = await self.db.get_banner(pid)
+            if not row:
+                continue
+            banner = ScrapedBanner(
+                pack_id=pid, category=row['category'], title=row.get('title'), best_hit=row.get('best_hit'),
+                price_coins=row.get('price_coins'), current_packs=row.get('current_packs'),
+                total_packs=row.get('total_packs'), entries_per_day=row.get('entries_per_day'),
+                sale_end_date=row.get('sale_end_date'), image_url=row.get('image_url'),
+                detail_page_url=row.get('detail_page_url'))
+            await self._post_banner_to_discord(banner, starts_at=row.get('starts_at') if not row.get('start_announced') else None)
+            logger.info(f"[FOREN] Banner {pid} ({row['category']}) im neuen Forum gepostet")
+
     async def _settings_view(self) -> dict:
         """Einstellungen aus der App ({"mode", "slim", "minimal", "delay", "delay_minutes", "premium_mode"}),
         kurz zwischengespeichert."""
@@ -282,6 +317,7 @@ class DiscordViewMixin:
     async def _watch_discord_mode(self):
         """In der App umgeschaltet (schlank/voll)? Dann alle Startbeiträge, Titel und Hit-Listen neu zeichnen
         und beim Wechsel auf schlank die alten Posts löschen."""
+        await self._apply_forum_ids()
         try:
             view = await self._settings_view()
             mode = view["mode"]

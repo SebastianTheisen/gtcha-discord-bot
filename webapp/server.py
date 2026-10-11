@@ -15,7 +15,7 @@ import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import aiohttp
 import aiosqlite
@@ -106,6 +106,9 @@ def import_result_page(lines: list, ok: bool = True, report: list = None) -> web
 
 PREMIUM_ENV = ("PREMIUM_CHANNEL_BONUS", "PREMIUM_CHANNEL_MIX", "PREMIUM_CHANNEL_POKEMON", "PREMIUM_CHANNEL_ONE_PIECE",
                "PREMIUM_CHANNEL_DRAGON_BALL")
+
+
+FORUM_ENV = {"Bonus": "BONUS", "MIX": "MIX", "Pokémon": "POKEMON", "One piece": "ONE_PIECE", "Dragon Ball": "DRAGON_BALL"}
 
 
 def premium_enabled() -> bool:
@@ -443,10 +446,53 @@ class App:
                 await self.bridge.set_setting("premium_mode", premium)
             logger.info(f"Discord-Ansicht von {user['name']} geändert: {mode}, Premium {premium or '-'}, {delay} Min")
         view = await self.bridge.discord_view()
+        forums = await self._forums()
         return web.json_response({"mode": view["mode"], "delay_minutes": view["delay_minutes"],
-                                  "premium_mode": view["premium_mode"], "premium": premium_enabled(),
+                                  "premium_mode": view["premium_mode"],
+                                  "premium": premium_enabled() or any(f["premium"] for f in forums),
+                                  "forums": forums,
                                   "announcements": [self._announcement_out(a) for a in await self.bridge.announcements()],
                                   "admins": [{"name": x["name"]} for x in await self.bridge.names(admin_ids())]})
+
+    async def _forums(self) -> List[Dict]:
+        """Discord-Foren je Kategorie: aus der App eingetragen (gewinnt) und aus der .env."""
+        saved = await self.bridge.forum_ids()
+        async with aiosqlite.connect(self.view.db.db_path) as conn:
+            cur = await conn.execute("SELECT DISTINCT category FROM banners WHERE is_active = 1 AND category IS NOT NULL "
+                                     "AND category != 'Store'")
+            active = [r[0] for r in await cur.fetchall()]
+        out = []
+        for cat in dict.fromkeys(list(FORUM_ENV) + sorted(active) + sorted(saved)):
+            env = FORUM_ENV.get(cat)
+            env_main = (os.getenv(f"CHANNEL_{env}") or "").strip() if env else ""
+            env_premium = (os.getenv(f"PREMIUM_CHANNEL_{env}") or "").strip() if env else ""
+            ids = saved.get(cat, {})
+            out.append({"name": cat, "main": ids.get("main") or (env_main if env_main != "0" else ""),
+                        "premium": ids.get("premium") or (env_premium if env_premium != "0" else ""),
+                        "from_env": bool(env_main.strip("0") and not ids.get("main"))})
+        return out
+
+    async def api_admin_forums(self, request):
+        """Discord-Foren je Kategorie eintragen ({forums: {Kategorie: {main, premium}}}) - der Bot übernimmt sie
+        innerhalb einer Minute und postet laufende Banner einer neu eingetragenen Kategorie nach."""
+        user = await self._admin(request)
+        body = await request.json()
+        clean = {}
+        for cat, ids in (body.get("forums") or {}).items():
+            if not isinstance(ids, dict) or len(str(cat)) > 60:
+                continue
+            entry = {}
+            for kind in ("main", "premium"):
+                v = str(ids.get(kind) or "").strip()
+                if v and not re.fullmatch(r"\d{15,21}", v):
+                    raise web.HTTPBadRequest(text=f"{cat}: ungültige Kanal-ID „{v}“")
+                if v:
+                    entry[kind] = v
+            if entry:
+                clean[str(cat)] = entry
+        await self.bridge.set_setting("forum_ids", json.dumps(clean, ensure_ascii=False))
+        logger.info(f"Discord-Foren von {user['name']} geändert: {clean}")
+        return web.json_response({"ok": True, "forums": await self._forums()})
 
     @staticmethod
     def _announcement_out(a: Dict) -> Dict:
@@ -1306,6 +1352,7 @@ def make_app(app: App) -> web.Application:
         web.post("/api/admin/accounts", app.api_admin_accounts),
         web.post("/api/admin/block", app.api_admin_block),
         web.post("/api/admin/push", app.api_admin_push),
+        web.post("/api/admin/forums", app.api_admin_forums),
         web.post("/api/me/devices/remove", app.api_remove_device),
         web.get("/api/health", app.api_health),
         web.get("/api/stream", app.api_stream),

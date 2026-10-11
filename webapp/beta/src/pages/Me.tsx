@@ -83,6 +83,7 @@ export function Me() {
       <PushPanel push={push} onChange={() => pushState().then(setPush)} />
       <Section id="guide" title="📖 Anleitung"><Guide /></Section>
       {admin && <AdminSettings a={admin} />}
+      {admin && <Forums a={admin} />}
       {admin && <Announce a={admin} reload={() => authApi("api/admin/settings").then(setAdmin).catch(() => {})} />}
       <Section id="look" title="🎨 Darstellung & Links">
         <div class="chips">{THEMES.map(([k, l]) => <button class={`chip ${theme.value === k ? "active" : ""}`} onClick={() => (theme.value = k)}>{l}</button>)}</div>
@@ -312,6 +313,35 @@ function AdminSettings({ a }: { a: any }) {
         try { await authApi("api/admin/settings", { mode, delay_minutes: Number(delay) || 0, premium_mode: a.premium ? premium : "" }); showToast("Gespeichert ✓"); haptic(); }
         catch (e) { showToast(`Nicht gespeichert: ${(e as Error).message}`); }
       }}>Speichern</button>
+    </Section>
+  );
+}
+
+// Admin: Discord-Foren je Kategorie (der Bot übernimmt sie innerhalb einer Minute, postet neue Kategorien nach)
+function Forums({ a }: { a: any }) {
+  const [rows, setRows] = useState<{ name: string; main: string; premium: string }[]>(
+    (a.forums || []).map((f: any) => ({ name: f.name, main: f.main || "", premium: f.premium || "" })));
+  const set = (i: number, kind: "main" | "premium", v: string) =>
+    setRows(rows.map((r, j) => (j === i ? { ...r, [kind]: v.trim() } : r)));
+  return (
+    <Section id="forums" title="💬 Discord-Foren" extra="Admin">
+      {rows.map((r, i) => (
+        <div class="forum-row">
+          <b>{r.name}</b>
+          <input class="field" inputMode="numeric" placeholder="Forum-ID" value={r.main}
+            onInput={(e) => set(i, "main", (e.target as HTMLInputElement).value)} aria-label={`${r.name} Forum`} />
+          <input class="field" inputMode="numeric" placeholder="Premium-ID" value={r.premium}
+            onInput={(e) => set(i, "premium", (e.target as HTMLInputElement).value)} aria-label={`${r.name} Premium`} />
+        </div>
+      ))}
+      <p class="muted small">Kanal-ID des Forums je Kategorie (Discord: Rechtsklick aufs Forum → ID kopieren). Leer = kein Forum.
+        Neu eingetragen: laufende Banner der Kategorie werden dort innerhalb einer Minute nachgepostet.</p>
+      <button class="btn primary" onClick={async () => {
+        try {
+          await authApi("api/admin/forums", { forums: Object.fromEntries(rows.map((r) => [r.name, { main: r.main, premium: r.premium }])) });
+          showToast("Gespeichert ✓ – der Bot übernimmt es in ≤ 1 Minute"); haptic();
+        } catch (e) { showToast(`Nicht gespeichert: ${(e as Error).message}`); }
+      }}>Foren speichern</button>
     </Section>
   );
 }

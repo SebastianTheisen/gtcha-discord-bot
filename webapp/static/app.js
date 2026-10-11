@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 129;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 130;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -1031,6 +1031,16 @@ async function showSettings() {
       haptic();
     } catch (e) { msg.textContent = "Nicht gespeichert: " + e.message; }
   });
+  view.querySelector("#forum-save")?.addEventListener("click", async () => {
+    const msg = view.querySelector("#forum-msg");
+    const forums = {};
+    view.querySelectorAll(".forum-row").forEach((r) => {
+      forums[r.dataset.cat] = { main: r.querySelector('[data-kind="main"]').value.trim(),
+                                premium: r.querySelector('[data-kind="premium"]').value.trim() };
+    });
+    try { await authApi("/api/admin/forums", { forums }); msg.textContent = "Gespeichert ✓ – der Bot übernimmt es in ≤ 1 Minute"; haptic(); }
+    catch (e) { msg.textContent = "Nicht gespeichert: " + e.message; }
+  });
   view.querySelector("#ann-save")?.addEventListener("click", async () => {
     const msg = view.querySelector("#ann-msg");
     try {
@@ -1508,7 +1518,24 @@ function adminSection(a) {
       <div class="hint">Admin: ${(a.admins || []).map((x) => esc(x.name || "–")).join(", ") || "–"}</div>
       <div class="hint" id="admin-msg"></div>
     </div>
+    ${forumSection(a)}
     ${announceSection(a)}`;
+}
+
+// --- Admin: Discord-Foren je Kategorie (der Bot übernimmt sie innerhalb einer Minute) ---
+function forumSection(a) {
+  const rows = (a.forums || []).map((f) => `<div class="forum-row" data-cat="${esc(f.name)}">
+      <b>${esc(f.name)}</b>
+      <input class="code-input plain" inputmode="numeric" data-kind="main" value="${esc(f.main || "")}" placeholder="Forum-ID" aria-label="${esc(f.name)} Forum">
+      <input class="code-input plain" inputmode="numeric" data-kind="premium" value="${esc(f.premium || "")}" placeholder="Premium-ID" aria-label="${esc(f.name)} Premium">
+    </div>`).join("");
+  return `<h2>💬 Discord-Foren <small>Admin</small></h2>
+    <div class="panel">${rows}
+      <div class="hint">Kanal-ID des Forums je Kategorie (Discord: Rechtsklick aufs Forum → ID kopieren). Leer = kein Forum.
+        Neu eingetragen: laufende Banner der Kategorie werden dort innerhalb einer Minute nachgepostet.</div>
+      <button class="btn primary" id="forum-save">Foren speichern</button>
+      <div class="hint" id="forum-msg"></div>
+    </div>`;
 }
 
 // --- Admin: Ankündigung, die der Bot einmal zur eingestellten Zeit in alle laufenden Threads postet ---

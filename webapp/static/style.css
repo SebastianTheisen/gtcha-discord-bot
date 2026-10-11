@@ -537,3 +537,7 @@ details.section > summary small { font-size: 13px; color: var(--muted); font-wei
 /* Hinweis: Lesezeichen veraltet */
 .notice-bar { display: block; margin: 8px 10px 0; padding: 10px 12px; border-radius: var(--radius); background: #5a3d0c;
   color: #ffd98a; font-weight: 600; text-decoration: none; }
+
+/* Admin: Discord-Foren je Kategorie */
+.forum-row { display: grid; grid-template-columns: minmax(80px, 1fr) 1.4fr 1.4fr; gap: 6px; align-items: center; margin-bottom: 6px; }
+.forum-row input { min-width: 0; font-size: 13px; }

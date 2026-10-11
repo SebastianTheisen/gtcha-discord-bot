@@ -839,6 +839,18 @@ class Database:
             row = await cur.fetchone()
             return dict(row) if row else None
 
+    async def thread_missing(self, categories: List[str]) -> List[int]:
+        """Laufende Banner dieser Kategorien ohne (aktiven) Thread im normalen Forum (z. B. Forum neu eingetragen)."""
+        if not categories:
+            return []
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute(f"""
+                SELECT b.pack_id FROM banners b
+                LEFT JOIN discord_threads t ON t.banner_id = b.pack_id AND t.is_expired = 0
+                WHERE b.is_active = 1 AND t.thread_id IS NULL
+                  AND b.category IN ({','.join('?' * len(categories))}) ORDER BY b.pack_id""", list(categories))
+            return [r[0] for r in await cur.fetchall()]
+
     async def premium_missing(self) -> List[int]:
         """Laufende Banner mit normalem Thread, aber ohne aktiven Premium-Thread (zum Nachrüsten)."""
         async with aiosqlite.connect(self.db_path) as db:

@@ -57,7 +57,9 @@ MAX_IMPORT_BYTES = 40_000_000   # "Komplett" mit hunderten Münzseiten
 #   discord_mode  "slim" = abgespeckt, "full" = alles wie früher
 #   discord_delay Minuten, um die automatisch erkannte Hits und in der App gemeldete Medaillen in Discord später erscheinen
 #   premium_mode  Premium-Foren: "full" = alle Infos wie in der App, "slim" = abgespeckt (immer mit Verzögerung)
-DEFAULT_SETTINGS = {"discord_mode": "minimal", "discord_delay": "30", "premium_mode": "full"}
+DEFAULT_SETTINGS = {"discord_mode": "minimal", "discord_delay": "30", "premium_mode": "full",
+                    # Discord-Foren je Kategorie aus der App ({"Yu-Gi-Oh!": {"main": "123…", "premium": "456…"}})
+                    "forum_ids": "{}"}
 DISCORD_MODES = ("minimal", "slim", "full")
 PREMIUM_MODES = ("slim", "full")
 MAX_DELAY_MINUTES = 24 * 60
@@ -197,6 +199,14 @@ class AppBridge:
         async with aiosqlite.connect(self.db_path) as db:
             cur = await db.execute("SELECT key, value FROM app_settings")
             return {**DEFAULT_SETTINGS, **{k: v for k, v in await cur.fetchall()}}
+
+    async def forum_ids(self) -> Dict[str, Dict[str, str]]:
+        try:
+            data = json.loads((await self.settings()).get("forum_ids") or "{}")
+        except ValueError:
+            return {}
+        return {str(c): {k: str(v) for k, v in (ids or {}).items() if k in ("main", "premium") and str(v).isdigit()}
+                for c, ids in data.items() if isinstance(ids, dict)}
 
     async def discord_view(self) -> Dict:
         """{"mode", "slim", "minimal", "delay": Sekunden} - Verzögerung nur im schlanken/minimalen Modus.
