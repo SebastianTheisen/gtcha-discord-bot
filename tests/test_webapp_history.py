@@ -580,6 +580,7 @@ def test_my_pulls_per_banner(tmp_path):
         await db.save_card_pool(24247, summarize_cards([
             {"id": 1, "name": "Hit", "buy_point": 98780, "duplication": 1, "action_type": 2},
             {"id": 2, "name": "10 coin", "buy_point": 10, "duplication": 9, "action_type": 1}]))
+        await db.set_start(24247, int(datetime(2026, 10, 1).timestamp()), announced=True)   # lief beim Kauf schon
         app = App(str(tmp_path / "gtcha_bot.db"), str(tmp_path), "x")
         await app.bridge.init()
         token = (await app.bridge.redeem_code(await app.bridge.create_code(42, "Basti")))["token"]
@@ -631,20 +632,25 @@ def test_old_card_with_site_value_counts_in_balance():
 
 
 def test_plan_pull_claims_from_purchase_details():
-    """Kauf-Details: gezogene meldbare Karte -> Medaille; fremde Medaille -> geplant als Ersatz (Bot entscheidet);
-    eigene -> nur bestätigen; Banner über die Karten-IDs, bei mehreren der beim Kauf zuletzt gestartete."""
+    """Kauf-Details, streng: nur angeforderte/offene Karten und nur freie Plätze; fremde Medaillen nie überschreiben;
+    Banner nur, wenn genau einer passt; umgewandelte (Coin-)Karten nie als Medaille."""
     from webapp.history import plan_pull_claims, pull_banner
     units = [{"key": "1", "tier": "T1"}, {"key": "2", "tier": "T2"}]
-    pull = {"hid": 7, "t": "2026-10-12 05:10", "cards": [{"card_id": "1", "num": 1}, {"card_id": "9", "num": 3}]}
+    pull = {"hid": 7, "t": "2026-10-12 05:10", "cards": [{"card_id": "1", "num": 1, "state": "angefordert"},
+                                                         {"card_id": "9", "num": 3, "state": "umgewandelt"}]}
     cmap = {"1": [(100, 1000), (200, 1_900_000_000)], "9": [(100, 1000), (200, 1_900_000_000)]}
     assert pull_banner(pull, cmap) == 100          # 200 startete erst nach dem Kauf
     free = plan_pull_claims([pull], cmap, {100: {"units": units, "medals": {}}}, "42", set())
-    assert [(p["tier"], p["replace"], p["confirm"]) for p in free] == [("T1", False, False)]
+    assert [(p["tier"], p["replace"], p["confirm"]) for p in free] == [("T1", False, False)]   # Karte 9 (umgewandelt) zählt nicht
     taken = plan_pull_claims([pull], cmap, {100: {"units": units, "medals": {"T1": 7}}}, "42", set())
-    assert [(p["tier"], p["replace"]) for p in taken] == [("T1", True)]
+    assert taken == []                             # fremde Medaille wird nicht überschrieben
     mine = plan_pull_claims([pull], cmap, {100: {"units": units, "medals": {"T1": "42"}}}, "42", set())
     assert mine[0]["confirm"] and not plan_pull_claims([pull], cmap, {100: {"units": units, "medals": {}}}, "42",
                                                        {"pull:7:1:0"})
+    # zwei Banner liefen beim Kauf -> nicht eindeutig -> gar nichts
+    cmap2 = {"1": [(100, 1000), (300, 2000)], "9": [(100, 1000), (300, 2000)]}
+    assert pull_banner(pull, cmap2) is None
+    assert plan_pull_claims([pull], cmap2, {100: {"units": units, "medals": {}}}, "42", set()) == []
 
 
 def test_outdated_bookmarklet_flag(tmp_path):

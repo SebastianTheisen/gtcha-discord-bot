@@ -880,15 +880,12 @@ def pull_banner(pull: Dict, card_map: Dict[str, list]) -> Optional[int]:
         t = datetime.strptime(pull.get("t") or "", TIME_FMT).timestamp() - JST_OFFSET.total_seconds()
     except ValueError:
         return None
-    # nur Banner, die beim Kauf schon liefen (Start bekannt, höchstens 1 Tag Spielraum für Zeitzonen) - dieselbe Karte
-    # steckt oft auch in späteren Bannern (24238: Karten aus Februar/März einem Banner vom Oktober zugeordnet)
+    # Nur Banner, die zum Kaufzeitpunkt schon liefen (Start bekannt, 1 Tag Spielraum für Zeitzonen). Dieselbe Karte
+    # (vor allem Coins und häufige Karten) steckt in vielen Bannern - darum nur zuordnen, wenn GENAU EIN Banner passt.
+    # Mehrere Kandidaten oder keiner -> None (lieber gar nicht abhaken als falsch).
     starts = {b: s for i in ids for b, s in card_map.get(i, []) if b in common}
-    running = sorted((s, b) for b, s in starts.items() if s and s <= t + 86400)
-    if len(running) == 1:
-        return running[0][1]
-    if len(running) > 1 and running[-1][0] != running[-2][0]:
-        return running[-1][1]
-    return None
+    running = [b for b, s in starts.items() if s and s <= t + 86400]
+    return running[0] if len(running) == 1 else None
 
 
 def plan_pull_claims(pulls: List[Dict], card_map: Dict[str, list], targets: Dict[int, Dict], user_id: str,
@@ -905,6 +902,9 @@ def plan_pull_claims(pulls: List[Dict], card_map: Dict[str, list], targets: Dict
         units_all, medals = targets[pid]["units"], targets[pid]["medals"]
         for card in pull.get("cards") or []:
             cid = card.get("card_id")
+            # Nur echte, angeforderte/noch offene Karten zählen als Hit - umgewandelte Karten (in Coins) nie.
+            if card.get("state") not in ("angefordert", "offen"):
+                continue
             for n in range(max(1, int(card.get("num") or 1))):
                 key = f"pull:{pull['hid']}:{cid}:{n}"
                 if not cid or key in done:
@@ -918,11 +918,10 @@ def plan_pull_claims(pulls: List[Dict], card_map: Dict[str, list], targets: Dict
                     planned.append({"key": key, "pack_id": pid, "tier": mine[0]["tier"], "card": card.get("name"),
                                     "replace": False, "confirm": True})
                     continue
+                # nur freie Plätze füllen; einen Platz mit fremder Medaille nicht per Kauf-Details überschreiben
                 free = [u for u in units if u["tier"] not in medals and u["tier"] not in used[pid]]
-                taken = [u for u in units if u["tier"] in medals and u["tier"] not in used[pid]]
-                pick = (free or taken or [None])[0]
-                if pick:
-                    used[pid].add(pick["tier"])
-                    planned.append({"key": key, "pack_id": pid, "tier": pick["tier"], "card": card.get("name"),
-                                    "replace": not free, "confirm": False})
+                if free:
+                    used[pid].add(free[0]["tier"])
+                    planned.append({"key": key, "pack_id": pid, "tier": free[0]["tier"], "card": card.get("name"),
+                                    "replace": False, "confirm": False})
     return planned

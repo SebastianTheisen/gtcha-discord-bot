@@ -823,15 +823,20 @@ class App:
         Banner, die auch in einem neuen steckt): zurücknehmen lassen und den Eintrag löschen."""
         cmap, count, cache = await self._card_banners(), 0, {}
         for c in await self.bridge.pull_claims_done():
+            parts = str(c["card_key"]).split(":")   # pull:<hid>:<card_id>:<n>
             try:
-                hid = int(str(c["card_key"]).split(":")[1])
+                hid, cid = int(parts[1]), parts[2]
             except (IndexError, ValueError):
                 continue
             uid = c["discord_user_id"]
             if uid not in cache:
                 cache[uid] = {p["hid"]: p for p in ((await self.bridge.get_history(uid)).get("pulls") or {}).get("items") or []}
             pull = cache[uid].get(hid)
-            if pull and pull_banner(pull, cmap) == c["pack_id"]:
+            # noch gültig: Kauf gehört eindeutig zu diesem Banner UND die Karte ist eine echte angeforderte/offene Karte
+            # (keine in Coins umgewandelte) - sonst zurücknehmen
+            ok_card = pull and any(str(card.get("card_id")) == cid and card.get("state") in ("angefordert", "offen")
+                                   for card in pull.get("cards") or [])
+            if pull and ok_card and pull_banner(pull, cmap) == c["pack_id"]:
                 continue
             if c["status"] == "ok":
                 name = (await self.bridge.names([uid]) or [{}])[0].get("name") or uid
