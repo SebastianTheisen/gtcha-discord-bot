@@ -876,15 +876,17 @@ def pull_banner(pull: Dict, card_map: Dict[str, list]) -> Optional[int]:
         return None
     sets = [{b for b, _ in card_map.get(i, [])} for i in ids]
     common = set.intersection(*sets)
-    if len(common) <= 1:
-        return next(iter(common), None)
     try:
         t = datetime.strptime(pull.get("t") or "", TIME_FMT).timestamp() - JST_OFFSET.total_seconds()
     except ValueError:
         return None
+    # nur Banner, die beim Kauf schon liefen (Start bekannt, höchstens 1 Tag Spielraum für Zeitzonen) - dieselbe Karte
+    # steckt oft auch in späteren Bannern (24238: Karten aus Februar/März einem Banner vom Oktober zugeordnet)
     starts = {b: s for i in ids for b, s in card_map.get(i, []) if b in common}
-    running = sorted((s, b) for b, s in starts.items() if s and s <= t)
-    if running and (len(running) == 1 or running[-1][0] != running[-2][0]):
+    running = sorted((s, b) for b, s in starts.items() if s and s <= t + 86400)
+    if len(running) == 1:
+        return running[0][1]
+    if len(running) > 1 and running[-1][0] != running[-2][0]:
         return running[-1][1]
     return None
 

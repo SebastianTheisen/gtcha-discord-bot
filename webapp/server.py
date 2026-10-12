@@ -26,7 +26,7 @@ from database.db import Database
 from utils.app_bridge import MAX_DELAY_MINUTES, MAX_IMPORT_BYTES, AppBridge
 from utils.banner_info import berlin_time, berlin_to_ts
 from webapp.accuracy import AccuracyStore
-from webapp.history import (JST_OFFSET, coins_total, plan_pull_claims, build_from_stored, ingest, local_time, plan_claims, profile, stored_events,
+from webapp.history import (JST_OFFSET, coins_total, plan_pull_claims, pull_banner, build_from_stored, ingest, local_time, plan_claims, profile, stored_events,
                             summarize, attribute_opens, opens_by_banner, CLAIM_OPEN_DAYS)
 from webapp.images import ImageCache, content_type
 from webapp.push import DEFAULTS, EVENTS, WATCH_EVENTS, PushService, build_events
@@ -791,6 +791,7 @@ class App:
     async def auto_claim(self, user: Dict) -> list:
         """Angeforderte Karten (noch nicht verschickt) automatisch als Medaille melden, wenn eindeutig."""
         stored = await self.history(user)
+        await self.revoke_wrong_pull_claims()
         planned = await self._pull_claims(user, stored)
         cards = (stored.get("pending") or {}).get("items") or []
         if not cards:
@@ -814,6 +815,30 @@ class App:
             await self.bridge.add_auto_claim(user, p["key"], p["pack_id"], p["tier"])
             logger.info(f"Automatische Medaille für {user['name']}: {p['card']} -> {p['pack_id']} {p['tier']}")
         return planned + guessed
+
+    async def revoke_wrong_pull_claims(self) -> int:
+        """Medaillen aus Kauf-Details, deren Kauf nicht (mehr) zu diesem Banner gehört (z. B. Karte aus einem älteren
+        Banner, die auch in einem neuen steckt): zurücknehmen lassen und den Eintrag löschen."""
+        cmap, count, cache = await self._card_banners(), 0, {}
+        for c in await self.bridge.pull_claims_done():
+            try:
+                hid = int(str(c["card_key"]).split(":")[1])
+            except (IndexError, ValueError):
+                continue
+            uid = c["discord_user_id"]
+            if uid not in cache:
+                cache[uid] = {p["hid"]: p for p in ((await self.bridge.get_history(uid)).get("pulls") or {}).get("items") or []}
+            pull = cache[uid].get(hid)
+            if pull and pull_banner(pull, cmap) == c["pack_id"]:
+                continue
+            if c["status"] == "ok":
+                name = (await self.bridge.names([uid]) or [{}])[0].get("name") or uid
+                await self.bridge.add_request(c["pack_id"], c["tier"], {"user_id": uid, "name": name}, "pull_revoke")
+                count += 1
+                logger.warning(f"Medaille aus Kauf-Details zurückgenommen: {c['tier']} bei {c['pack_id']} ({name}) - "
+                               f"Kauf gehört nicht zu diesem Banner")
+            await self.bridge.drop_auto_claim(uid, c["card_key"])
+        return count
 
     async def _pull_claims(self, user: Dict, stored: Dict) -> list:
         """Sichere Medaillen aus den Kauf-Details: gezogene meldbare Karte -> Medaille mit Namen (ersetzt im Bot
@@ -892,14 +917,8 @@ class App:
         stored = await self.bridge.get_history(user["user_id"])
         pulls = (stored.get("pulls") or {}).get("items") or []
         cmap = await self._card_banners()
-        mine = []
-        for p in pulls:
-            ids = [c["card_id"] for c in p.get("cards") or [] if c.get("card_id")]
-            # Banner = der, in dessen Kartenliste alle gezogenen Karten stehen (bei mehreren: der zuletzt gestartete)
-            sets = [{b for b, _ in cmap.get(i, [])} for i in ids]
-            common = set.intersection(*sets) if sets else set()
-            if pid in common:
-                mine.append(p)
+        # Banner = der, in dessen Kartenliste alle gezogenen Karten stehen und der beim Kauf schon lief
+        mine = [p for p in pulls if pull_banner(p, cmap) == pid]
         cards = [c for p in mine for c in p.get("cards") or []]
         count = lambda state: sum(c.get("num") or 1 for c in cards if c.get("state") == state)
         return web.json_response({
@@ -1224,6 +1243,10 @@ class App:
     # --- Eigene Pushes: Ergebnis automatischer Medaillen, Erinnerung ans Übertragen ---
     async def personal_pushes(self, now: float = None):
         now = now or time.time()
+        try:   # falsch zugeordnete Medaillen aus Kauf-Details zurücknehmen (läuft regelmäßig mit)
+            await self.revoke_wrong_pull_claims()
+        except Exception as e:
+            logger.warning(f"Kauf-Details-Medaillen nicht geprüft: {e}")
         for c in await self.bridge.finished_auto_claims():
             row = await self.view.db.get_banner(c["pack_id"]) or {}
             title = banner_label(row.get("title"), row.get("best_hit"), row.get("category"), row.get("price_coins")) \

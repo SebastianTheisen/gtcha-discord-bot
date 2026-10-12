@@ -719,3 +719,42 @@ def test_legacy_text_off_keeps_stored_history():
                               {"path": "pending-detail", "pages": [{"text": "x"}]}])
     assert "coins" not in changed or changed["coins"]["items"] == stored["coins"]["items"]
     assert "pending" not in changed
+
+
+def test_pull_from_older_banner_not_assigned_to_newer():
+    """Karte aus einem Kauf im März steckt auch im neuen Banner vom Oktober: nicht diesem Banner zuordnen."""
+    from datetime import datetime as _dt
+
+    from webapp.history import pull_banner
+    october = int(_dt(2026, 10, 10).timestamp())
+    pull = {"hid": 1, "t": "2026-03-23 02:31", "cards": [{"card_id": "5"}]}
+    assert pull_banner(pull, {"5": [(24238, october)]}) is None
+    assert pull_banner({**pull, "t": "2026-10-11 10:00"}, {"5": [(24238, october)]}) == 24238
+
+
+def test_wrong_pull_claim_is_revoked(tmp_path):
+    from database.db import Database
+    from scraper.models import ScrapedBanner
+    from utils.card_pool import summarize_cards
+    from webapp.server import App
+
+    async def run():
+        db = Database(str(tmp_path / "gtcha_bot.db"))
+        await db.init()
+        await db.save_banner(ScrapedBanner(pack_id=24238, category="Pokémon", price_coins=2000, current_packs=9, total_packs=10))
+        await db.save_card_pool(24238, summarize_cards([{"id": 5, "name": "Mega Gengar ex", "buy_point": 60490,
+                                                         "duplication": 1, "action_type": 2}]))
+        await db.set_start(24238, int(datetime(2026, 10, 10).timestamp()), announced=True)
+        app = App(str(tmp_path / "gtcha_bot.db"), str(tmp_path), "x")
+        await app.bridge.init()
+        user = {"user_id": "42", "name": "Basti"}
+        old = {"hid": 9, "t": "2026-03-23 02:31", "pack_name": "x", "coins_back": 0, "status": "", "cards": [
+            {"card_id": "5", "name": "Mega Gengar ex", "num": 1, "value": 60490, "state": "angefordert"}]}
+        await app.bridge.set_history("42", {"pulls": {"items": [old], "gap": False}})
+        rid = await app.bridge.add_auto_claim(user, "pull:9:5:0", 24238, "T1", action="pull_claim")
+        await app.bridge.finish(rid, True, None)
+        assert await app.revoke_wrong_pull_claims() == 1
+        assert [r["action"] for r in await app.bridge.pending()] == ["pull_revoke"]
+        assert await app.bridge.pull_claims_done() == []
+
+    asyncio.run(run())
