@@ -4,6 +4,7 @@ import { api, authApi, getToken, setToken } from "../api";
 import { bookmarkletSync } from "../bookmarklet";
 import { AccuracySection, HistorySection, type History } from "../components/HistorySection";
 import { Img } from "../components/Img";
+import { Sheet } from "../components/Sheet";
 import { dateTime, ddmm, ddmmhhmm, num } from "../format";
 import { GUIDE_DEVICES, GUIDES, guessDevice } from "../guides";
 import { applyProfile, buyHref, isIOS, isStandalone, LINK_MODES, linkMode, load, myCharge, myRank, RANKS, save } from "../local";
@@ -48,9 +49,17 @@ export function Me() {
     if (user.admin) authApi("api/admin/settings").then(setAdmin).catch(() => setAdmin(null));
   }, [user?.user_id, tick]);
 
+  const [setupOpen, setSetupOpen] = useState(false);
+  useEffect(() => {
+    if (!user && load("beta.setupSeen", "") !== "1") { save("beta.setupSeen", "1"); setTimeout(() => setSetupOpen(true), 600); }
+  }, []);
+  const setupN = setupDone().size;
+
   return (
     <div class="me">
       <div class="section-title" style={{ marginTop: "4px" }}><h2>👤 {user ? user.name || "Ich" : "Ich"}</h2>{user?.admin ? <span class="pill ok">Admin</span> : null}</div>
+      <button class="btn primary block" onClick={() => setSetupOpen(true)}>🚀 Einrichtung {setupN > 0 && setupN < 5 ? `fortsetzen (${setupN}/5)` : "in Schritten"}</button>
+      {setupOpen && <Setup onClose={() => setSetupOpen(false)} onLinked={() => setTick(tick + 1)} />}
       <LinkPanel devices={devices} onChange={() => setTick(tick + 1)} />
       {user && (
         <Section id="medals" title="🏅 Meine gemeldeten Hits" extra={`${medals.length} aktiv`} open>
@@ -268,6 +277,114 @@ function PushPanel({ push, onChange }: { push: { supported: boolean; sub: PushSu
         </Section>
       )}
     </>
+  );
+}
+
+// --- Einrichtungs-Assistent: Schritt für Schritt, Häkchen bleiben gespeichert ---
+const SETUP_KEY = "beta.setupDone";
+function setupDone(): Set<string> {
+  try { return new Set(JSON.parse(localStorage.getItem(SETUP_KEY) || "[]")); } catch { return new Set(); }
+}
+function markSetup(k: string, done: boolean) {
+  const s = setupDone();
+  done ? s.add(k) : s.delete(k);
+  try { localStorage.setItem(SETUP_KEY, JSON.stringify([...s])); } catch { /* privater Modus */ }
+}
+interface SetupStep { key: string; icon: string; title: string; lines: string[]; note?: string; act?: "copy" | "open" | "discord"; }
+function setupSteps(device: string): SetupStep[] {
+  const g = GUIDES[device] || GUIDES.pc;
+  const ios = device.startsWith("ios");
+  return [
+    { key: "tailscale", icon: "🔑", title: "Mit dem Netzwerk verbinden",
+      lines: [g.install[0], "Ohne Tailscale ist der Tracker nicht erreichbar – einmalig einrichten, danach läuft es im Hintergrund."] },
+    { key: "install", icon: "📲", title: "Als App installieren", lines: g.install.slice(1) },
+    { key: "discord", icon: "🔗", title: "Discord verknüpfen", act: "discord",
+      lines: ["In Discord den Befehl /tracker-verknüpfen eingeben – du bekommst einen Code.",
+              "Den Code unten eingeben. Danach erscheinen deine Hits im Discord unter deinem Namen."] },
+    { key: "bookmark", icon: "🔖", title: "Lesezeichen „An GTCHA Tracker“ einrichten", act: "copy",
+      lines: g.bookmark.slice(1, 3),
+      note: ios ? "Das ist der kniffligste Schritt – lies ihn in Ruhe. Zuerst unten den Code kopieren, dann das Lesezeichen anlegen und die Adresse durch den Code ersetzen."
+                : "Zuerst unten den Code kopieren, dann als Lesezeichen „An GTCHA Tracker“ anlegen und als Adresse den Code einfügen." },
+    { key: "transfer", icon: "📥", title: "Zum ersten Mal übertragen", act: "open",
+      lines: ["Auf gtchaxonline.com einloggen.",
+              `Das Lesezeichen „An GTCHA Tracker“ aufrufen (${ios ? "Lesezeichen-Liste bzw. Adressleiste" : "Adressleiste eintippen und den Vorschlag mit dem Stern wählen"}).`,
+              "Oben erscheint ein blauer Kasten „GTCHA Tracker: lädt …“. Nach ~20 Sekunden bist du fertig."] },
+  ];
+}
+
+function Setup({ onClose, onLinked }: { onClose: () => void; onLinked: () => void }) {
+  const [device, setDevice] = useState(load("guideDevice", guessDevice()));
+  const [, bump] = useState(0);
+  const [openKey, setOpenKey] = useState("");
+  const [code, setCode] = useState("");
+  const [copyMsg, setCopyMsg] = useState("");
+  const [linkMsg, setLinkMsg] = useState("");
+  const steps = setupSteps(device);
+  const done = setupDone();
+  const cur = openKey || steps.find((s) => !done.has(s.key))?.key || steps[0].key;
+  const total = steps.length;
+
+  async function doLink() {
+    setLinkMsg("");
+    const res = await fetch("api/link", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return setLinkMsg(data.error || "Code ungültig");
+    setToken(data.token);
+    markSetup("discord", true);
+    haptic();
+    await loadMe();
+    onLinked();
+    bump((x) => x + 1);
+  }
+
+  return (
+    <Sheet onClose={onClose}>
+      <div class="setup">
+        <div class="setup-head"><h3 style={{ margin: 0 }}>🚀 Einrichtung</h3></div>
+        <div class="setup-prog"><div class="setup-bar"><span style={{ width: `${Math.round(done.size / total * 100)}%` }} /></div>
+          <span class="muted small">{done.size} von {total} erledigt</span></div>
+        <select class="select wide" value={device} onChange={(e) => { const v = (e.target as HTMLSelectElement).value; setDevice(v); save("guideDevice", v); }} style={{ margin: "10px 0" }}>
+          {Object.entries(GUIDE_DEVICES).map(([k, label]) => <option value={k}>{label}</option>)}
+        </select>
+        <div class="setup-steps">{steps.map((s) => {
+          const isDone = done.has(s.key), isOpen = s.key === cur;
+          return (
+            <div class={`setup-step ${isDone ? "done" : ""} ${isOpen ? "open" : ""}`}>
+              <button class="setup-step-head" onClick={() => setOpenKey(isOpen ? "-" : s.key)}>
+                <span class="setup-check">{isDone ? "✓" : s.icon}</span>
+                <span class="setup-step-title">{s.title}</span>
+                <span class="setup-chev">{isOpen ? "▾" : "▸"}</span>
+              </button>
+              {isOpen && (
+                <div class="setup-step-body">
+                  {s.note && <div class="setup-note">{s.note}</div>}
+                  <ol class="guide">{s.lines.map((l) => <li>{l}</li>)}</ol>
+                  {s.act === "copy" && <>
+                    <button class="btn primary block" onClick={async () => {
+                      const text = bookmarkletSync(getToken());
+                      try { await navigator.clipboard.writeText(text); setCopyMsg("Kopiert ✓ – jetzt als Lesezeichen-Adresse einfügen"); haptic(); }
+                      catch { setCopyMsg("Kopieren nicht möglich – Code steht in der Anleitung"); }
+                    }}>🔖 Lesezeichen-Code kopieren</button>
+                    {copyMsg && <p class="muted small">{copyMsg}</p>}
+                  </>}
+                  {s.act === "open" && <a class="btn primary block" href={buyHref("https://gtchaxonline.com/pending-detail")} target="_blank" rel="noopener">📥 GTCHA öffnen</a>}
+                  {s.act === "discord" && (me.value ? <p class="muted small">✓ Bereits verknüpft als <b>{me.value.name}</b>.</p> : <>
+                    <input class="field" maxLength={8} autoCapitalize="characters" autoComplete="one-time-code" placeholder="Code, z. B. K7M2QX"
+                      value={code} onInput={(e) => setCode((e.target as HTMLInputElement).value)} />
+                    <button class="btn primary block" style={{ marginTop: "8px" }} onClick={doLink}>Verknüpfen</button>
+                    {linkMsg && <p class="notice">{linkMsg}</p>}
+                  </>)}
+                  <button class={`btn block ${isDone ? "" : "primary"}`} style={{ marginTop: "10px" }}
+                    onClick={() => { markSetup(s.key, !isDone); haptic(); bump((x) => x + 1); }}>{isDone ? "↩︎ Doch nicht erledigt" : "Erledigt ✓"}</button>
+                </div>
+              )}
+            </div>
+          );
+        })}</div>
+        {done.size === total && <div class="setup-done-msg">🎉 Fertig! Deine Daten werden übertragen, sobald du das Lesezeichen aufgerufen hast.</div>}
+        <button class="btn block" style={{ marginTop: "12px" }} onClick={onClose}>Schließen</button>
+      </div>
+    </Sheet>
   );
 }
 

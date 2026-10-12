@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 131;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 132;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -840,6 +840,109 @@ function guideHtml(device) {
       enthält deinen persönlichen Schlüssel – nicht weitergeben.</div>`;
 }
 
+// --- Einrichtungs-Assistent: Schritt für Schritt, Häkchen bleiben gespeichert ---
+const SETUP_KEY = "setupDone";
+const SETUP_SEEN = "setupSeen";
+const setupDone = () => { try { return new Set(JSON.parse(localStorage.getItem(SETUP_KEY) || "[]")); } catch (e) { return new Set(); } };
+const markSetup = (k, done = true) => {
+  const s = setupDone(); done ? s.add(k) : s.delete(k);
+  try { localStorage.setItem(SETUP_KEY, JSON.stringify([...s])); } catch (e) {}
+};
+// Die Schritte je Gerät; jeder Schritt: nummerierte Punkte, optional ein Knopf (Discord verknüpfen / Code kopieren / GTCHA öffnen)
+function setupSteps(device) {
+  const g = GUIDES[device] || GUIDES.pc;
+  const ios = device.startsWith("ios");
+  return [
+    { key: "tailscale", icon: "🔑", title: "Mit dem Netzwerk verbinden",
+      lines: [g.install[0], "Ohne Tailscale ist der Tracker nicht erreichbar – einmalig einrichten, danach läuft es im Hintergrund."] },
+    { key: "install", icon: "📲", title: "Als App installieren", lines: g.install.slice(1) },
+    { key: "discord", icon: "🔗", title: "Discord verknüpfen", act: "discord",
+      lines: ["In Discord den Befehl /tracker-verknüpfen eingeben – du bekommst einen Code.",
+              "Den Code unten eingeben. Danach erscheinen deine Hits im Discord unter deinem Namen."] },
+    { key: "bookmark", icon: "🔖", title: "Lesezeichen „An GTCHA Tracker“ einrichten", act: "copy",
+      lines: g.bookmark.slice(1, 3),
+      note: ios ? "Das ist der kniffligste Schritt – lies ihn in Ruhe. Zuerst unten den Code kopieren, dann das Lesezeichen anlegen und die Adresse durch den Code ersetzen."
+                : "Zuerst unten den Code kopieren, dann als Lesezeichen „An GTCHA Tracker“ anlegen und als Adresse den Code einfügen." },
+    { key: "transfer", icon: "📥", title: "Zum ersten Mal übertragen", act: "open",
+      lines: ["Auf gtchaxonline.com einloggen.", "Das Lesezeichen „An GTCHA Tracker“ aufrufen (" + (ios ? "Lesezeichen-Liste bzw. Adressleiste" : "Adressleiste eintippen und den Vorschlag mit dem Stern wählen") + ").",
+              "Oben erscheint ein blauer Kasten „GTCHA Tracker: lädt …“. Nach ~20 Sekunden bist du fertig."] },
+  ];
+}
+
+function openSetup() {
+  try { localStorage.setItem(SETUP_SEEN, "1"); } catch (e) {}
+  const wrap = document.createElement("div");
+  wrap.className = "modal-wrap setup-wrap";
+  const render = () => {
+    const device = load("guideDevice", guessDevice());
+    const steps = setupSteps(device);
+    const done = setupDone();
+    const openKey = steps.find((s) => !done.has(s.key))?.key || steps[0].key;
+    const n = done.size, total = steps.length;
+    wrap.innerHTML = `<div class="modal setup" role="dialog" aria-modal="true">
+      <div class="setup-head">
+        <div class="modal-title">🚀 Einrichtung</div>
+        <button class="icon-btn" id="setup-close" aria-label="Schließen">✕</button>
+      </div>
+      <div class="setup-prog"><div class="setup-bar"><span style="width:${Math.round(n / total * 100)}%"></span></div>
+        <span class="muted">${n} von ${total} erledigt</span></div>
+      <select id="setup-device" class="select" aria-label="Gerät">${Object.entries(GUIDE_DEVICES).map(([k, label]) =>
+        `<option value="${k}" ${k === device ? "selected" : ""}>${label}</option>`).join("")}</select>
+      <div class="setup-steps">${steps.map((s) => {
+        const isDone = done.has(s.key), isOpen = s.key === openKey;
+        return `<div class="setup-step ${isDone ? "done" : ""} ${isOpen ? "open" : ""}" data-step="${s.key}">
+          <button class="setup-step-head" data-toggle="${s.key}">
+            <span class="setup-check">${isDone ? "✓" : s.icon}</span>
+            <span class="setup-step-title">${esc(s.title)}</span>
+            <span class="setup-chev">${isOpen ? "▾" : "▸"}</span></button>
+          <div class="setup-step-body" ${isOpen ? "" : "hidden"}>
+            ${s.note ? `<div class="setup-note">${esc(s.note)}</div>` : ""}
+            <ol class="guide">${s.lines.map((l) => `<li>${esc(l)}</li>`).join("")}</ol>
+            ${s.act === "copy" ? `<button class="btn primary" data-copy>🔖 Lesezeichen-Code kopieren</button>
+              <div class="hint setup-copymsg"></div>` : ""}
+            ${s.act === "open" ? `<a class="btn primary" href="${esc(buyHref("https://gtchaxonline.com/pending-detail"))}" target="_blank" rel="noopener">📥 GTCHA öffnen</a>` : ""}
+            ${s.act === "discord" ? `<div class="add-watch"><input class="code-input" data-link-code maxlength="8"
+              autocapitalize="characters" autocomplete="one-time-code" placeholder="Code, z. B. K7M2QX">
+              <button class="btn primary" data-link-btn>Verknüpfen</button></div><div class="hint" data-link-msg></div>` : ""}
+            <button class="btn setup-mark ${isDone ? "" : "primary"}">${isDone ? "↩︎ Doch nicht erledigt" : "Erledigt ✓"}</button>
+          </div></div>`;
+      }).join("")}</div>
+      ${n === total ? `<div class="setup-done-msg">🎉 Fertig! Deine Daten werden übertragen, sobald du das Lesezeichen aufgerufen hast.</div>` : ""}
+    </div>`;
+    wrap.querySelector("#setup-close").onclick = () => wrap.remove();
+    wrap.querySelector("#setup-device").onchange = (e) => { save("guideDevice", e.target.value); render(); };
+    wrap.querySelectorAll("[data-toggle]").forEach((b) => b.onclick = () => {
+      const body = b.nextElementSibling, open = body.hasAttribute("hidden");
+      wrap.querySelectorAll(".setup-step-body").forEach((x) => x.setAttribute("hidden", ""));
+      wrap.querySelectorAll(".setup-step").forEach((x) => x.classList.remove("open"));
+      if (open) { body.removeAttribute("hidden"); b.closest(".setup-step").classList.add("open"); }
+    });
+    wrap.querySelectorAll(".setup-mark").forEach((b) => b.onclick = () => {
+      const key = b.closest(".setup-step").dataset.step;
+      markSetup(key, !setupDone().has(key)); haptic(); render();
+    });
+    wrap.querySelector("[data-copy]")?.addEventListener("click", async (e) => {
+      const code = bookmarkletSync(deviceToken());
+      const msg = e.target.nextElementSibling;
+      try { await navigator.clipboard.writeText(code); msg.textContent = "Kopiert ✓ – jetzt als Lesezeichen-Adresse einfügen"; haptic(); }
+      catch (err) { msg.innerHTML = `<textarea class="bm-code" readonly>${esc(code)}</textarea>`; msg.querySelector("textarea").select(); }
+    });
+    wrap.querySelector("[data-link-btn]")?.addEventListener("click", async () => {
+      const input = wrap.querySelector("[data-link-code]"), msg = wrap.querySelector("[data-link-msg]");
+      try {
+        const res = await fetch("/api/link", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code: input.value }) });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "Code ungültig");
+        save("deviceToken", data.token); state.me = { user_id: data.user_id, name: data.name };
+        markSetup("discord"); haptic(); render();
+      } catch (e) { msg.textContent = e.message; }
+    });
+  };
+  render();
+  document.body.appendChild(wrap);
+}
+
 async function currentSubscription() {
   if (!("serviceWorker" in navigator) || !("PushManager" in window)) return null;
   const reg = await navigator.serviceWorker.ready;
@@ -910,8 +1013,10 @@ async function showSettings() {
   const admin = user?.admin ? await authApi("/api/admin/settings").catch(() => null) : null;
   applyProfile(hist?.profile);
   const prof = hist?.profile;
+  const setupN = setupDone().size, setupTotal = 5;
   view.innerHTML = `
     <div class="section-title">👤 ${user ? esc(user.name) : "Ich"}</div>
+    <button class="btn primary block setup-start" id="setup-start">🚀 Einrichtung ${setupN && setupN < setupTotal ? `fortsetzen (${setupN}/${setupTotal})` : "in Schritten"}</button>
     ${linkPanel(user, devices)}
     ${user ? `<h2>🏅 Meine gemeldeten Hits <small>${medals.length} aktiv</small></h2>
       <div class="rows">${medals.length ? medals.map((m) => `
@@ -1010,6 +1115,7 @@ async function showSettings() {
     ${admin ? `<h2>⏱ Geschwindigkeit <small>Admin</small></h2>
     <div class="panel"><button class="btn" id="speed">Geschwindigkeit testen</button>
       <div class="hint" id="speed-out"></div></div>` : ""}`;
+  view.querySelector("#setup-start")?.addEventListener("click", () => openSetup());
   view.querySelector("#beta-code")?.addEventListener("click", async () => {
     const out = view.querySelector("#beta-out");
     try {
@@ -2098,6 +2204,8 @@ updateBell();
 // Reiter "Nutzer" nur für Admins
 me().then((u) => {
   const t = document.getElementById("users-tab"); if (t) t.hidden = !u?.admin;
+  // Neue Nutzer (noch nicht verknüpft): den Einrichtungs-Assistenten einmal von selbst zeigen
+  if (!u && !localStorage.getItem(SETUP_SEEN)) setTimeout(() => { if (!document.querySelector(".setup-wrap")) openSetup(); }, 800);
   // Lesezeichen veraltet: oben ein Hinweis (bis zum nächsten Übertragen mit dem neuen Lesezeichen)
   if (u?.bookmarklet_outdated && !document.getElementById("bm-outdated")) {
     const bar = document.createElement("a");
