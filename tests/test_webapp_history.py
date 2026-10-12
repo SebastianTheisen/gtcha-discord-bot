@@ -758,3 +758,45 @@ def test_wrong_pull_claim_is_revoked(tmp_path):
         assert await app.bridge.pull_claims_done() == []
 
     asyncio.run(run())
+
+
+def test_hidden_banner_shows_seen_return_and_cards(tmp_path):
+    """Versteckte Kartenliste: Rückgabe laut Zahlen der Seite und von Nutzern gezogene Karten (Kauf-Details)."""
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from database.db import Database
+    from scraper.models import ScrapedBanner
+    from webapp.server import App, make_app
+
+    async def run():
+        db = Database(str(tmp_path / "gtcha_bot.db"))
+        await db.init()
+        await db.save_banner(ScrapedBanner(pack_id=24253, category="Dragon Ball", price_coins=3000,
+                                           current_packs=900, total_packs=1000))
+        await db.update_site_stats(24253, {"cards": 1, "coins": 100000, "players": 1})
+        await db.update_converted(24253, 50000)
+        await db.update_converted(24253, 200000)
+        await db.set_site_name(24253, "DB 3000 新弾")
+        app = App(str(tmp_path / "gtcha_bot.db"), str(tmp_path), "x")
+        await app.bridge.init()
+        await app.accuracy.init()
+        token = (await app.bridge.redeem_code(await app.bridge.create_code(42, "Basti")))["token"]
+        await app.bridge.mark_synced("42")
+        pull = {"hid": 1, "t": "2026-10-12 10:00", "pack_name": "DB 3000 新弾", "coins_back": 300, "cards": [
+            {"card_id": "7", "name": "Goku", "num": 1, "value": 110000, "state": "angefordert"},
+            {"card_id": "8", "name": "Coin", "num": 3, "value": 100, "state": "umgewandelt"}]}
+        await app.bridge.set_history("42", {"pulls": {"items": [pull], "gap": False}})
+        web_app = make_app(app)
+        web_app.on_startup.clear()
+        web_app.on_cleanup.clear()
+        client = TestClient(TestServer(web_app))
+        await client.start_server()
+        try:
+            data = await (await client.get("/api/banner/24253", headers={"X-Device-Token": token})).json()
+            assert data["seen_sold"] == 100 and data["seen_return"] == round((200000 + 110000) / 100)
+            assert [(c["name"], c["count"], c["value"]) for c in data["seen_cards"]] == [("Goku", 1, 110000), ("Coin", 3, 100)]
+            assert data["seen_purchases"] == 1
+        finally:
+            await client.close()
+
+    asyncio.run(run())

@@ -438,6 +438,7 @@ class ScrapingMixin:
             if isinstance(item.get('image'), list):
                 changed = await self.db.set_image(pid, api_image(item)) or changed
             changed = await self.db.clear_title_if(pid, api_name(item)) or changed
+            await self.db.set_site_name(pid, api_name(item))   # Zuordnung der Kauf-Details bei versteckter Kartenliste
             # Umgewandelte Coins nur speichern (Verlauf), Startbeitrag deshalb nicht neu bearbeiten
             if item.get('total_kangen') is not None:
                 await self.db.update_converted(pid, _int(item.get('total_kangen')))

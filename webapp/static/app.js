@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 130;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 131;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -714,7 +714,7 @@ async function showBanner(id) {
         <div class="hint pane-hint">${b.share_above_price != null ? `${pct(b.share_above_price)} ≥ Packpreis (<b>gold</b>) · ` : ""}${b.archived ? "beendet" : "Antippen = melden"}</div>
         <div id="cards"></div>`
         : hits.length ? `<h2>🏆 Hits <small>${open} von ${hits.length} noch drin</small></h2>
-        <div class="hits">${hits.map(hitCard).join("")}</div>` : `<div class="empty">${b.cards_hidden ? "🙈 GTCHA hält die Kartenliste dieses Banners geheim" : "Kartenliste noch nicht geladen"}</div>`}
+        <div class="hits">${hits.map(hitCard).join("")}</div>` : `<div class="empty">${b.cards_hidden ? "🙈 GTCHA hält die Kartenliste dieses Banners geheim" : "Kartenliste noch nicht geladen"}</div>${seenHtml(b)}`}
     </section>
 
     <section class="pane" data-pane="history" ${tab === "history" ? "" : "hidden"}>
@@ -752,6 +752,16 @@ async function showBanner(id) {
   }).catch(() => {});
   wireWatchButton(String(b.id)).catch(() => {});
   me().then(() => renderCards(b)).catch(() => {});
+}
+
+// Ohne Kartenliste: Rückgabe laut Zahlen der Seite und Karten, die Nutzer laut Kauf-Details gezogen haben
+function seenHtml(b) {
+  const ret = b.seen_return ? `<div class="line"><span>📈 Bisher zurück: <b>Ø ${num(b.seen_return)} Coins</b> pro Zug${b.seen_return_pct != null ? ` (${pct(b.seen_return_pct)})` : ""}</span></div>
+    <div class="line muted small">aus ${num(b.seen_sold)} gezogenen Packs · nur umgewandelt + verschickt laut Seite (Untergrenze)</div>` : "";
+  const cards = (b.seen_cards || []).map((c) => `<div class="line"><span>${c.count > 1 ? `${num(c.count)}× ` : ""}${esc(c.name || "?")}</span>
+    <span>${c.value ? `<b>${num(c.value)}</b> Coins` : ""}</span></div>`).join("");
+  return (ret || cards) ? `<h2>👀 Was man trotzdem weiß</h2><div class="rows">${ret}
+    ${cards ? `<div class="line muted small">Gezogen laut Kauf-Details (${num(b.seen_purchases)} Käufe von Nutzern mit Lesezeichen):</div>${cards}` : ""}</div>` : "";
 }
 
 // "Meine Ziehungen" bei einem Banner (aus den Kauf-Details von "Alles übertragen")

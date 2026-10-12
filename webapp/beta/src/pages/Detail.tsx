@@ -265,7 +265,12 @@ function Cards({ b, open }: { b: BannerDetail; open: (c: Card) => void }) {
       : filter === "hits" ? c.hit : true), [b.cards, filter, b.price]);
   const total = (b.cards || []).reduce((n, c) => n + c.copies, 0);
   const meId = me.value?.user_id;
-  if (!b.cards?.length) return <div class="empty">{b.cards_hidden ? "🙈 GTCHA hält die Kartenliste dieses Banners geheim" : "Kartenliste noch nicht geladen"}</div>;
+  if (!b.cards?.length) return (
+    <div>
+      <div class="empty">{b.cards_hidden ? "🙈 GTCHA hält die Kartenliste dieses Banners geheim" : "Kartenliste noch nicht geladen"}</div>
+      <Seen b={b} />
+    </div>
+  );
   return (
     <div>
       <p class="muted small" style={{ margin: "10px 2px 6px" }}>
@@ -310,6 +315,29 @@ function Cards({ b, open }: { b: BannerDetail; open: (c: Card) => void }) {
         </div>
       ) : <div class="empty">Keine Karten für diesen Filter</div>}
       {list.length > limit && <button class="btn block" style={{ marginTop: "12px" }} onClick={() => setLimit(limit + PAGE * 2)}>Weitere {Math.min(list.length - limit, PAGE * 2)} Karten zeigen</button>}
+    </div>
+  );
+}
+
+// Ohne Kartenliste: Rückgabe laut Zahlen der Seite und Karten, die Nutzer laut Kauf-Details gezogen haben
+function Seen({ b }: { b: BannerDetail }) {
+  const x = b as any;
+  const cards: { name?: string; value?: number; count: number }[] = x.seen_cards || [];
+  if (!x.seen_return && !cards.length) return null;
+  return (
+    <div>
+      <div class="section-title"><h2>👀 Was man trotzdem weiß</h2></div>
+      <div class="panel small">
+        {x.seen_return ? <>
+          <div>📈 Bisher zurück: <b>Ø {num(x.seen_return)} Coins</b> pro Zug{x.seen_return_pct != null ? ` (${pct(x.seen_return_pct)})` : ""}</div>
+          <div class="muted">aus {num(x.seen_sold)} gezogenen Packs · nur umgewandelt + verschickt laut Seite (Untergrenze)</div>
+        </> : null}
+        {cards.length ? <>
+          <div class="muted" style={{ marginTop: "8px" }}>Gezogen laut Kauf-Details ({num(x.seen_purchases)} Käufe von Nutzern mit Lesezeichen):</div>
+          {cards.map((c) => <div class="tl-row"><span>{c.count > 1 ? `${num(c.count)}× ` : ""}{c.name || "?"}</span>
+            <span>{c.value ? <><b>{num(c.value)}</b> Coins</> : null}</span></div>)}
+        </> : null}
+      </div>
     </div>
   );
 }

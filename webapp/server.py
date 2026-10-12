@@ -316,6 +316,8 @@ class App:
         data.pop("hit_keys_detected", None)
         data.pop("cards_brief", None)
         data["ev_history"] = await self.accuracy.history(pack_id)
+        if not data.get("cards"):   # keine Kartenliste (versteckt): was Nutzer laut Kauf-Details gezogen haben
+            data.update(await self._seen_cards(pack_id))
         # Herkunft der Medaillen: Name der Person und ob per Lesezeichen (automatisch) gemeldet
         names = {u["user_id"]: u.get("name") for u in await self.bridge.known_users()}
         auto = await self.bridge.auto_claims_for(pack_id)
@@ -903,6 +905,43 @@ class App:
                 except ValueError:
                     continue
         self._card_map = (time.time(), out)
+        return out
+
+    async def _seen_cards(self, pack_id: int) -> Dict:
+        """Karten, die Nutzer mit Lesezeichen aus diesem Banner gezogen haben (Kauf-Details, pack_name = interner Name
+        des Packs, ab Start des Banners). Nur wenn der interne Name eindeutig ist. 5 Minuten zwischengespeichert."""
+        cache = self.__dict__.setdefault("_seen_cache", {})
+        hit = cache.get(pack_id)
+        if hit and time.time() - hit[0] < 300:
+            return hit[1]
+        out: Dict = {}
+        row = await self.view.db.get_banner(pack_id) or {}
+        name = row.get("site_name")
+        if name:
+            async with aiosqlite.connect(self.view.db.db_path) as conn:
+                cur = await conn.execute("SELECT count(*) FROM banners WHERE site_name = ? AND is_active = 1", (name,))
+                unique = (await cur.fetchone())[0] <= 1
+            start = row.get("starts_at") or 0
+            since = (datetime.utcfromtimestamp(start) + JST_OFFSET - timedelta(days=1)).strftime("%Y-%m-%d %H:%M") \
+                if start else ""
+            if unique:
+                cards: Dict[str, Dict] = {}
+                buys = 0
+                for p in await self.bridge.all_pulls():
+                    if p.get("pack_name") != name or (p.get("t") or "") < since:
+                        continue
+                    buys += 1
+                    for c in p.get("cards") or []:
+                        key = c.get("card_id") or c.get("name")
+                        e = cards.setdefault(key, {"name": c.get("name"), "value": c.get("value"), "image": c.get("image"),
+                                                   "count": 0, "requested": 0})
+                        e["count"] += c.get("num") or 1
+                        e["requested"] += (c.get("num") or 1) if c.get("state") in ("angefordert", "offen") else 0
+                        e["value"] = max(e["value"] or 0, c.get("value") or 0) or None
+                if buys:
+                    out = {"seen_cards": sorted(cards.values(), key=lambda c: -(c["value"] or 0))[:200],
+                           "seen_purchases": buys}
+        cache[pack_id] = (time.time(), out)
         return out
 
     async def api_my_pulls(self, request):
