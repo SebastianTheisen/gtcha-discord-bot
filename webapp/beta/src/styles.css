@@ -415,3 +415,6 @@ select.ann-input { background-image: linear-gradient(45deg, transparent 50%, var
 /* Admin: Discord-Foren je Kategorie */
 .forum-row { display: grid; grid-template-columns: minmax(80px, 1fr) 1.4fr 1.4fr; gap: 6px; align-items: center; margin-bottom: 6px; }
 .forum-row input { min-width: 0; font-size: 13px; }
+
+/* siehe relayout() in main.tsx: feste Elemente für einen Moment ohne eigene Ebene, damit iOS sie neu anordnet */
+.relayout .nav, .relayout .header, .relayout .buybar { transform: none; }

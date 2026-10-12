@@ -129,6 +129,27 @@ document.addEventListener("touchcancel", () => {
   ptr.style.transform = "";
   ptr.classList.remove("ready");
 });
+// Zurück in die App, nachdem sie während des Scrollens verlassen wurde: iOS lässt feste Elemente (Leiste unten,
+// Kopf) dann an der Stelle stehen, an der der Schwung-Scroll gerade war - die Leiste schwebt mitten im Bild.
+// Beim Zurückkommen Berührung zurücksetzen, den Scroll einmal "anstupsen" und feste Elemente neu anordnen.
+function relayout() {
+  touch = null;
+  const page = document.querySelector<HTMLElement>(".page");
+  if (page) page.style.transform = "";
+  ptr.style.transform = "";
+  ptr.classList.remove("ready");
+  const y = window.scrollY;
+  document.documentElement.classList.add("relayout");
+  void document.body.offsetHeight;   // Layout erzwingen
+  requestAnimationFrame(() => {
+    window.scrollTo(0, y + 1);
+    window.scrollTo(0, y);
+    document.documentElement.classList.remove("relayout");
+  });
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) relayout(); });
+window.addEventListener("pageshow", relayout);
+window.addEventListener("focus", relayout);
 // Nach dem Zurück-Wischen wertet iOS dieselbe Berührung noch als Antippen - das träfe einen Banner in der
 // Liste und öffnete ihn ("springt woanders hin"). Diesen einen Klick kurz danach verschlucken.
 let swallowClickUntil = 0;
