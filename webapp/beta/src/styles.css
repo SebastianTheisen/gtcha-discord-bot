@@ -418,3 +418,23 @@ select.ann-input { background-image: linear-gradient(45deg, transparent 50%, var
 
 /* siehe relayout() in main.tsx: feste Elemente für einen Moment ohne eigene Ebene, damit iOS sie neu anordnet */
 .relayout .nav, .relayout .header, .relayout .buybar { transform: none; }
+
+/* Einrichtungs-Assistent */
+.btn.block { display: block; width: 100%; text-align: center; }
+.setup .setup-head { display: flex; align-items: center; justify-content: space-between; }
+.setup-prog { display: flex; align-items: center; gap: 10px; margin: 6px 0 2px; }
+.setup-bar { flex: 1; height: 8px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.setup-bar span { display: block; height: 100%; background: var(--accent); transition: width .25s; }
+.setup-steps { display: flex; flex-direction: column; gap: 8px; }
+.setup-step { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.setup-step.done { border-color: color-mix(in srgb, var(--good, #2ecc71) 50%, var(--line)); }
+.setup-step-head { width: 100%; display: flex; align-items: center; gap: 10px; padding: 12px; background: var(--surface-2); border: 0; text-align: left; cursor: pointer; font-weight: 700; color: var(--text); }
+.setup-check { width: 26px; height: 26px; flex: none; border-radius: 50%; display: grid; place-items: center; background: var(--surface); font-size: 15px; }
+.setup-step.done .setup-check { background: var(--good, #2ecc71); color: #fff; }
+.setup-step-title { flex: 1; }
+.setup-chev { color: var(--muted); }
+.setup-step-body { padding: 4px 14px 14px; }
+.setup-step-body .guide { margin: 8px 0; padding-left: 20px; }
+.setup-step-body .guide li { margin-bottom: 6px; }
+.setup-note { margin-top: 8px; padding: 10px; border-radius: 10px; background: #5a3d0c; color: #ffd98a; font-size: 13px; }
+.setup-done-msg { margin-top: 14px; padding: 12px; border-radius: 12px; background: color-mix(in srgb, var(--good, #2ecc71) 18%, var(--surface)); font-weight: 700; text-align: center; }
