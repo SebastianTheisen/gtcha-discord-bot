@@ -245,6 +245,7 @@ class BannerView:
             "rank": min_rank(row.get('conditions')), "password": needs_password(row.get('conditions')),
             **self._rank_info(row.get('conditions')),
             "cards_hidden": bool(json.loads(row.get('conditions') or "{}").get("cards_hidden")) and not pool,
+            **({} if pool else self._seen_return(row, price, remaining, total)),
             "shipped": format_shipping(row.get('site_stats')),
             **self._shipping(row.get('site_stats')),
             **self._out_of_banner(row, pool, held, shipped_keys),
@@ -296,6 +297,21 @@ class BannerView:
             return {"ship_cards": None, "ship_value": None, "ship_counted": None, "ship_players": None}
         return {"ship_cards": to_int(st.get("cards")), "ship_value": card_value(to_int(st.get("coins"))),
                 "ship_counted": to_int(st.get("coins")), "ship_players": to_int(st.get("players"))}
+
+    @classmethod
+    def _seen_return(cls, row: Dict, price, remaining, total) -> Dict:
+        """Ohne Kartenliste (z. B. von GTCHA versteckt): was laut Zahlen der Seite bisher je Zug zurückkam -
+        umgewandelt + verschickt (Kartenwert). Untergrenze: noch nicht entschiedene Karten fehlen."""
+        sold = (total or 0) - (remaining or 0)
+        if sold <= 0:
+            return {}
+        st = json.loads(row['site_stats']) if row.get('site_stats') else {}
+        back = (cls._converted(row) or 0) + card_value(to_int(st.get("coins")) or 0)
+        if back <= 0:
+            return {}
+        per = back / sold
+        return {"seen_return": round(per), "seen_return_pct": round(per / price * 100, 1) if price else None,
+                "seen_sold": sold}
 
     @staticmethod
     def _converted(row: Dict) -> Optional[int]:

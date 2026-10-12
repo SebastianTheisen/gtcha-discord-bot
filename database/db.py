@@ -245,6 +245,7 @@ class Database:
                                ('discord_threads', 'top5_message_id INTEGER'),
                                ('discord_threads', 'value_alert_sent INTEGER DEFAULT 0'),
                                ('banners', 'converted INTEGER'),
+                               ('banners', 'site_name TEXT'),
                                ('medals', "source TEXT DEFAULT 'discord'")]:
                 try:
                     await db.execute(f"ALTER TABLE {table} ADD COLUMN {col}")
@@ -352,6 +353,14 @@ class Database:
         preferred = set(prefer_ids)
         rows.sort(key=lambda r: (r[0] not in preferred, not r[1], r[2]))
         return [r[0] for r in rows[:limit]]
+
+    async def set_site_name(self, pack_id: int, name: Optional[str]) -> None:
+        """Interner Name des Packs aus pack/list (steht auch in den Kauf-Details als pack_name)."""
+        if not name:
+            return
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE banners SET site_name = ? WHERE pack_id = ? AND site_name IS NOT ?", (name, pack_id, name))
+            await db.commit()
 
     async def mark_pool_stale(self, pack_id: int) -> None:
         """Kartenliste beim nächsten Scrape neu laden (z. B. nach einem Versand)."""

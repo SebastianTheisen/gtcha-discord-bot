@@ -463,6 +463,19 @@ class AppBridge:
                 "ORDER BY a.created_at DESC LIMIT 50", (str(user_id),))
             return [dict(r) for r in await cur.fetchall()]
 
+    async def all_pulls(self) -> List[Dict]:
+        """Kauf-Details aller Personen (je Kauf; ohne Namen) - für Banner mit versteckter Kartenliste."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT data FROM user_history WHERE area = 'pulls' OR area LIKE 'pulls@%'")
+            rows = await cur.fetchall()
+        out = []
+        for (data,) in rows:
+            try:
+                out += json.loads(data).get("items") or []
+            except ValueError:
+                continue
+        return out
+
     async def pull_claims_done(self) -> List[Dict]:
         """Erledigte Medaillen aus Kauf-Details (zum Nachprüfen der Banner-Zuordnung)."""
         async with aiosqlite.connect(self.db_path) as db:
