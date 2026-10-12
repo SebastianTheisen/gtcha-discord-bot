@@ -463,6 +463,20 @@ class AppBridge:
                 "ORDER BY a.created_at DESC LIMIT 50", (str(user_id),))
             return [dict(r) for r in await cur.fetchall()]
 
+    async def pull_claims_done(self) -> List[Dict]:
+        """Erledigte Medaillen aus Kauf-Details (zum Nachprüfen der Banner-Zuordnung)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT a.discord_user_id, a.card_key, a.pack_id, a.tier, r.status FROM auto_claims a "
+                "JOIN medal_requests r ON r.id = a.request_id WHERE a.card_key LIKE 'pull:%'")
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def drop_auto_claim(self, user_id: str, card_key: str):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("DELETE FROM auto_claims WHERE discord_user_id = ? AND card_key = ?", (str(user_id), card_key))
+            await db.commit()
+
     async def finished_auto_claims(self) -> List[Dict]:
         """Automatische Medaillen, die der Bot erledigt hat und zu denen noch kein Push ging."""
         async with aiosqlite.connect(self.db_path) as db:

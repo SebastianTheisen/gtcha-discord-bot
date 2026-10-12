@@ -104,6 +104,14 @@ class AppLinkMixin:
                 text = f"🛠️ {tier} an <@{user_id}> umgetragen *(Admin)*"
             await self._post_to_threads(pack_id, text, reaction=reaction, **quiet)
             logger.info(f"Admin-Korrektur: {req['action']} {tier} bei {pack_id}")
+        elif req["action"] == "pull_revoke":
+            # Medaille aus Kauf-Details falsch zugeordnet: nur zurücknehmen, wenn sie noch genau so besteht
+            if not existing or int(existing.get("user_id") or 0) != user_id or existing.get("source") != "pull":
+                return True, None
+            await self.db.delete_medal(thread_id, tier)
+            await self._post_app_medal(pack_id, emoji, add=False, silent=True,
+                                       text=f"↩️ {tier} von <@{user_id}> zurückgenommen *(falsch zugeordnet)*")
+            logger.info(f"Medaille aus Kauf-Details zurückgenommen: {tier} bei {pack_id}")
         elif req["action"] == "unclaim":
             if not existing:
                 return False, f"{tier} ist nicht vergeben"
@@ -152,6 +160,10 @@ class AppLinkMixin:
         medal_thread = store_thread_id(pack_id)
         existing = await self.db.get_medal(medal_thread, tier)
         action = req["action"]
+        if action == "pull_revoke":
+            if existing and int(existing.get("user_id") or 0) == user_id and existing.get("source") == "pull":
+                await self.db.delete_medal(medal_thread, tier)
+            return True, None
         if action in ("unclaim", "admin_remove"):
             if not existing:
                 return False, f"{tier} ist nicht vergeben"
