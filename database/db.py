@@ -67,6 +67,12 @@ class Database:
     async def init(self):
         """Erstellt Tabellen."""
         async with aiosqlite.connect(self.db_path) as db:
+            # WAL: Lesen (Live-App, Beta) und Schreiben (Bot) blockieren sich nicht mehr gegenseitig - im
+            # Standard-Modus bekam der Bot "database is locked", während die Apps lasen. Bleibt in der Datei gesetzt.
+            try:
+                await db.execute("PRAGMA journal_mode=WAL")
+            except Exception as e:   # gerade gesperrt (App liest): beim nächsten Start erneut
+                logger.warning(f"WAL-Modus nicht gesetzt: {e}")
             await db.executescript("""
                 CREATE TABLE IF NOT EXISTS banners (
                     pack_id INTEGER PRIMARY KEY,
