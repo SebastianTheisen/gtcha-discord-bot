@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 133;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 134;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -1730,7 +1730,7 @@ async function showUsers() {
   const secs = (x) => (x == null ? "–" : x < 60 ? `${String(x).replace(".", ",")} s` : ago(Math.round(x)));
   const job = (j) => (j ? `${esc(j.name)}${j.label ? " · " + esc(j.label) : ""}` : "–");
   const workerHtml = w ? `
-      <div class="line"><span>${ok(w.age != null && w.age < 60 && !(w.cpu_running && w.cpu_running.for > 600))} Rechen-Prozess</span>
+      <div class="line"><span>${ok(w.age != null && w.age < 60 && !(w.cpu_running && w.cpu_running.for > (w.cpu_limit || 60) + 30))} Rechen-Prozess</span>
         <span>${w.cpu_running ? `rechnet seit ${ago(w.cpu_running.for)}` : "frei"}</span></div>
       ${w.cpu_running ? `<div class="line"><span>Rechnet gerade</span><span>${job(w.cpu_running)}</span></div>` : ""}
       <div class="line"><span>Wartend: Rechnen / Hits / Discord</span><span>${w.cpu_waiting} / ${w.hits_waiting} / ${w.views_waiting}${w.views_busy ? " ⏳" : ""}</span></div>
@@ -1738,6 +1738,7 @@ async function showUsers() {
         : w.hits_last ? `${w.hits_last.banners} Banner in ${secs(w.hits_last.seconds)} · vor ${ago(w.hits_last.ago)}` : "–"}</span></div>
       <div class="line"><span>Letzte Rechnung</span><span>${w.cpu_last ? `${job(w.cpu_last)} · ${secs(w.cpu_last.seconds)} · vor ${ago(w.cpu_last.ago)}` : "–"}</span></div>
       <div class="line"><span>Längste Rechnung seit Start</span><span>${w.cpu_slowest ? `${job(w.cpu_slowest)} · ${secs(w.cpu_slowest.seconds)}` : "–"}</span></div>
+      ${w.cpu_timeouts ? `<div class="line"><span>Abgebrochen (zu aufwendig, ${w.cpu_limit || 60} s)</span><span>${num(w.cpu_timeouts)}× · zuletzt ${job(w.cpu_last_timeout)} · vor ${ago(w.cpu_last_timeout && w.cpu_last_timeout.ago)}</span></div>` : ""}
       <div class="line"><span>Rechnungen seit Start</span><span>${num(w.cpu_done)}${w.cpu_fallbacks ? ` · ${w.cpu_fallbacks}× im Thread` : ""} · vor ${ago(w.cpu_up)} gestartet</span></div>`
     : `<div class="line"><span>Rechen-Prozess</span><span class="muted">noch keine Meldung</span></div>`;
   const statusHtml = st ? `<div class="rows">

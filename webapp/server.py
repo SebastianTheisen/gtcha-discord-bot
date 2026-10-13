@@ -196,6 +196,8 @@ def worker_summary(st: Optional[Dict], now: float) -> Optional[Dict]:
         "cpu_running": running and {**running, "for": ago(running.get("since"))},
         "cpu_waiting": cpu.get("waiting", 0), "cpu_done": cpu.get("done", 0), "cpu_fallbacks": cpu.get("fallbacks", 0),
         "cpu_last": done(cpu.get("last")), "cpu_slowest": done(cpu.get("slowest")), "cpu_up": ago(cpu.get("since")),
+        "cpu_timeouts": cpu.get("timeouts", 0), "cpu_last_timeout": done(cpu.get("last_timeout")),
+        "cpu_limit": cpu.get("limit"),
         "hits_running": hits.get("running") and {**hits["running"], "for": ago(hits["running"].get("since"))},
         "hits_last": done(hits.get("last")), "hits_waiting": hits.get("waiting", 0),
         "views_waiting": views.get("waiting", 0), "views_busy": bool(views.get("busy")),

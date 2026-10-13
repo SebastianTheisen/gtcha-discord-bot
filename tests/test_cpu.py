@@ -30,3 +30,23 @@ def test_status_shows_last_and_slowest_job_with_label():
     assert summary["age"] == 5 and summary["hits_last"]["ago"] == 0 and summary["hits_waiting"] == 2
     assert summary["views_waiting"] == 4 and summary["cpu_last"]["label"] == "24191"
     assert worker_summary(None, 100) is None
+
+
+def test_timeout_kills_process_and_next_job_runs():
+    import time
+
+    from utils.cpu import CpuTimeout, cpu_status
+
+    async def run():
+        started = time.monotonic()
+        try:
+            await run_cpu(time.sleep, 30, label=24164, timeout=1)
+            raise AssertionError("kein Abbruch")
+        except CpuTimeout:
+            pass
+        took = time.monotonic() - started
+        return took, await run_cpu(sum, [1, 2, 3]), cpu_status()
+
+    took, total, st = asyncio.run(run())
+    assert took < 10 and total == 6   # abgebrochen statt 30 s gewartet, danach geht es normal weiter
+    assert st["timeouts"] >= 1 and st["last_timeout"]["label"] == "24164" and st["running"] is None

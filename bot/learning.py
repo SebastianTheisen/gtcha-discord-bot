@@ -25,8 +25,11 @@ class LearningMixin:
         sig = json.dumps([pool, inputs["shipments"], medal_t, price], sort_keys=True, default=str)
         cache = self.__dict__.setdefault("_observation_cache", {})
         if cache.get(pid, (None,))[0] != sig:
-            cache[pid] = (sig, await run_cpu(ship_odds.observations, pool, inputs["shipments"], medal_t, price,
-                                           label=pid))
+            try:
+                obs = await run_cpu(ship_odds.observations, pool, inputs["shipments"], medal_t, price, label=pid)
+            except CpuTimeout:
+                obs = []   # zu aufwendig: ohne Beobachtungen; gemerkt, damit es nicht alle 5 Minuten neu versucht
+            cache[pid] = (sig, obs)
         return {
             "observations": cache[pid][1],
             "shipments": inputs["shipments"], "medals": inputs["medals"], "moves_count": len(inputs["moves"]),
@@ -60,8 +63,15 @@ class LearningMixin:
             medal_t = {keys[t]: m["at"] for t, m in (await self.db.medal_rows(medal_thread)).items()
                        if t in keys and m.get("at") and m["source"] != "admin"} if medal_thread else {}
             deadlines = batch_deadlines(batches, medal_t)
-            joint = await run_cpu(match_shipment_history, pool, batches, VALUE_TOLERANCE, deadlines,
-                                  _int(row.get('price_coins')) or None, label=pid)
+            skipped = self.__dict__.setdefault("_reevaluate_skipped", set())
+            if pid in skipped:
+                continue
+            try:
+                joint = await run_cpu(match_shipment_history, pool, batches, VALUE_TOLERANCE, deadlines,
+                                      _int(row.get('price_coins')) or None, label=pid)
+            except CpuTimeout:
+                skipped.add(pid)   # zu aufwendig: bis zum nächsten Start nicht erneut versuchen
+                continue
             rejected = await self.db.get_rejects(pid)
             certain = [k for k in joint["certain"] if k not in rejected]
             await self.db.set_pull_tracking(pid, row.get('decided_value'), count, coins, certain, joint["groups"],

@@ -242,8 +242,14 @@ class HitsMixin:
                                    if t in keys and m.get("at") and m["source"] != "admin"}   # Admin: nur "raus"
                         deadlines = batch_deadlines(batches, medal_t)
                         price = _int((await self.db.get_banner(pid) or {}).get('price_coins')) or None
-                        joint = await run_cpu(match_shipment_history, pool, batches, VALUE_TOLERANCE,
-                                              deadlines, price, label=pid)
+                        try:
+                            joint = await run_cpu(match_shipment_history, pool, batches, VALUE_TOLERANCE,
+                                                  deadlines, price, label=pid)
+                        except CpuTimeout:
+                            # zu aufwendig (sehr viele Hits): bisheriges Ergebnis behalten, Schübe trotzdem merken -
+                            # sonst finge die Rechnung bei jeder Runde von vorn an
+                            joint = {"certain": [k for k in pulled if k in ship_keys],
+                                     "groups": [g for g in unsure if set(g["keys"]) <= ship_keys]}
                         if joint.get("off_value"):
                             logger.info(f"[HIT] {pid}: Einzelkarte über allen normalen Karten in Schub "
                                         f"{joint['off_value']} als Hit mit anderem Wert gezählt")
@@ -363,12 +369,18 @@ class HitsMixin:
         medal_keys = {keys[t] for t in await self.db.get_medals(medal_thread) if t in keys}
         n_max = max(0, drawn - shipped)
         n_min = max(0, drawn - shipping_units - pending)
-        res = await run_cpu(match_coin_conversions, pool, converted, n_min, n_max, medal_keys, label=pid)
+        try:
+            res = await run_cpu(match_coin_conversions, pool, converted, n_min, n_max, medal_keys, label=pid)
+        except CpuTimeout:
+            return None   # zu aufwendig: wie "passt zu keiner Aufteilung" - bisheriges Ergebnis bleibt
         # genauer: Schub für Schub (Packs im Fenster zwischen zwei Läufen der Seite gegen die Umwandlung im Lauf)
         conversions, moves = await self.db.coin_history(pid)
         intervals = coin_intervals(conversions, moves, total, left)
-        hist = await run_cpu(match_coin_history, pool, intervals, shipping_units, medal_keys, label=pid) \
-            if intervals else None
+        try:
+            hist = await run_cpu(match_coin_history, pool, intervals, shipping_units, medal_keys, label=pid) \
+                if intervals else None
+        except CpuTimeout:
+            hist = None
         if hist is not None:
             # beide Rechnungen sind für sich richtig: sicher ist, was eine von beiden sicher findet
             sure = list(dict.fromkeys(hist["certain"] + (res["certain"] if res else [])))
