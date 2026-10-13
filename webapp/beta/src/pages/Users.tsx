@@ -12,6 +12,25 @@ import { ask, haptic, showToast } from "../ui";
 const Signed = ({ n }: { n: number }) => <span class={`ev ${n > 0 ? "good" : n < 0 ? "bad" : ""}`}>{n > 0 ? "+" : ""}{num(n)}</span>;
 const ago = (sec?: number | null) => (sec == null ? "–" : sec < 120 ? `${sec} s` : sec < 7200 ? `${Math.round(sec / 60)} Min` : `${Math.round(sec / 3600)} Std`);
 const ok = (good: boolean) => (good ? "🟢" : "🔴");
+const secs = (x?: number | null) => (x == null ? "–" : x < 60 ? `${String(x).replace(".", ",")} s` : ago(Math.round(x)));
+const job = (j: any) => (j ? `${j.name}${j.label ? " · " + j.label : ""}` : "–");
+
+// Rechen-Prozess und Hintergrund-Warteschlangen des Bots (alle 10 s vom Bot gemeldet)
+function WorkerRows({ w }: { w: any }) {
+  if (!w) return <div class="line"><span>Rechen-Prozess</span><span class="muted">noch keine Meldung</span></div>;
+  const run = w.cpu_running;
+  return <>
+    <div class="line"><span>{ok(w.age != null && w.age < 60 && !(run && run.for > 600))} Rechen-Prozess</span>
+      <span>{run ? `rechnet seit ${ago(run.for)}` : "frei"}</span></div>
+    {run ? <div class="line"><span>Rechnet gerade</span><span>{job(run)}</span></div> : null}
+    <div class="line"><span>Wartend: Rechnen / Hits / Discord</span><span>{w.cpu_waiting} / {w.hits_waiting} / {w.views_waiting}{w.views_busy ? " ⏳" : ""}</span></div>
+    <div class="line"><span>Hit-Erkennung</span><span>{w.hits_running ? `läuft seit ${ago(w.hits_running.for)} (${w.hits_running.banners} Banner)`
+      : w.hits_last ? `${w.hits_last.banners} Banner in ${secs(w.hits_last.seconds)} · vor ${ago(w.hits_last.ago)}` : "–"}</span></div>
+    <div class="line"><span>Letzte Rechnung</span><span>{w.cpu_last ? `${job(w.cpu_last)} · ${secs(w.cpu_last.seconds)} · vor ${ago(w.cpu_last.ago)}` : "–"}</span></div>
+    <div class="line"><span>Längste Rechnung seit Start</span><span>{w.cpu_slowest ? `${job(w.cpu_slowest)} · ${secs(w.cpu_slowest.seconds)}` : "–"}</span></div>
+    <div class="line"><span>Rechnungen seit Start</span><span>{num(w.cpu_done)}{w.cpu_fallbacks ? ` · ${w.cpu_fallbacks}× im Thread` : ""} · vor {ago(w.cpu_up)} gestartet</span></div>
+  </>;
+}
 
 // Admin: System-Status, automatisch abgehakte Hits, Push an alle, Nutzer mit Statistik und Korrekturen
 export function Users() {
@@ -39,6 +58,7 @@ export function Users() {
         <summary><span>🩺 System-Status</span><span>{st ? ok(st.heartbeat_age != null && st.heartbeat_age < 900) : ""}</span></summary>
         <div class="section-body">{st ? <div class="rows">
           <div class="line"><span>{ok(st.heartbeat_age != null && st.heartbeat_age < 900)} Bot (letzter Scrape)</span><span>vor {ago(st.heartbeat_age)}</span></div>
+          <WorkerRows w={st.workers} />
           <div class="line"><span>Letzte Pack-Bewegung</span><span>{st.last_pack_move ? st.last_pack_move.slice(11, 16) : "–"}</span></div>
           <div class="line"><span>{ok(st.data_age != null && st.data_age < 120)} App-Daten</span><span>vor {ago(st.data_age)}</span></div>
           <div class="line"><span>Aktive Banner</span><span>{num(st.active_banners)}</span></div>

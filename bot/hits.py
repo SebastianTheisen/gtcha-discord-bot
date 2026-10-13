@@ -145,12 +145,34 @@ class HitsMixin:
             items = dict(pending)
             pending.clear()
             started = time.monotonic()
+            self._hit_running = {"banners": len(items), "since": round(time.time())}
             try:
                 await self._detect_pulled_hits(items)
             except Exception as e:
                 logger.warning(f"[HIT] Erkennung fehlgeschlagen: {type(e).__name__}: {e}")
-            if time.monotonic() - started > 20:
-                logger.info(f"[HIT] Erkennung für {len(items)} Banner dauerte {time.monotonic() - started:.0f}s")
+            finally:
+                seconds = round(time.monotonic() - started, 1)
+                self._hit_running = None
+                self._hit_last = {"banners": len(items), "seconds": seconds, "at": round(time.time())}
+            if seconds > 20:
+                logger.info(f"[HIT] Erkennung für {len(items)} Banner dauerte {seconds:.0f}s")
+
+    def _worker_status(self) -> dict:
+        """Stand von Rechen-Prozess, Hit-Erkennung und Discord-Warteschlange (für den System-Status der App)."""
+        return {
+            "cpu": cpu_status(),
+            "hits": {"running": getattr(self, "_hit_running", None), "last": getattr(self, "_hit_last", None),
+                     "waiting": len(self.__dict__.get("_hit_items") or {})},
+            "views": {"waiting": len(self.__dict__.get("_view_queue") or {}),
+                      "busy": bool(getattr(self, "_view_worker", None) and not self._view_worker.done())},
+        }
+
+    async def _write_worker_status(self):
+        """Alle 10 s in bot_meta (die App liest die Bot-Datenbank); "at" zeigt, ob der Bot noch lebt."""
+        try:
+            await self.db.set_meta("worker_status", json.dumps({**self._worker_status(), "at": round(time.time())}))
+        except Exception as e:
+            logger.debug(f"Rechen-Status nicht gespeichert: {e}")
 
     async def _detect_pulled_hits(self, api_items: dict):
         """Erkennt gezogene Hits an den Zählern aus pack/list.
@@ -221,7 +243,7 @@ class HitsMixin:
                         deadlines = batch_deadlines(batches, medal_t)
                         price = _int((await self.db.get_banner(pid) or {}).get('price_coins')) or None
                         joint = await run_cpu(match_shipment_history, pool, batches, VALUE_TOLERANCE,
-                                                        deadlines, price)
+                                              deadlines, price, label=pid)
                         if joint.get("off_value"):
                             logger.info(f"[HIT] {pid}: Einzelkarte über allen normalen Karten in Schub "
                                         f"{joint['off_value']} als Hit mit anderem Wert gezählt")
@@ -341,11 +363,11 @@ class HitsMixin:
         medal_keys = {keys[t] for t in await self.db.get_medals(medal_thread) if t in keys}
         n_max = max(0, drawn - shipped)
         n_min = max(0, drawn - shipping_units - pending)
-        res = await run_cpu(match_coin_conversions, pool, converted, n_min, n_max, medal_keys)
+        res = await run_cpu(match_coin_conversions, pool, converted, n_min, n_max, medal_keys, label=pid)
         # genauer: Schub für Schub (Packs im Fenster zwischen zwei Läufen der Seite gegen die Umwandlung im Lauf)
         conversions, moves = await self.db.coin_history(pid)
         intervals = coin_intervals(conversions, moves, total, left)
-        hist = await run_cpu(match_coin_history, pool, intervals, shipping_units, medal_keys) \
+        hist = await run_cpu(match_coin_history, pool, intervals, shipping_units, medal_keys, label=pid) \
             if intervals else None
         if hist is not None:
             # beide Rechnungen sind für sich richtig: sicher ist, was eine von beiden sicher findet

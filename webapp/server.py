@@ -183,6 +183,25 @@ REMIND_AFTER = 3 * 86400
 SYNC_REQUIRED_DAYS = 7   # ohne Übertragen in dieser Zeit sind Banner & Co. gesperrt (Admins ausgenommen)
 
 
+def worker_summary(st: Optional[Dict], now: float) -> Optional[Dict]:
+    """Rechen-Status des Bots (aus bot_meta) mit Zeiten als "vor/seit X Sekunden" - die App muss nur anzeigen."""
+    if not st:
+        return None
+    ago = lambda t: int(now - t) if t else None
+    cpu, hits, views = st.get("cpu") or {}, st.get("hits") or {}, st.get("views") or {}
+    done = lambda d: d and {**d, "ago": ago(d.get("at"))}
+    running = cpu.get("running")
+    return {
+        "age": ago(st.get("at")),
+        "cpu_running": running and {**running, "for": ago(running.get("since"))},
+        "cpu_waiting": cpu.get("waiting", 0), "cpu_done": cpu.get("done", 0), "cpu_fallbacks": cpu.get("fallbacks", 0),
+        "cpu_last": done(cpu.get("last")), "cpu_slowest": done(cpu.get("slowest")), "cpu_up": ago(cpu.get("since")),
+        "hits_running": hits.get("running") and {**hits["running"], "for": ago(hits["running"].get("since"))},
+        "hits_last": done(hits.get("last")), "hits_waiting": hits.get("waiting", 0),
+        "views_waiting": views.get("waiting", 0), "views_busy": bool(views.get("busy")),
+    }
+
+
 class App:
     def __init__(self, db_path: str, data_dir: str, contact: str, role: Optional[str] = None):
         self.view = BannerView(Database(db_path))
@@ -1035,7 +1054,12 @@ class App:
             learn = {}
         view = await self.bridge.discord_view()
         users = await self.bridge.known_users()
+        try:
+            workers = worker_summary(json.loads(meta.get("worker_status") or "null"), now)
+        except (ValueError, TypeError, KeyError):
+            workers = None
         return web.json_response({
+            "workers": workers,
             "heartbeat_age": age(data_dir / "heartbeat"),
             "last_pack_move": local_time(last_move), "active_banners": active,
             "data_age": int(now) - self._updated if self._updated else None,
