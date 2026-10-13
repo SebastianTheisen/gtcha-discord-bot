@@ -89,6 +89,11 @@ class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, Hits
             self._process_app_requests, 'interval', seconds=5,
             id='app_requests_job', replace_existing=True, coalesce=True, max_instances=1,
         )
+        # Stand von Rechen-Prozess und Hintergrund-Warteschlangen für den System-Status der App
+        self.scheduler.add_job(
+            self._write_worker_status, 'interval', seconds=10,
+            id='worker_status_job', replace_existing=True, coalesce=True, max_instances=1,
+        )
         # Store-Packs (nur App, nichts nach Discord): Pack-Zahlen alle 5 Minuten
         self.scheduler.add_job(
             self._scrape_store, 'cron', minute='*/5', second=50,
