@@ -252,7 +252,8 @@ class ScrapingMixin:
                                               for c in changes[:5])
                             more = f" (+{len(changes) - 5} weitere)" if len(changes) > 5 else ""
                             logger.info(f"[POOL] {pid}: {len(changes)} Kartenwert(e) geändert: {shown}{more}")
-                        await self._refresh_pool_views(pid, initial_pool=not old_pool)
+                        # Discord (Startbeitrag, Hit-Listen) im Hintergrund - darauf wartet der Scrape nicht
+                        self._queue_pool_views(pid, initial_pool=not old_pool)
 
                 _mark("pools")
 
@@ -268,7 +269,7 @@ class ScrapingMixin:
                     # Hit-Listen abgleichen (korrigiert alles, was vom Soll abweicht)
                     for pid, row in (await self.db.get_active_banners()).items():
                         if row.get('card_pool'):
-                            await self._refresh_pool_views(pid, embed=False)
+                            self._queue_pool_views(pid, embed=False)
                     # Thread-Titel abgleichen (Status: angekündigt, Endspurt, Hits raus)
                     for pid in await self.db.get_active_banners():
                         await self._sync_thread_title(pid)

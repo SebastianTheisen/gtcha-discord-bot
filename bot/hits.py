@@ -289,7 +289,7 @@ class HitsMixin:
                 # in Discord ggf. zeitversetzt (Post und Markierung in Hit-Liste/Startbeitrag)
                 await self._publish_pulls(pid, thread_id, {"pulled": state["pulled"], "unsure": state["unsure"]},
                                           text, immediate=first_look)
-                await self._refresh_pool_views(pid)
+                self._queue_pool_views(pid)
                 await self._update_probability_message(thread_id, pid)
             except Exception as e:
                 logger.warning(f"[HIT] Fehler bei Banner {pid}: {e}")
@@ -446,6 +446,26 @@ class HitsMixin:
             return [(header, chunks[0])] if chunks else []
         return [(f"{header} · Teil 1/{len(chunks)}" if i == 0 else f"🏆 **Hits im Pool** · Teil {i + 1}/{len(chunks)}",
                  chunk) for i, chunk in enumerate(chunks)]
+
+    def _queue_pool_views(self, pack_id: int, initial_pool: bool = False, embed: bool = True, force: bool = False):
+        """Startbeitrag/Hit-Listen im Hintergrund aktualisieren statt im Scrape.
+
+        Discord bremst Bearbeitungen (429); im Scrape gewartet zog das ihn über das Timeout und hielt die
+        Scrape-Sperre fest. Mehrfach angefragte Banner werden zusammengefasst (nur einmal bearbeitet).
+        """
+        pending = self.__dict__.setdefault("_view_queue", {})
+        old = pending.get(pack_id, (False, False, False))
+        pending[pack_id] = (old[0] or initial_pool, old[1] or embed, old[2] or force)
+        worker = getattr(self, "_view_worker", None)
+        if not worker or worker.done():
+            self._view_worker = asyncio.create_task(self._work_view_queue())
+
+    async def _work_view_queue(self):
+        pending = self.__dict__.setdefault("_view_queue", {})
+        while pending:
+            pack_id = next(iter(pending))   # älteste zuerst
+            initial_pool, embed, force = pending.pop(pack_id)
+            await self._refresh_pool_views(pack_id, initial_pool=initial_pool, embed=embed, force=force)
 
     async def _refresh_pool_views(self, pack_id: int, initial_pool: bool = False, embed: bool = True,
                                   force: bool = False):
