@@ -47,7 +47,7 @@ def make_bot(db, client):
         def _store_client_get(self):
             return client
 
-        async def _detect_pulled_hits(self, items):   # echte Erkennung: eigener Test unten
+        def _queue_hit_detection(self, items):   # echte Erkennung: eigener Test unten
             self.detected = sorted(items)
 
     return Bot()
@@ -179,11 +179,17 @@ def test_store_hits_detected_and_medals_like_normal_banners_without_discord(tmp_
         await bridge.init()
         client = Client()
         bot = Bot(db, bridge, client)
-        await bot._scrape_store()            # anlegen, Pool laden, erste Erkennung (nur merken)
-        await bot._scrape_store()
+
+        async def scrape():   # die Hit-Erkennung läuft im Hintergrund - im Test auf sie warten
+            await bot._scrape_store()
+            if getattr(bot, "_hit_worker", None):
+                await bot._hit_worker
+
+        await scrape()            # anlegen, Pool laden, erste Erkennung (nur merken)
+        await scrape()
         # der Diamant (Versand nur, 110.000) wird verschickt: Seite zählt ohne Steuer
         client.items[24126].update(total_sendcount=1, total_sendprice=100000, pack_count=199)
-        await bot._scrape_store()
+        await scrape()
         state = await db.get_pull_tracking(24126)
         assert state["pulled"] == ["900"]
         view = BannerView(db)

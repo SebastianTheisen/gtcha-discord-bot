@@ -25,3 +25,23 @@ def test_queue_merges_and_runs_in_background():
         return bot.calls
 
     assert asyncio.run(run()) == [(1, False, True, False), (2, True, True, False)]
+
+
+def test_hit_detection_runs_in_background_with_newest_items():
+    class HitBot(HitsMixin):
+        def __init__(self):
+            self.runs = []
+
+        async def _detect_pulled_hits(self, items):
+            await asyncio.sleep(0)
+            self.runs.append(dict(items))
+
+    async def run():
+        bot = HitBot()
+        bot._queue_hit_detection({1: "alt", 2: "b"})
+        bot._queue_hit_detection({1: "neu"})   # noch nicht gestartet: zusammengeführt, neuester Stand gilt
+        assert bot.runs == []                   # Abruf/Scrape wartet nicht
+        await bot._hit_worker
+        return bot.runs
+
+    assert asyncio.run(run()) == [{1: "neu", 2: "b"}]
