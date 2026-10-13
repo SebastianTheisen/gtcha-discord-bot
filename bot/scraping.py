@@ -2,6 +2,7 @@
 
 from bot.common import *  # noqa: F401,F403
 from utils.translate import translate_pool
+from database.db import strip_time_param
 
 
 def api_name(item: dict) -> Optional[str]:
@@ -17,7 +18,8 @@ def api_image(item: dict) -> Optional[str]:
         return None
     # mit ?v=…: tauscht GTCHA das Bild unter derselben Adresse aus, ändert sich die Version - sonst bliebe das
     # alte Bild im Zwischenspeicher der App
-    return image if image.startswith('http') else f"{BASE_URL}{image}"
+    # ?d=… ist nur die Uhrzeit des Abrufs (ändert sich jedes Mal) - weg damit, sonst gilt jedes Bild als neu
+    return strip_time_param(image if image.startswith('http') else f"{BASE_URL}{image}")
 
 
 def fill_from_api(banner, item: dict):
@@ -472,7 +474,7 @@ class ScrapingMixin:
             if changed:
                 row = await self.db.get_banner(pid)
                 if row and row.get('is_active'):
-                    await self._update_thread_embed(row)
+                    self._queue_pool_views(pid)   # Startbeitrag im Hintergrund (Discord bremst Bearbeitungen)
 
     async def _scrape_with_timeout(self):
         """Wrapper für scrape_and_post mit konfigurierbarem Timeout und Retry-Logik."""

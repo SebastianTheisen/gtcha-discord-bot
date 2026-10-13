@@ -30,6 +30,16 @@ STORE = 2
 THREAD_TABLES = ("discord_threads", "premium_threads")
 
 
+def strip_time_param(url: Optional[str]) -> Optional[str]:
+    """Bildadresse ohne ?d=…: GTCHA hängt bei jedem Abruf die aktuelle Uhrzeit an, das Bild bleibt dasselbe."""
+    if not url or "?" not in url:
+        return url
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+    parts = urlsplit(url)
+    query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k != "d"]
+    return urlunsplit(parts._replace(query=urlencode(query)))
+
+
 def store_thread_id(pack_id: int) -> int:
     """Interne "Thread-Nummer" eines Store-Packs (ohne Discord): Medaillen hängen daran wie an einem Thread.
     Negativ, damit sie nie mit einer echten Discord-ID zusammenfällt."""
@@ -661,7 +671,15 @@ class Database:
 
     async def set_image(self, pack_id: int, image_url: Optional[str]) -> bool:
         """Bannerbild wie auf der Seite setzen (None = Seite zeigt kein eigenes Bild). True bei Änderung."""
+        image_url = strip_time_param(image_url)
         async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT image_url FROM banners WHERE pack_id = ?", (pack_id,))
+            row = await cur.fetchone()
+            if row and row[0] and image_url and row[0] != image_url and strip_time_param(row[0]) == image_url:
+                # gleiches Bild, nur noch mit altem ?d=… gespeichert: still bereinigen, keine Änderung melden
+                await db.execute("UPDATE banners SET image_url = ? WHERE pack_id = ?", (image_url, pack_id))
+                await db.commit()
+                return False
             cur = await db.execute("UPDATE banners SET image_url = ? WHERE pack_id = ? AND image_url IS NOT ?",
                                    (image_url, pack_id, image_url))
             await db.commit()

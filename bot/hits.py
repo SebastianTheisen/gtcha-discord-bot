@@ -478,6 +478,9 @@ class HitsMixin:
         try:
             banner = await self.db.get_banner(pack_id)
             pool = await self.db.get_card_pool(pack_id)
+            if banner and not pool and embed:
+                await self._update_thread_embed(banner)   # ohne Kartenliste: nur der Startbeitrag
+                return
             if not banner or not pool:
                 return
             threads = await self._banner_threads(pack_id)
