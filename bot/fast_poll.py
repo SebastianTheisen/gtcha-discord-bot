@@ -41,7 +41,8 @@ class FastPollMixin:
                     ok = False
                     logger.warning(f"[SCHNELL] Fehler: {type(e).__name__}: {e}")
                 if ok:
-                    if self._fast_stats["ok"] == 0:
+                    if not getattr(self, "_fast_first_ok", False):   # nur einmal pro Start, nicht nach jedem Bericht
+                        self._fast_first_ok = True
                         logger.info("[SCHNELL] Erste Abfrage erfolgreich")
                     self._fast_stats["ok"] += 1
                     failures = 0
