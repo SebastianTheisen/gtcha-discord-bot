@@ -37,7 +37,17 @@ class ScrapingMixin:
         """Hauptfunktion: Scrapen und neue Banner posten."""
         logger.info("Scrape startet...")
         start_time = datetime.now()
+        # Phasen-Zeitmessung: zeigt im Log, wo die Scrape-Zeit draufgeht (Browser/API, Updates, Pools, Abgleich)
+        _t0 = time.monotonic()
+        _phases: list = []
+        _last = [_t0]
 
+        def _mark(label: str):
+            now = time.monotonic()
+            _phases.append(f"{label} {now - _last[0]:.1f}s")
+            _last[0] = now
+
+        self._scrape_count = getattr(self, "_scrape_count", 0) + 1
         self._rises_ignored = 0
         if await new_tor_identity():
             logger.debug("[TOR] Neue Route für diesen Scrape")
@@ -79,6 +89,7 @@ class ScrapingMixin:
                     await self._report_scrape_ok()
                 else:
                     await self._report_scrape_problem("pack/list über Tor lieferte keine Daten (Tab-Scrape lief)")
+                _mark("fetch")
 
                 # Verarbeite Banner
                 new_count = 0
@@ -148,6 +159,7 @@ class ScrapingMixin:
                     if error_count > 0:
                         logger.warning(f"   {error_count} Banner mit Fehlern")
                     await self._check_pool_switch(len(update_tasks))
+                _mark("updates")
 
                 # === NICHT-GEFUNDEN-TRACKING ===
                 # "Gefunden" = laut Seite noch Packs übrig. Ausverkaufte (0 Packs) und verschwundene
@@ -199,6 +211,13 @@ class ScrapingMixin:
                     if api_only_count > 0:
                         logger.info(f"API-Only Updates: {api_only_count} Banner außerhalb der gescrapten Kategorien aktualisiert")
 
+                # === KAUFBEDINGUNGEN und VERSAND-ZAHLEN aus pack/list ===
+                # Direkt nach den Pack-Updates und vor dem langsamen Pool-/Kartenteil: billige Rohdaten
+                # (api_log, Umwandlungen, Versand) zuerst sichern, damit ein Timeout im langsamen Teil sie
+                # nicht abschneidet und Packs/Umwandlungen nie auseinanderlaufen.
+                await self._apply_site_data(getattr(scraper, '_api_pack_data', {}) or {})
+                _mark("site")
+
                 # === KARTENPOOL (Top 5, Ø Rückgabe) ===
                 # Die Kartenliste ändert sich nicht; pro Scrape nur wenige fehlende Pools nachladen
                 # (neue Banner zuerst), damit der Scrape kurz bleibt.
@@ -235,23 +254,28 @@ class ScrapingMixin:
                             logger.info(f"[POOL] {pid}: {len(changes)} Kartenwert(e) geändert: {shown}{more}")
                         await self._refresh_pool_views(pid, initial_pool=not old_pool)
 
+                _mark("pools")
+
                 # === HIT-ERKENNUNG über die Rückgabe-Zähler aus pack/list ===
                 await self._detect_pulled_hits(getattr(scraper, '_api_pack_data', {}) or {})
 
-                # === HIT-LISTEN abgleichen (korrigiert alles, was vom Soll abweicht) ===
-                for pid, row in (await self.db.get_active_banners()).items():
-                    if row.get('card_pool'):
-                        await self._refresh_pool_views(pid, embed=False)
-
-                # === THREAD-TITEL abgleichen (Status: angekündigt, Endspurt, Hits raus) ===
-                for pid in await self.db.get_active_banners():
-                    await self._sync_thread_title(pid)
+                # === ABGLEICH über ALLE Banner (korrigiert Drift) - nur alle 5 Scrapes (~10 Min) ===
+                # Diese Voll-Sweeps liefen bisher bei jedem 2-Minuten-Scrape über ~100 Banner und haben den
+                # Scrape in die Länge gezogen (Fast-Poll verhungert, Jobs stapeln sich). Die laufenden
+                # Änderungen macht ohnehin der Schnell-Abfrager und _detect_pulled_hits; der Sweep ist nur
+                # Sicherheits-Abgleich und muss nicht alle 2 Minuten sein.
+                if self._scrape_count % 5 == 0:
+                    # Hit-Listen abgleichen (korrigiert alles, was vom Soll abweicht)
+                    for pid, row in (await self.db.get_active_banners()).items():
+                        if row.get('card_pool'):
+                            await self._refresh_pool_views(pid, embed=False)
+                    # Thread-Titel abgleichen (Status: angekündigt, Endspurt, Hits raus)
+                    for pid in await self.db.get_active_banners():
+                        await self._sync_thread_title(pid)
+                    _mark("abgleich")
 
                 # === HOT-BANNER-Rangliste (nur bei Änderung bearbeitet) ===
                 await self._update_hot_banners()
-
-                # === KAUFBEDINGUNGEN und VERSAND-ZAHLEN aus pack/list ===
-                await self._apply_site_data(getattr(scraper, '_api_pack_data', {}) or {})
 
                 # Hole alle bekannten Banner aus der DB
                 db_banner_ids = set(await self.db.get_all_active_banner_ids())
@@ -291,10 +315,12 @@ class ScrapingMixin:
                             if fixed:
                                 logger.info(f"Leer gezogen, Packs auf 0 gesetzt: {fixed}")
 
+                _mark("tracking")
                 elapsed = (datetime.now() - start_time).total_seconds()
                 if skipped_inactive > 0:
                     logger.debug(f"Übersprungen: {skipped_inactive} inaktive Banner")
-                logger.info(f"Scrape done: {elapsed:.1f}s, {new_count} neu, {deleted_count} archiviert, {expired_count} abgelaufen")
+                logger.info(f"Scrape done: {elapsed:.1f}s, {new_count} neu, {deleted_count} archiviert, "
+                            f"{expired_count} abgelaufen | Phasen: {', '.join(_phases)}")
                 touch_heartbeat()
 
                 # Erfolgs-Benachrichtigung immer senden
