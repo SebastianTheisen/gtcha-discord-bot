@@ -367,7 +367,8 @@ class App:
                     await asyncio.wait_for(waiter.wait(), STREAM_HEARTBEAT)
                     await resp.write(f"event: update\ndata: {json.dumps({'updated': self._updated})}\n\n".encode())
                 except asyncio.TimeoutError:
-                    await resp.write(b": ping\n\n")
+                    # als Ereignis (nicht als Kommentar): die Beta erkennt daran, dass die Verbindung noch lebt
+                    await resp.write(b"event: ping\ndata: {}\n\n")
         except (ConnectionResetError, asyncio.CancelledError):
             pass
         return resp

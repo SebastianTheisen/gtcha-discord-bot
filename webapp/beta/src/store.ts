@@ -140,21 +140,42 @@ function scheduleLoad(tick: boolean) {
   }, 300);
 }
 
+// Wächter: Nach einem Neustart des Servers lässt iOS die Verbindung über Tailscale manchmal einfach hängen - ohne
+// Antwort und ohne Fehler ("Verbinde…" für immer). Kommt binnen 10 s kein "hello" bzw. 60 s lang gar nichts (der
+// Server meldet sich alle 25 s), wird die Verbindung verworfen und neu aufgebaut.
+let watchdog: number | undefined;
+function watch(ms: number) {
+  clearTimeout(watchdog);
+  watchdog = window.setTimeout(() => {
+    if (!source) return;
+    source.close();
+    source = null;
+    live.value = "offline";
+    retry = window.setTimeout(connectLive, 2000);
+  }, ms);
+}
+
 export function connectLive() {
   source?.close();
   clearTimeout(retry);
+  clearTimeout(watchdog);
   if (document.hidden) return;
   live.value = "connecting";
   source = new EventSource(`api/stream?t=${encodeURIComponent(getToken())}`);
+  watch(10000);
   source.addEventListener("hello", () => {
     live.value = "live";
+    watch(60000);
     if (Date.now() - lastLoad > 5000) scheduleLoad(false);   // gerade erst geladen: nicht doppelt
   });
+  source.addEventListener("ping", () => watch(60000));
   source.addEventListener("update", () => {
     live.value = "live";
+    watch(60000);
     scheduleLoad(true);
   });
   source.onerror = () => {
+    clearTimeout(watchdog);
     live.value = "offline";
     source?.close();
     source = null;
@@ -168,6 +189,7 @@ export function connectLive() {
 
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
+    clearTimeout(watchdog);
     source?.close();
     source = null;
   } else {
