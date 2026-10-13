@@ -52,6 +52,11 @@ CREATE TABLE IF NOT EXISTS bookmarklet_versions (discord_user_id TEXT PRIMARY KE
 CREATE TABLE IF NOT EXISTS auto_claims (
     discord_user_id TEXT, card_key TEXT, pack_id INTEGER, tier TEXT, request_id INTEGER, created_at TEXT,
     PRIMARY KEY (discord_user_id, card_key));
+-- Medaillen-Wünsche werden alle 5 s nach "pending" abgefragt, der Rest je Person bzw. Banner
+CREATE INDEX IF NOT EXISTS medal_requests_status ON medal_requests (status, id);
+CREATE INDEX IF NOT EXISTS user_imports_user ON user_imports (discord_user_id, id);
+CREATE INDEX IF NOT EXISTS devices_user ON devices (discord_user_id);
+CREATE INDEX IF NOT EXISTS auto_claims_pack ON auto_claims (pack_id);
 """
 MAX_IMPORT_BYTES = 40_000_000   # "Komplett" mit hunderten Münzseiten
 # Was Discord zu sehen bekommt (App und VPS haben immer alles):
