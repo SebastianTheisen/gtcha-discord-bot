@@ -8,6 +8,7 @@ Start: python -m webapp.server
 
 import asyncio
 import hashlib
+import multiprocessing
 import json
 import os
 import re
@@ -15,6 +16,8 @@ import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from typing import Dict, List, Optional
 
 import aiohttp
@@ -206,6 +209,24 @@ def worker_summary(st: Optional[Dict], now: float) -> Optional[Dict]:
     }
 
 
+def _view_job(db_path: str, what: str, arg=None):
+    """Läuft in einem eigenen Prozess: Banner-Daten berechnen (Schätzungen, Versand-Erklärungen, Wahrscheinlichkeiten).
+
+    In der Event-Schleife des Servers blockierte diese Rechnung bei großen Bannern (24164: 284 Versand-Hits) den
+    ganzen Server - Live-Verbindung, Bilder und Anfragen bekamen so lange keine Antwort ("Verbinde…")."""
+    view = BannerView(Database(db_path))
+    if what == "all":
+        return asyncio.run(view.all_banners(with_pool=True))
+    if what == "archived":
+        return asyncio.run(view.archived_banners())
+    if what == "detail":
+        return asyncio.run(view.detail(arg))
+    raise ValueError(what)
+
+
+VIEW_WORKERS = int(os.getenv("WEBAPP_VIEW_WORKERS") or "2")
+
+
 class App:
     def __init__(self, db_path: str, data_dir: str, contact: str, role: Optional[str] = None):
         self.view = BannerView(Database(db_path))
@@ -222,13 +243,36 @@ class App:
         self._digest = ""                       # Fingerabdruck der Banner-Daten: ändert er sich, gibt es ein Live-Update
         self._changed = asyncio.Event()
         self.beta = (role or ROLE) == "beta"
+        self._view_pool = None
+
+    async def _in_process(self, what: str, arg=None):
+        """View-Rechnung im eigenen Prozess (Server bleibt ansprechbar); fällt er aus, einmal direkt."""
+        if os.getenv("WEBAPP_VIEW_INLINE") == "1":   # Tests ohne Extra-Prozess
+            return await getattr(self.view, {"all": "all_banners", "archived": "archived_banners",
+                                             "detail": "detail"}[what])(*([True] if what == "all" else
+                                                                         [arg] if what == "detail" else []))
+        if self._view_pool is None:
+            self._view_pool = ProcessPoolExecutor(max_workers=VIEW_WORKERS,
+                                                  mp_context=multiprocessing.get_context("spawn"))
+        started = time.monotonic()
+        try:
+            result = await asyncio.get_running_loop().run_in_executor(
+                self._view_pool, _view_job, self.view.db.db_path, what, arg)
+        except BrokenProcessPool:
+            logger.warning("Rechen-Prozess der App ausgefallen - starte neu")
+            self._view_pool = None
+            return await self._in_process(what, arg)
+        took = time.monotonic() - started
+        if took > 5:
+            logger.info(f"Daten ({what}{' ' + str(arg) if arg else ''}) berechnet in {took:.1f}s")
+        return result
 
     async def _compute(self, only_if_missing: bool = False) -> list:
         async with self._lock:
             if only_if_missing and self._data is not None:
                 return self._data
             started = time.monotonic()
-            self._data = await self.view.all_banners(with_pool=True)
+            self._data = await self._in_process("all")
             self._updated = int(time.time())
             digest = hashlib.sha1(json.dumps(
                 [(b.get("id"), b.get("remaining"), b.get("status"), b.get("ev_pct"), b.get("ship_cards"),
@@ -283,7 +327,7 @@ class App:
                 if time.monotonic() - getattr(self, "_archive_recorded", -1e9) > 1800:
                     self._archive_recorded = time.monotonic()
                     try:
-                        await self.accuracy.record(await self.view.archived_banners())
+                        await self.accuracy.record(await self._in_process("archived"))
                     except Exception as e:
                         logger.debug(f"Archiv für Treffsicherheit nicht gespeichert: {e}")
                 if not self._syncing:
@@ -306,7 +350,7 @@ class App:
             return locked
         now = time.monotonic()
         if not getattr(self, "_archive", None) or now - self._archive[0] > 60:
-            data = await self.view.archived_banners()
+            data = await self._in_process("archived")
             self._archive = (now, [{k: v for k, v in b.items() if k not in POOL_KEYS} for b in data])
         return web.json_response({"banners": self._archive[1], "updated": int(time.time())})
 
@@ -333,7 +377,7 @@ class App:
             pack_id = int(request.match_info["id"])
         except ValueError:
             raise web.HTTPBadRequest()
-        data = await self.view.detail(pack_id)
+        data = await self._in_process("detail", pack_id)
         if not data:
             raise web.HTTPNotFound()
         data.pop("hit_keys_detected", None)
