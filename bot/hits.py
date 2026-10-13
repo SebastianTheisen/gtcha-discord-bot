@@ -4,6 +4,10 @@ from bot.common import *  # noqa: F401,F403
 from database.db import STORE, store_thread_id
 
 
+# so viele Banner werden gleichzeitig ausgewertet (die Rechnungen selbst teilen sich die CPU-Arbeiter)
+HIT_PARALLEL = int(os.getenv("HIT_PARALLEL") or "8")
+
+
 class HitsMixin:
     async def _hit_chance_text(self, banner: dict, thread_data: Optional[dict], thread_id: int) -> str:
         """Text der 🎯-Nachricht: Chance auf mindestens einen Hit bei 1 / 10 / 50 Zügen."""
@@ -127,42 +131,71 @@ class HitsMixin:
             await self.db.set_value_alert_sent(thread.id, False)
 
     def _queue_hit_detection(self, api_items: dict):
-        """Hit-Erkennung im Hintergrund statt im Abruf/Scrape.
+        """Hit-Erkennung im Hintergrund, je Banner ein eigener Task (parallel, höchstens HIT_PARALLEL gleichzeitig).
 
-        Nach jedem Start rechnet sie die Umwandlungen aller Coin-Banner neu (aufwendige Kombinatorik) und lief so
-        über das Zeitlimit des Schnell-Abfragers: abgebrochen, nichts gemerkt, nächste Runde wieder von vorn. Der
-        Task wird nie abgebrochen; kommen währenddessen neue Daten, gilt je Banner der neueste Stand.
+        Ein Banner mit aufwendiger Rechnung (24164: 284 Versand-Hits) hält so die anderen nicht auf. Kommen neue
+        Daten, während ein Banner noch läuft, wird er danach mit dem neuesten Stand erneut ausgewertet - nie doppelt
+        gleichzeitig. Abruf und Scrape warten nicht darauf.
         """
         pending = self.__dict__.setdefault("_hit_items", {})
-        pending.update(api_items)
-        worker = getattr(self, "_hit_worker", None)
-        if not worker or worker.done():
-            self._hit_worker = asyncio.create_task(self._work_hit_detection())
+        tasks = self.__dict__.setdefault("_hit_tasks", {})
+        for pid, item in api_items.items():
+            pending[pid] = item
+            task = tasks.get(pid)
+            if not task or task.done():
+                tasks[pid] = asyncio.create_task(self._hit_banner(pid))
 
-    async def _work_hit_detection(self):
+    def _hit_slots(self) -> asyncio.Semaphore:
+        loop = asyncio.get_running_loop()
+        slots = self.__dict__.get("_hit_sem")
+        if not slots or slots[0] is not loop:
+            slots = self._hit_sem = (loop, asyncio.Semaphore(HIT_PARALLEL))
+        return slots[1]
+
+    async def _hit_banner(self, pid: int):
         pending = self.__dict__.setdefault("_hit_items", {})
-        while pending:
-            items = dict(pending)
-            pending.clear()
-            started = time.monotonic()
-            self._hit_running = {"banners": len(items), "since": round(time.time())}
-            try:
-                await self._detect_pulled_hits(items)
-            except Exception as e:
-                logger.warning(f"[HIT] Erkennung fehlgeschlagen: {type(e).__name__}: {e}")
-            finally:
-                seconds = round(time.monotonic() - started, 1)
-                self._hit_running = None
-                self._hit_last = {"banners": len(items), "seconds": seconds, "at": round(time.time())}
-            if seconds > 20:
-                logger.info(f"[HIT] Erkennung für {len(items)} Banner dauerte {seconds:.0f}s")
+        running = self.__dict__.setdefault("_hit_running", {})
+        try:
+            async with self._hit_slots():
+                while pid in pending:   # neuester Stand; kam während der Rechnung Neues, gleich noch einmal
+                    item = pending.pop(pid)
+                    started = time.monotonic()
+                    running[pid] = round(time.time())
+                    try:
+                        await self._detect_pulled_hits({pid: item})
+                    except Exception as e:
+                        logger.warning(f"[HIT] Erkennung {pid} fehlgeschlagen: {type(e).__name__}: {e}")
+                    finally:
+                        running.pop(pid, None)
+                        seconds = round(time.monotonic() - started, 1)
+                        self._hit_last = {"banners": 1, "label": str(pid), "seconds": seconds, "at": round(time.time())}
+                        self._hit_done = getattr(self, "_hit_done", 0) + 1
+                    if seconds > 20:
+                        logger.info(f"[HIT] Erkennung {pid} dauerte {seconds:.0f}s")
+        finally:
+            tasks = self.__dict__.get("_hit_tasks") or {}
+            if tasks.get(pid) is asyncio.current_task():
+                tasks.pop(pid, None)
+
+    async def _wait_hit_detection(self):
+        """Bis alle vorgemerkten Banner ausgewertet sind (Tests, Werkzeuge)."""
+        while True:
+            tasks = [t for t in (self.__dict__.get("_hit_tasks") or {}).values() if not t.done()]
+            if not tasks:
+                return
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     def _worker_status(self) -> dict:
         """Stand von Rechen-Prozess, Hit-Erkennung und Discord-Warteschlange (für den System-Status der App)."""
+        running = self.__dict__.get("_hit_running") or {}
+        oldest = min(running.items(), key=lambda kv: kv[1]) if running else None
+        pending = self.__dict__.get("_hit_items") or {}
         return {
             "cpu": cpu_status(),
-            "hits": {"running": getattr(self, "_hit_running", None), "last": getattr(self, "_hit_last", None),
-                     "waiting": len(self.__dict__.get("_hit_items") or {})},
+            "hits": {"running": ({"banners": len(running), "since": oldest[1], "label": str(oldest[0])}
+                                 if oldest else None),
+                     "last": getattr(self, "_hit_last", None), "done": getattr(self, "_hit_done", 0),
+                     "waiting": len([p for p in pending if p not in running])},
             "views": {"waiting": len(self.__dict__.get("_view_queue") or {}),
                       "busy": bool(getattr(self, "_view_worker", None) and not self._view_worker.done())},
         }
