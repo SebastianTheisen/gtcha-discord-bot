@@ -95,5 +95,5 @@ class FastPollMixin:
             await asyncio.gather(*updates, return_exceptions=True)
             await self._check_pool_switch(len(rows))
 
-        await self._detect_pulled_hits(items)
+        self._queue_hit_detection(items)   # im Hintergrund, nicht im Zeitlimit des Abrufs
         return True

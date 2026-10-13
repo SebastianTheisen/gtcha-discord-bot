@@ -260,12 +260,12 @@ class ScrapingMixin:
                 _mark("pools")
 
                 # === HIT-ERKENNUNG über die Rückgabe-Zähler aus pack/list ===
-                await self._detect_pulled_hits(getattr(scraper, '_api_pack_data', {}) or {})
+                self._queue_hit_detection(getattr(scraper, '_api_pack_data', {}) or {})   # im Hintergrund
 
                 # === ABGLEICH über ALLE Banner (korrigiert Drift) - nur alle 5 Scrapes (~10 Min) ===
                 # Diese Voll-Sweeps liefen bisher bei jedem 2-Minuten-Scrape über ~100 Banner und haben den
                 # Scrape in die Länge gezogen (Fast-Poll verhungert, Jobs stapeln sich). Die laufenden
-                # Änderungen macht ohnehin der Schnell-Abfrager und _detect_pulled_hits; der Sweep ist nur
+                # Änderungen macht ohnehin der Schnell-Abfrager und die Hit-Erkennung; der Sweep ist nur
                 # Sicherheits-Abgleich und muss nicht alle 2 Minuten sein.
                 if self._scrape_count % 5 == 0:
                     # Hit-Listen abgleichen (korrigiert alles, was vom Soll abweicht)

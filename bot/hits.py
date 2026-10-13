@@ -126,6 +126,32 @@ class HitsMixin:
             # Hysterese: erst deutlich unter 100 % zurücksetzen, damit es nicht hin und her springt
             await self.db.set_value_alert_sent(thread.id, False)
 
+    def _queue_hit_detection(self, api_items: dict):
+        """Hit-Erkennung im Hintergrund statt im Abruf/Scrape.
+
+        Nach jedem Start rechnet sie die Umwandlungen aller Coin-Banner neu (aufwendige Kombinatorik) und lief so
+        über das Zeitlimit des Schnell-Abfragers: abgebrochen, nichts gemerkt, nächste Runde wieder von vorn. Der
+        Task wird nie abgebrochen; kommen währenddessen neue Daten, gilt je Banner der neueste Stand.
+        """
+        pending = self.__dict__.setdefault("_hit_items", {})
+        pending.update(api_items)
+        worker = getattr(self, "_hit_worker", None)
+        if not worker or worker.done():
+            self._hit_worker = asyncio.create_task(self._work_hit_detection())
+
+    async def _work_hit_detection(self):
+        pending = self.__dict__.setdefault("_hit_items", {})
+        while pending:
+            items = dict(pending)
+            pending.clear()
+            started = time.monotonic()
+            try:
+                await self._detect_pulled_hits(items)
+            except Exception as e:
+                logger.warning(f"[HIT] Erkennung fehlgeschlagen: {type(e).__name__}: {e}")
+            if time.monotonic() - started > 20:
+                logger.info(f"[HIT] Erkennung für {len(items)} Banner dauerte {time.monotonic() - started:.0f}s")
+
     async def _detect_pulled_hits(self, api_items: dict):
         """Erkennt gezogene Hits an den Zählern aus pack/list.
 

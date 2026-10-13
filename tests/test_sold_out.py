@@ -42,7 +42,7 @@ def test_fast_poll_takes_over_zero_only_after_few_packs():
         async def _create_banners_from_api(self, items): pass
         async def _announce_started_banners(self, items): pass
         async def _check_pool_switch(self, n): pass
-        async def _detect_pulled_hits(self, items): pass
+        def _queue_hit_detection(self, items): pass
         async def _apply_site_data(self, items): pass
 
         async def _process_banner_update(self, banner, row, semaphore):

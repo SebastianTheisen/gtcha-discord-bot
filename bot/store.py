@@ -44,7 +44,7 @@ class StoreMixin:
             await self._save_store_items(items)
             await self._load_store_pools(client)
             # gezogene Hits erkennen wie bei normalen Bannern (Versand/Umwandlung) - ohne Discord
-            await self._detect_pulled_hits({pid: it for pid, it in items.items() if _int(it.get('pack_count')) > 0})
+            self._queue_hit_detection({pid: it for pid, it in items.items() if _int(it.get('pack_count')) > 0})
         except Exception as e:
             logger.warning(f"[STORE] Lauf fehlgeschlagen: {type(e).__name__}: {e}")
         finally:
