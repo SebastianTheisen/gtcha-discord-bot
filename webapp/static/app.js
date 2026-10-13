@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 134;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 135;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -1730,16 +1730,16 @@ async function showUsers() {
   const secs = (x) => (x == null ? "–" : x < 60 ? `${String(x).replace(".", ",")} s` : ago(Math.round(x)));
   const job = (j) => (j ? `${esc(j.name)}${j.label ? " · " + esc(j.label) : ""}` : "–");
   const workerHtml = w ? `
-      <div class="line"><span>${ok(w.age != null && w.age < 60 && !(w.cpu_running && w.cpu_running.for > (w.cpu_limit || 60) + 30))} Rechen-Prozess</span>
-        <span>${w.cpu_running ? `rechnet seit ${ago(w.cpu_running.for)}` : "frei"}</span></div>
-      ${w.cpu_running ? `<div class="line"><span>Rechnet gerade</span><span>${job(w.cpu_running)}</span></div>` : ""}
+      <div class="line"><span>${ok(w.age != null && w.age < 60)} Rechen-Prozess</span>
+        <span>${(w.cpu_running_all || []).length ? `${w.cpu_running_all.length} von ${w.cpu_workers} Arbeitern rechnen` : `frei · ${w.cpu_workers} Arbeiter`}</span></div>
+      ${(w.cpu_running_all || []).map((j) => `<div class="line"><span class="muted">· ${job(j)}</span><span>seit ${ago(j.for)}</span></div>`).join("")}
       <div class="line"><span>Wartend: Rechnen / Hits / Discord</span><span>${w.cpu_waiting} / ${w.hits_waiting} / ${w.views_waiting}${w.views_busy ? " ⏳" : ""}</span></div>
-      <div class="line"><span>Hit-Erkennung</span><span>${w.hits_running ? `läuft seit ${ago(w.hits_running.for)} (${w.hits_running.banners} Banner)`
-        : w.hits_last ? `${w.hits_last.banners} Banner in ${secs(w.hits_last.seconds)} · vor ${ago(w.hits_last.ago)}` : "–"}</span></div>
+      <div class="line"><span>Hit-Erkennung</span><span>${w.hits_running ? `${w.hits_running.banners} Banner laufen · längste ${esc(w.hits_running.label || "")} seit ${ago(w.hits_running.for)}`
+        : w.hits_last ? `frei · zuletzt ${esc(w.hits_last.label || "")} in ${secs(w.hits_last.seconds)} · vor ${ago(w.hits_last.ago)}` : "–"}</span></div>
       <div class="line"><span>Letzte Rechnung</span><span>${w.cpu_last ? `${job(w.cpu_last)} · ${secs(w.cpu_last.seconds)} · vor ${ago(w.cpu_last.ago)}` : "–"}</span></div>
       <div class="line"><span>Längste Rechnung seit Start</span><span>${w.cpu_slowest ? `${job(w.cpu_slowest)} · ${secs(w.cpu_slowest.seconds)}` : "–"}</span></div>
-      ${w.cpu_timeouts ? `<div class="line"><span>Abgebrochen (zu aufwendig, ${w.cpu_limit || 60} s)</span><span>${num(w.cpu_timeouts)}× · zuletzt ${job(w.cpu_last_timeout)} · vor ${ago(w.cpu_last_timeout && w.cpu_last_timeout.ago)}</span></div>` : ""}
-      <div class="line"><span>Rechnungen seit Start</span><span>${num(w.cpu_done)}${w.cpu_fallbacks ? ` · ${w.cpu_fallbacks}× im Thread` : ""} · vor ${ago(w.cpu_up)} gestartet</span></div>`
+      ${w.cpu_timeouts ? `<div class="line"><span>Abgebrochen (Zeitlimit ${w.cpu_limit || "–"} s)</span><span>${num(w.cpu_timeouts)}× · zuletzt ${job(w.cpu_last_timeout)} · vor ${ago(w.cpu_last_timeout && w.cpu_last_timeout.ago)}</span></div>` : ""}
+      <div class="line"><span>Seit Start: Rechnungen / Banner-Auswertungen</span><span>${num(w.cpu_done)} / ${num(w.hits_done || 0)}${w.cpu_fallbacks ? ` · ${w.cpu_fallbacks}× neu gestartet` : ""} · vor ${ago(w.cpu_up)}</span></div>`
     : `<div class="line"><span>Rechen-Prozess</span><span class="muted">noch keine Meldung</span></div>`;
   const statusHtml = st ? `<div class="rows">
       <div class="line"><span>${ok(st.heartbeat_age != null && st.heartbeat_age < 900)} Bot (letzter Scrape)</span><span>vor ${ago(st.heartbeat_age)}</span></div>

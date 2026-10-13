@@ -182,8 +182,7 @@ def test_store_hits_detected_and_medals_like_normal_banners_without_discord(tmp_
 
         async def scrape():   # die Hit-Erkennung läuft im Hintergrund - im Test auf sie warten
             await bot._scrape_store()
-            if getattr(bot, "_hit_worker", None):
-                await bot._hit_worker
+            await bot._wait_hit_detection()
 
         await scrape()            # anlegen, Pool laden, erste Erkennung (nur merken)
         await scrape()

@@ -27,21 +27,32 @@ def test_queue_merges_and_runs_in_background():
     assert asyncio.run(run()) == [(1, False, True, False), (2, True, True, False)]
 
 
-def test_hit_detection_runs_in_background_with_newest_items():
+def test_hit_detection_per_banner_in_parallel_with_newest_items():
+    """Je Banner ein Task: ein langsamer Banner hält die anderen nicht auf; neuester Stand gilt, nie doppelt."""
     class HitBot(HitsMixin):
         def __init__(self):
             self.runs = []
+            self.slow = asyncio.Event()
 
         async def _detect_pulled_hits(self, items):
-            await asyncio.sleep(0)
-            self.runs.append(dict(items))
+            (pid, item), = items.items()
+            if pid == 1 and item == "neu":
+                await self.slow.wait()          # Banner 1 rechnet lange
+            self.runs.append((pid, item))
 
     async def run():
         bot = HitBot()
         bot._queue_hit_detection({1: "alt", 2: "b"})
-        bot._queue_hit_detection({1: "neu"})   # noch nicht gestartet: zusammengeführt, neuester Stand gilt
+        bot._queue_hit_detection({1: "neu"})   # noch nicht gestartet: neuester Stand, nur einmal
         assert bot.runs == []                   # Abruf/Scrape wartet nicht
-        await bot._hit_worker
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert bot.runs == [(2, "b")]           # Banner 2 ist fertig, obwohl Banner 1 noch rechnet
+        st = bot._worker_status()["hits"]
+        assert st["running"]["banners"] == 1 and st["running"]["label"] == "1"
+        bot._queue_hit_detection({1: "danach"})   # läuft gerade: danach erneut mit neuestem Stand
+        bot.slow.set()
+        await bot._wait_hit_detection()
         return bot.runs
 
-    assert asyncio.run(run()) == [{1: "neu", 2: "b"}]
+    assert asyncio.run(run()) == [(2, "b"), (1, "neu"), (1, "danach")]

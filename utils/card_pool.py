@@ -371,6 +371,40 @@ def _any_bit(mask: int, lo: int, hi: int) -> bool:
     return (mask >> lo) & ((1 << (hi - lo + 1)) - 1) != 0
 
 
+def _suffix_reach(pool: Dict, classes: List[Dict], count: int, upper: int, tol: float) -> Dict:
+    """Für die frühe Prüfung in _batch_options: bits[i][r] hat Bit s gesetzt, wenn genau r Karten aus den Klassen
+    ab i und normalen Karten zusammen eine Untergrenze von etwa s·q Coins ergeben können.
+
+    Je Karte zählt die Untergrenze ihres Werts (min·(1-tol)), abgerundet auf Vielfache von q (damit die Bitmasken
+    klein bleiben). slack deckt den Abstand zur Obergrenze ab (je Karte höchstens 4·tol ihres Werts)."""
+    q = max(1, upper // 200_000)
+    limit = upper // q + count + 2
+    mask = (1 << (limit + 1)) - 1
+    # normale Karten: genau r Stück
+    normal = [1] + [0] * count
+    for value_str, copies in (pool.get("normal_values") or {}).items():
+        v = int(value_str)
+        if v <= 0 or v > upper:
+            continue
+        step = int(v * (1 - tol)) // q
+        for _ in range(min(copies, count)):
+            for j in range(count, 0, -1):
+                normal[j] |= (normal[j - 1] << step) & mask
+    bits = [None] * (len(classes) + 1)
+    bits[len(classes)] = normal
+    for i in range(len(classes) - 1, -1, -1):
+        cls, nxt = classes[i], bits[i + 1]
+        step = int(cls["min"] * (1 - tol)) // q
+        row = list(nxt)
+        for r in range(1, count + 1):
+            for m in range(1, min(len(cls["keys"]), r) + 1):
+                if m * step > limit:
+                    break
+                row[r] |= (nxt[r - m] << (m * step)) & mask
+        bits[i] = row
+    return {"bits": bits, "q": q, "slack": 5 * tol * upper}
+
+
 def _batch_options(pool: Dict, classes: List[Dict], count: int, value: int, tol: float) -> Optional[List[tuple]]:
     """Alle Aufteilungen eines Schubs (count Karten, Kartenwert `value`) als Hits je Klasse.
 
@@ -379,21 +413,38 @@ def _batch_options(pool: Dict, classes: List[Dict], count: int, value: int, tol:
     upper = int(value / (1 - tol)) + 2
     sums = _normal_sums(pool, count, upper)
     possible: List[tuple] = []
+    reach = _suffix_reach(pool, classes, count, upper, tol)
+    q, slack = reach["q"], reach["slack"]
 
-    def walk(i: int, taken: List[int], lo: float, hi: float, n: int):
+    bits = reach["bits"]
+    n_classes = len(classes)
+    taken = [0] * n_classes   # eine Liste für die ganze Suche (früher je Schritt eine Kopie aller Klassen)
+    lo_step = [c["min"] * (1 - tol) for c in classes]
+    hi_step = [c["max"] * (1 + tol) for c in classes]
+    sizes = [len(c["keys"]) for c in classes]
+
+    def walk(i: int, lo: float, hi: float, n: int):
         if lo > upper or len(possible) > 50000:
             return
-        if i == len(classes):
+        # Früh aussortieren: Ist der Schub-Wert mit den restlichen Karten (Klassen ab i + normale Karten, genau
+        # count - n Stück) überhaupt noch erreichbar? Sonst ist jeder weitere Zweig umsonst (bei 126 Wertklassen
+        # sonst Billionen Kombinationen, 24164). Die Prüfung ist großzügig - eine gültige Aufteilung fällt nie weg.
+        r = count - n
+        if not _any_bit(bits[i][r], int((value - hi - slack) // q) - 2 * r - 2, int((value - lo + 4) // q) + r + 2):
+            return
+        if i == n_classes or r == 0:
+            # alle Karten vergeben: die übrigen Klassen bleiben 0 (nicht einzeln durchlaufen)
             # Jede Karte darf um ±tol abweichen: hits_lo + N·(1-tol) <= value <= hits_hi + N·(1+tol)
-            k = count - n
-            if _any_bit(sums[k], int((value - hi) / (1 + tol)), int((value - lo) / (1 - tol)) + 1):
+            if _any_bit(sums[r], int((value - hi) / (1 + tol)), int((value - lo) / (1 - tol)) + 1):
                 possible.append(tuple(taken))
             return
-        cls = classes[i]
-        for m in range(0, min(len(cls["keys"]), count - n) + 1):
-            walk(i + 1, taken + [m], lo + m * cls["min"] * (1 - tol), hi + m * cls["max"] * (1 + tol), n + m)
+        a, b = lo_step[i], hi_step[i]
+        for m in range(0, min(sizes[i], r) + 1):
+            taken[i] = m
+            walk(i + 1, lo + m * a, hi + m * b, n + m)
+        taken[i] = 0
 
-    walk(0, [], 0.0, 0.0, 0)
+    walk(0, 0.0, 0.0, 0)
     return None if len(possible) > 50000 else possible
 
 
@@ -428,7 +479,10 @@ def _ship_options(pool: Dict, classes: List[Dict], count: int, value: int, tol: 
             return None
         found = [t for t in found if ok(t)]
         if not found and classes and value <= ORDER_MAX_VALUE:
-            orders = [t for t in _order_class_options(p, classes, count, value) if ok(t)]
+            orders = _order_class_options(p, classes, count, value)
+            if orders is None:
+                return None   # zu viele Möglichkeiten (riesiger Banner) - wie bei den Karten-Aufteilungen
+            orders = [t for t in orders if ok(t)]
             found = orders if not hits_needed or any(any(t) for t in orders) else []
         return found
     valuable = _valuable_pool(pool, price)
@@ -529,40 +583,71 @@ ORDER_MAX_HITS = 4          # so viele Versand-Hits höchstens in einem Schub (m
 
 def order_options(pool: Dict, orders: int, value: int, tol: Optional[int] = None,
                   max_normals: int = ORDER_MAX_NORMALS, sums: Optional[List[int]] = None,
-                  prefer_hits: bool = True) -> List[frozenset]:
+                  prefer_hits: bool = True, limit: Optional[int] = None) -> Optional[List[frozenset]]:
     """Modell "Aufträge": total_sendcount zählt Versand-Aufträge, nicht Karten.
 
     Ein Auftrag enthält mindestens eine, aber beliebig viele Karten; orders = 0 heißt, Karten kamen zu einem
     bestehenden Auftrag dazu. Dafür muss der Wert (fast) exakt aufgehen - die Seite zählt ganze Coins.
     value = Kartenwert (Versandsumme × 1,1). Gibt alle möglichen Mengen verschickter Versand-Hits zurück
     (leere Menge = nur normale Karten möglich); leere Liste = gar nicht erklärbar.
+    limit: mehr Erklärungen als das -> None (zu viele Möglichkeiten, wie bei _batch_options).
     """
     hits = [u for u in tracked_units(pool) if u.get("shipping_only")]
     tol = tol if tol is not None else max(2, round(value * 0.001))
     if sums is None:
         sums = (_pool_sums(pool, value + tol) if max_normals == ORDER_MAX_NORMALS
                 else _normal_sums(pool, max_normals, value + tol))
+    # "irgendeine Anzahl normaler Karten ab j" als eine Bitmaske (statt bis zu 60 Prüfungen je Kombination)
+    from_j = [0] * (len(sums) + 1)
+    for j in range(len(sums) - 1, -1, -1):
+        from_j[j] = from_j[j + 1] | sums[j]
+    values = [u["value"] for u in hits]
     found, hits_only = [], []
-    for r in range(0, min(len(hits), ORDER_MAX_HITS) + 1):
-        for combo in combinations(hits, r):
-            rest = value - sum(u["value"] for u in combo)
-            if rest < -tol:
+    too_many = [False]
+
+    def check(combo: List[int], total: int):
+        r = len(combo)
+        rest = value - total
+        keys = frozenset(hits[i]["key"] for i in combo)
+        if r and r >= orders and abs(rest) <= tol:
+            hits_only.append(keys)
+        need = max(orders - r, 0)       # mindestens eine Karte je Auftrag
+        if r == 0:
+            need = max(need, 1)            # ganz ohne Hit braucht der Wert mindestens eine normale Karte
+        if need < len(from_j) and _any_bit(from_j[need], rest - tol, rest + tol):
+            found.append(keys)
+            if limit and len(found) > limit:
+                too_many[0] = True
+
+    def walk(start: int, combo: List[int], total: int, r: int):
+        # gleiche Reihenfolge wie itertools.combinations; Summe schon über dem Wert -> jede Erweiterung auch
+        if too_many[0]:
+            return
+        if len(combo) == r:
+            check(combo, total)
+            return
+        for i in range(start, len(hits) - (r - len(combo)) + 1):
+            t = total + values[i]
+            if value - t < -tol:
                 continue
-            keys = frozenset(u["key"] for u in combo)
-            if r and r >= orders and abs(rest) <= tol:
-                hits_only.append(keys)
-            need = max(orders - r, 0)       # mindestens eine Karte je Auftrag
-            if r == 0:
-                need = max(need, 1)            # ganz ohne Hit braucht der Wert mindestens eine normale Karte
-            for j in range(need, len(sums)):
-                if _any_bit(sums[j], rest - tol, rest + tol):
-                    found.append(keys)
-                    break
+            combo.append(i)
+            walk(i + 1, combo, t, r)
+            combo.pop()
+            if too_many[0]:
+                return
+
+    for r in range(0, min(len(hits), ORDER_MAX_HITS) + 1):
+        walk(0, [], 0, r)
+        if too_many[0]:
+            return None
     # Normale Karten wandelt praktisch jeder um, verschickt werden die großen Hits: geht der Schub allein mit
     # Versand-Hits auf, zählen nur diese Erklärungen; normale Karten nur, wenn es ohne sie nicht geht
     if hits_only and prefer_hits:
         return list(dict.fromkeys(hits_only))
     return found
+
+
+ORDER_LIMIT = 200_000   # mehr Erklärungen als Versand-Aufträge: zu viele Möglichkeiten (nur bei riesigen Bannern)
 
 
 def _order_class_options(pool: Dict, classes: List[Dict], orders: int, value: int) -> List[tuple]:
@@ -574,9 +659,9 @@ def _order_class_options(pool: Dict, classes: List[Dict], orders: int, value: in
     if key not in _ORDER_CACHE:
         if len(_ORDER_CACHE) > 5000:
             _ORDER_CACHE.clear()
-        found = order_options(pool, orders, value)
-        _ORDER_CACHE[key] = sorted({tuple(sum(1 for k in combo if k in c["keys"]) for c in classes)
-                                    for combo in found})
+        found = order_options(pool, orders, value, limit=ORDER_LIMIT)
+        _ORDER_CACHE[key] = None if found is None else sorted(
+            {tuple(sum(1 for k in combo if k in c["keys"]) for c in classes) for combo in found})
     return _ORDER_CACHE[key]
 
 
@@ -752,12 +837,19 @@ def match_shipment_history(pool: Dict, batches: List[List], tol: float = VALUE_T
                     result["off_value"].append(i)
 
         def combine(opts):
+            # je Aufteilung nur die Klassen, die sich ändern (höchstens so viele wie Karten im Schub) - statt bei
+            # jeder Kombination alle Klassen einzeln in Python zu addieren und zu prüfen (24164: 126 Klassen)
+            sparse = [[(j, x) for j, x in enumerate(opt) if x] for opt in opts]
             out = set()
             for st in states:
-                for opt in opts:
-                    cand = tuple(x + y for x, y in zip(st, opt))
-                    if all(c <= sz for c, sz in zip(cand, sizes)):
-                        out.add(cand)
+                for changes in sparse:
+                    cand = list(st)
+                    for j, x in changes:
+                        cand[j] += x
+                        if cand[j] > sizes[j]:
+                            break
+                    else:
+                        out.add(tuple(cand))
                 if len(out) > 50000:
                     return None
             return out
