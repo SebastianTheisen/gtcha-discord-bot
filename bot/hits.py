@@ -220,7 +220,7 @@ class HitsMixin:
                                    if t in keys and m.get("at") and m["source"] != "admin"}   # Admin: nur "raus"
                         deadlines = batch_deadlines(batches, medal_t)
                         price = _int((await self.db.get_banner(pid) or {}).get('price_coins')) or None
-                        joint = await asyncio.to_thread(match_shipment_history, pool, batches, VALUE_TOLERANCE,
+                        joint = await run_cpu(match_shipment_history, pool, batches, VALUE_TOLERANCE,
                                                         deadlines, price)
                         if joint.get("off_value"):
                             logger.info(f"[HIT] {pid}: Einzelkarte über allen normalen Karten in Schub "
@@ -341,11 +341,11 @@ class HitsMixin:
         medal_keys = {keys[t] for t in await self.db.get_medals(medal_thread) if t in keys}
         n_max = max(0, drawn - shipped)
         n_min = max(0, drawn - shipping_units - pending)
-        res = await asyncio.to_thread(match_coin_conversions, pool, converted, n_min, n_max, medal_keys)
+        res = await run_cpu(match_coin_conversions, pool, converted, n_min, n_max, medal_keys)
         # genauer: Schub für Schub (Packs im Fenster zwischen zwei Läufen der Seite gegen die Umwandlung im Lauf)
         conversions, moves = await self.db.coin_history(pid)
         intervals = coin_intervals(conversions, moves, total, left)
-        hist = await asyncio.to_thread(match_coin_history, pool, intervals, shipping_units, medal_keys) \
+        hist = await run_cpu(match_coin_history, pool, intervals, shipping_units, medal_keys) \
             if intervals else None
         if hist is not None:
             # beide Rechnungen sind für sich richtig: sicher ist, was eine von beiden sicher findet

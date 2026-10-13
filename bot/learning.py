@@ -19,10 +19,15 @@ class LearningMixin:
         keys = tier_keys(pool)
         medal_t = {keys[t]: ts for t, ts in inputs["medals"].items() if t in keys}
         state = await self.db.get_pull_tracking(pid)
+        # Eigener Prozess (das Auftrags-Modell kann bei großen Schüben dauern); unveränderte Eingaben nicht neu
+        # rechnen - der Lauf alle 5 Minuten rechnete sonst jedes Mal alle Banner komplett durch
+        price = _int(row.get('price_coins')) or None
+        sig = json.dumps([pool, inputs["shipments"], medal_t, price], sort_keys=True, default=str)
+        cache = self.__dict__.setdefault("_observation_cache", {})
+        if cache.get(pid, (None,))[0] != sig:
+            cache[pid] = (sig, await run_cpu(ship_odds.observations, pool, inputs["shipments"], medal_t, price))
         return {
-            # Rechnen im Hintergrund-Thread (das Auftrags-Modell kann bei großen Schüben etwas dauern)
-            "observations": await asyncio.to_thread(ship_odds.observations, pool, inputs["shipments"], medal_t,
-                                                  _int(row.get('price_coins')) or None),
+            "observations": cache[pid][1],
             "shipments": inputs["shipments"], "medals": inputs["medals"], "moves_count": len(inputs["moves"]),
             "total_packs": row.get('total_packs'), "remaining_at_end": row.get('current_packs'),
             "hits": [{"key": u["key"], "value": u["value"], "name": u["name"]} for u in tracked_units(pool)
@@ -54,7 +59,7 @@ class LearningMixin:
             medal_t = {keys[t]: m["at"] for t, m in (await self.db.medal_rows(medal_thread)).items()
                        if t in keys and m.get("at") and m["source"] != "admin"} if medal_thread else {}
             deadlines = batch_deadlines(batches, medal_t)
-            joint = await asyncio.to_thread(match_shipment_history, pool, batches, VALUE_TOLERANCE, deadlines,
+            joint = await run_cpu(match_shipment_history, pool, batches, VALUE_TOLERANCE, deadlines,
                                             _int(row.get('price_coins')) or None)
             rejected = await self.db.get_rejects(pid)
             certain = [k for k in joint["certain"] if k not in rejected]
