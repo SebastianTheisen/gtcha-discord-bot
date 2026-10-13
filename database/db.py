@@ -159,6 +159,13 @@ class Database:
                     pack_count INTEGER, sendcount INTEGER, sendprice INTEGER, kangen INTEGER, sendpeople INTEGER,
                     price INTEGER);
                 CREATE INDEX IF NOT EXISTS api_log_banner ON api_log (banner_id, id);
+                -- Verläufe werden fast immer je Banner gelesen (Detailseite, Hit-Erkennung, Apps bei jedem Neuberechnen);
+                -- ohne Index durchsucht SQLite dafür jedes Mal die ganze Tabelle (pack_history: 90 Tage Bewegungen)
+                CREATE INDEX IF NOT EXISTS pack_history_banner ON pack_history (banner_id);
+                CREATE INDEX IF NOT EXISTS shipment_history_banner ON shipment_history (banner_id);
+                CREATE INDEX IF NOT EXISTS convert_history_banner ON convert_history (banner_id);
+                CREATE INDEX IF NOT EXISTS card_value_history_banner ON card_value_history (banner_id);
+                CREATE INDEX IF NOT EXISTS api_log_changed ON api_log (changed_at);   -- Aufräumen alter Einträge
                 -- Automatisch (aus Versand/Umwandlung) abgehakte Hits - zur Kontrolle für den Admin
                 CREATE TABLE IF NOT EXISTS auto_ticks (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, pack_id INTEGER, card_key TEXT, tier TEXT, name TEXT,
