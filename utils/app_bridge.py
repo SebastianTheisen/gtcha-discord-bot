@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 import aiosqlite
+from loguru import logger
 
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   # ohne 0/O/1/I
 CODE_LENGTH = 6
@@ -95,6 +96,11 @@ class AppBridge:
 
     async def init(self):
         async with aiosqlite.connect(self.db_path) as db:
+            # WAL: Bot, Live-App und Beta greifen gleichzeitig zu, ohne sich gegenseitig zu sperren
+            try:
+                await db.execute("PRAGMA journal_mode=WAL")
+            except Exception as e:   # gerade gesperrt: beim nächsten Start erneut
+                logger.warning(f"WAL-Modus nicht gesetzt: {e}")
             await db.executescript(SCHEMA)
             # alte Rohdaten der Lesezeichen aufräumen (früher 100 je Person) und Platz freigeben
             cur = await db.execute(
