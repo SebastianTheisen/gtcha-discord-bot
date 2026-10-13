@@ -199,6 +199,12 @@ class ScrapingMixin:
                     if api_only_count > 0:
                         logger.info(f"API-Only Updates: {api_only_count} Banner außerhalb der gescrapten Kategorien aktualisiert")
 
+                # === KAUFBEDINGUNGEN und VERSAND-ZAHLEN aus pack/list ===
+                # Direkt nach den Pack-Updates und vor dem langsamen Pool-/Kartenteil: billige Rohdaten
+                # (api_log, Umwandlungen, Versand) zuerst sichern, damit ein Timeout im langsamen Teil sie
+                # nicht abschneidet und Packs/Umwandlungen nie auseinanderlaufen.
+                await self._apply_site_data(getattr(scraper, '_api_pack_data', {}) or {})
+
                 # === KARTENPOOL (Top 5, Ø Rückgabe) ===
                 # Die Kartenliste ändert sich nicht; pro Scrape nur wenige fehlende Pools nachladen
                 # (neue Banner zuerst), damit der Scrape kurz bleibt.
@@ -249,9 +255,6 @@ class ScrapingMixin:
 
                 # === HOT-BANNER-Rangliste (nur bei Änderung bearbeitet) ===
                 await self._update_hot_banners()
-
-                # === KAUFBEDINGUNGEN und VERSAND-ZAHLEN aus pack/list ===
-                await self._apply_site_data(getattr(scraper, '_api_pack_data', {}) or {})
 
                 # Hole alle bekannten Banner aus der DB
                 db_banner_ids = set(await self.db.get_all_active_banner_ids())

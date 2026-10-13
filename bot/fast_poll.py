@@ -74,6 +74,11 @@ class FastPollMixin:
         await self._create_banners_from_api(items)
         await self._announce_started_banners(items)
 
+        # Zuerst die billigen Rohdaten sichern (api_log, Umwandlungen, Versand): sie dürfen nie der
+        # Leidtragende eines Timeouts sein, der sonst erst im langsamen Teil (Discord-Posts, Pools)
+        # zuschlägt. So laufen Packs und Umwandlungen/Versand nie auseinander.
+        await self._apply_site_data(items)
+
         rows = await self.db.get_active_banners()
         semaphore = asyncio.Semaphore(5)
         self._rises_ignored = 0
@@ -91,5 +96,4 @@ class FastPollMixin:
             await self._check_pool_switch(len(rows))
 
         await self._detect_pulled_hits(items)
-        await self._apply_site_data(items)
         return True
