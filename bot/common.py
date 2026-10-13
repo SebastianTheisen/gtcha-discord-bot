@@ -35,7 +35,7 @@ from utils.notifications import (
     notify_scrape_success, notify_bot_started, send_notification
 )
 from utils.rate_limiter import discord_rate_limiter
-from utils.cpu import cpu_status, run_cpu
+from utils.cpu import CpuTimeout, cpu_status, run_cpu
 from utils.memory_monitor import memory_monitor
 from utils.cache import banner_cache
 from utils.coin_history import coin_intervals, match_coin_history
