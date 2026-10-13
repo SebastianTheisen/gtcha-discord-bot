@@ -72,8 +72,20 @@ fi
 if docker inspect gtcha-app-beta > /dev/null 2>&1 && \
    echo "$changed" | grep -qE '^(webapp|utils|database)/|^requirements-webapp\.txt$|^Dockerfile\.beta$|^docker-compose\.yml$'; then
   echo "Aktualisiere die Beta …"
-  docker compose --profile beta up -d --build gtcha-app-beta && echo "✅ Beta aktualisiert" \
-    || echo "⚠️ Beta nicht aktualisiert – ./update.sh beta"
+  if docker compose --profile beta up -d --build gtcha-app-beta; then
+    # wie bei live: erst melden, wenn die Beta wirklich wieder antwortet
+    bport=$(grep -E '^WEBAPP_BETA_PORT=' .env 2>/dev/null | cut -d= -f2)
+    for i in $(seq 1 30); do
+      if curl -fs "http://127.0.0.1:${bport:-8081}/api/health" > /dev/null; then
+        echo "✅ Beta aktualisiert und erreichbar"
+        break
+      fi
+      [ "$i" = 30 ] && echo "❌ Beta antwortet nicht – docker logs --tail 50 gtcha-app-beta"
+      sleep 3
+    done
+  else
+    echo "⚠️ Beta nicht aktualisiert – ./update.sh beta"
+  fi
 fi
 
 if [ -z "$services" ]; then
