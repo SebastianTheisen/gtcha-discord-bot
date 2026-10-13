@@ -1,4 +1,4 @@
-"""Warum bekommt ein Banner keine Pack-Updates (im App-Verlauf)? Zeigt alles Relevante aus der Bot-Datenbank.
+"""Warum zeigt ein Banner im Verlauf keine Umwandlung/Versand (oder keine Pack-Updates)? Liest nur die Bot-Datenbank.
 
 Aufruf auf dem VPS:
     docker exec -i gtcha-discord-bot python - 24191 < tools/why_no_updates.py
@@ -11,6 +11,7 @@ from datetime import datetime
 
 sys.path.insert(0, "/app")
 from utils.banner_info import berlin_time  # noqa: E402
+from utils.card_pool import fmt_coins  # noqa: E402
 
 pid = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else None
 if not pid:
@@ -28,45 +29,43 @@ def when(iso):
 
 b = db.execute("SELECT * FROM banners WHERE pack_id = ?", (pid,)).fetchone()
 if not b:
-    sys.exit(f"Banner {pid} ist nicht in der Datenbank (nie angelegt oder gelöscht).")
-print(f"=== Banner {pid} ===")
-print(f"  Kategorie: {b['category']!r} · aktiv: {b['is_active']} · Packs: {b['current_packs']}/{b['total_packs']}"
-      f" · nicht-gefunden-Zähler: {b['not_found_count']}")
-print(f"  angelegt: {when(b['created_at'])} · zuletzt aktualisiert: {when(b['updated_at'])}"
-      f" · Pool: {'ja' if b['card_pool'] else 'nein'} (Stand {when(b['pool_updated_at']) if b['pool_updated_at'] else '–'})")
-try:
-    from config import CHANNEL_IDS
-    print(f"  Discord-Forum für Kategorie {b['category']!r}: {CHANNEL_IDS.get(b['category']) or 'KEINS'}")
-except Exception as e:
-    print(f"  (Forum-Zuordnung nicht lesbar: {e})")
+    sys.exit(f"Banner {pid} ist nicht in der Datenbank.")
+print(f"=== Banner {pid} ({b['category']!r}) · aktiv: {b['is_active']} · Packs {b['current_packs']}/{b['total_packs']}"
+      f" · converted-Spalte: {b['converted']} ===")
 
-th = db.execute("SELECT * FROM discord_threads WHERE banner_id = ?", (pid,)).fetchall()
-print(f"\n  Discord-Threads: {len(th)}")
-for t in th:
-    print(f"    thread {t['thread_id']} · Kanal {t['channel_id']} · abgelaufen: {t['is_expired']} · angelegt {when(t['created_at'])}")
-try:
-    pt = db.execute("SELECT * FROM premium_threads WHERE banner_id = ?", (pid,)).fetchall()
-    for t in pt:
-        print(f"    PREMIUM {t['thread_id']} · abgelaufen: {t['is_expired']}")
-except sqlite3.OperationalError:
-    pass
-
-ph = db.execute("SELECT changed_at, old_count, new_count FROM pack_history WHERE banner_id = ? ORDER BY id DESC LIMIT 8", (pid,)).fetchall()
-print(f"\n  Pack-Verlauf (neueste zuerst): {len(ph)} Einträge")
-for r in ph:
-    print(f"    {when(r['changed_at'])}  {r['old_count']} -> {r['new_count']}")
-al = db.execute("SELECT changed_at, pack_count FROM api_log WHERE banner_id = ? ORDER BY id DESC LIMIT 8", (pid,)).fetchall()
-print(f"\n  Rohdaten der Seite (api_log, neueste zuerst): {len(al)} Einträge")
+# Rohdaten der Seite: enthält die pack/list diesen Banner überhaupt, und ändern sich Versand/Umwandlung?
+al = db.execute("SELECT changed_at, pack_count, sendcount, sendprice, kangen, sendpeople FROM api_log "
+                "WHERE banner_id = ? ORDER BY id DESC LIMIT 12", (pid,)).fetchall()
+print(f"\n--- Rohdaten der Seite (api_log): {len(al)} Einträge, neueste zuerst ---")
+if not al:
+    print("  ⚠️ KEINE Rohdaten! Dieser Banner steht nicht in der pack/list, die der Bot über Tor sieht")
+    print("     → dann kommen weder Pack-Updates noch Umwandlung/Versand an.")
 for r in al:
-    print(f"    {when(r['changed_at'])}  pack_count={r['pack_count']}")
+    print(f"  {when(r['changed_at'])}  packs={r['pack_count']}  sendcount={r['sendcount']}  "
+          f"sendprice={r['sendprice']}  kangen(umgewandelt)={r['kangen']}  spieler={r['sendpeople']}")
+
+ph = db.execute("SELECT count(*) n, max(changed_at) m FROM pack_history WHERE banner_id = ?", (pid,)).fetchone()
+cv = db.execute("SELECT changed_at, old_coins, new_coins FROM convert_history WHERE banner_id = ? ORDER BY id DESC LIMIT 6", (pid,)).fetchall()
+sh = db.execute("SELECT changed_at, old_cards, new_cards, old_coins, new_coins FROM shipment_history WHERE banner_id = ? ORDER BY id DESC LIMIT 6", (pid,)).fetchall()
+print(f"\n--- Pack-Verlauf: {ph['n']} Einträge (letzter {when(ph['m']) if ph['m'] else '–'}) ---")
+print(f"--- Umwandlung (convert_history): {len(cv)} ---")
+for r in cv:
+    print(f"  {when(r['changed_at'])}  {r['old_coins']} -> {r['new_coins']}  (+{fmt_coins((r['new_coins'] or 0) - (r['old_coins'] or 0))})")
+print(f"--- Versand (shipment_history): {len(sh)} ---")
+for r in sh:
+    print(f"  {when(r['changed_at'])}  Karten {r['old_cards']}->{r['new_cards']}  Coins {r['old_coins']}->{r['new_coins']}")
 
 print("\n=== Einschätzung ===")
-if not b["is_active"]:
-    print("  ⚠️ Banner ist NICHT aktiv (archiviert) - der Bot aktualisiert nur aktive Banner.")
-elif not th:
-    print("  ℹ️ Kein Discord-Thread. Pack-Zahlen werden ab sofort trotzdem gespeichert (nach dem Update);")
-    print("     vorher waren sie evtl. eingefroren, weil der Discord-Post fehlte.")
-elif th and all(t["is_expired"] for t in th):
-    print("  ⚠️ Thread ist als abgelaufen markiert.")
-if al and ph and al[0]["pack_count"] != ph[0]["new_count"]:
-    print(f"  ⚠️ Seite meldet {al[0]['pack_count']} Packs, gespeichert ist {ph[0]['new_count']} - Updates kamen nicht an.")
+kangen_vals = [r['kangen'] for r in al if r['kangen'] is not None]
+sp_vals = [r['sendprice'] for r in al if r['sendprice'] is not None]
+if not al:
+    print("  ⚠️ Banner fehlt in der pack/list der Seite (über Tor) - deshalb keine Updates.")
+else:
+    if len(set(kangen_vals)) <= 1 and not cv:
+        print(f"  ℹ️ Umwandlung laut Seite unverändert ({kangen_vals[:1]}) - es wurde dort (noch) nichts umgewandelt.")
+    elif len(set(kangen_vals)) > 1 and not cv:
+        print("  ⚠️ Umwandlung ändert sich laut Seite, wird aber NICHT im Verlauf gespeichert - Fehler, bitte melden.")
+    if len(set(sp_vals)) <= 1 and not sh:
+        print(f"  ℹ️ Versand laut Seite unverändert ({sp_vals[:1]}) - es wurde dort (noch) nichts verschickt.")
+    elif len(set(sp_vals)) > 1 and not sh:
+        print("  ⚠️ Versand ändert sich laut Seite, wird aber NICHT gespeichert - Fehler, bitte melden.")

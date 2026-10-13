@@ -191,11 +191,11 @@ class ScrapingMixin:
                         elif new_packs > old_packs:
                             logger.warning(f"[PACK-ANSTIEG IGNORIERT/API] {pid}: {old_packs} -> {new_packs}")
                         elif new_packs < old_packs:
-                            # Pack-Zahl immer speichern (App-Verlauf/Hit-Erkennung), Discord-Kommentar best effort
-                            await self.db.update_banner_packs(pid, new_packs)
-                            api_only_count += 1
-                            await self._post_pack_update_to_thread(pid, old_packs, new_packs, total_packs)
-                            logger.info(f"API-Only Pack-Update: {pid} ({old_packs} → {new_packs})")
+                            posted = await self._post_pack_update_to_thread(pid, old_packs, new_packs, total_packs)
+                            if posted:
+                                await self.db.update_banner_packs(pid, new_packs)
+                                api_only_count += 1
+                                logger.info(f"API-Only Pack-Update: {pid} ({old_packs} → {new_packs})")
                     if api_only_count > 0:
                         logger.info(f"API-Only Updates: {api_only_count} Banner außerhalb der gescrapten Kategorien aktualisiert")
 
@@ -615,14 +615,23 @@ class ScrapingMixin:
 
                 if packs_changed:
                     logger.info(f"Pack-Änderung erkannt: {banner.pack_id} {old_packs} -> {banner.current_packs}")
-                    # Pack-Zahl IMMER speichern (App-Verlauf und Hit-Erkennung hängen daran, auch ohne Discord-Thread).
-                    # Der Discord-Kommentar ist zweitrangig und best effort - schlägt er fehl, zeigt der Startbeitrag
-                    # trotzdem den aktuellen Stand.
-                    await self.db.update_banner_packs(banner.pack_id, banner.current_packs)
                     if old_packs is not None:
-                        await self._post_pack_update_to_thread(
-                            banner.pack_id, old_packs, banner.current_packs, banner.total_packs)
+                        # Post FIRST - nur bei Erfolg DB updaten
+                        # (Fehler: DB updated, Discord-Post schlägt fehl → nächster Scrape erkennt keine Änderung mehr)
+                        posted = await self._post_pack_update_to_thread(
+                            banner.pack_id,
+                            old_packs,
+                            banner.current_packs,
+                            banner.total_packs
+                        )
+                        if posted:
+                            await self.db.update_banner_packs(banner.pack_id, banner.current_packs)
+                        else:
+                            logger.warning(f"Pack-Update-Post für {banner.pack_id} fehlgeschlagen - DB bleibt bei {old_packs}, nächster Scrape versucht es erneut")
+                            packs_changed = False  # Kein Embed/Probability-Update wenn Post fehlschlug
                     else:
+                        # Initiales Pack-Update (kein Discord-Post nötig)
+                        await self.db.update_banner_packs(banner.pack_id, banner.current_packs)
                         logger.debug(f"Initiales Pack-Update für {banner.pack_id}: {banner.current_packs}")
 
                 # Embed NUR aktualisieren wenn sich etwas geändert hat
