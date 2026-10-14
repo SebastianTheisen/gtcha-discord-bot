@@ -190,6 +190,24 @@ def is_relevant_hit(unit: Dict, price: Optional[int]) -> bool:
     return bool(is_hit) and (not price or unit["value"] >= price)
 
 
+def shipping_pool(pool: Dict, price: Optional[int]) -> Dict:
+    """Für die Versand-Rechnung: Versand-Karten unter dem Packpreis zählen wie normale Karten.
+
+    Sie sind kein Hit (is_relevant_hit, wie auf der Seite) und interessieren beim Versand nicht einzeln - als
+    einzeln verfolgte Hits blähten sie die Kombinationen aber riesig auf (24164: hunderte günstige Versand-
+    Karten neben 23 echten Hits). Ihr Wert geht weiter in die Summen ein, die Schübe gehen also gleich auf."""
+    if not price or not pool or not pool.get("hits"):
+        return pool
+    cheap = [h for h in pool["hits"] if (h.get("value") or 0) < price]
+    if not cheap:
+        return pool
+    normal = dict(pool.get("normal_values") or {})
+    for h in cheap:
+        key = str(h.get("value") or 0)
+        normal[key] = normal.get(key, 0) + int(h.get("copies") or 1)
+    return {**pool, "hits": [h for h in pool["hits"] if (h.get("value") or 0) >= price], "normal_values": normal}
+
+
 def relevant_units(pool: Dict, price: Optional[int]) -> List[Dict]:
     return [u for u in tracked_units(pool) if is_relevant_hit(u, price)]
 
@@ -730,6 +748,7 @@ def explain_batch(pool: Dict, count: int, value: int, pulled_keys: Set[str],
         return {**base, "kind": "normal"}
     if count > MAX_SHIPMENT_CARDS or gross > MAX_SHIPMENT_VALUE:
         return {**base, "kind": "too_big"}
+    pool = shipping_pool(pool, price)   # Versand-Karten unter dem Packpreis: wie normale Karten
     open_hits = [u for u in tracked_units(pool) if u["shipping_only"] and u["key"] not in pulled_keys]
     classes = _value_classes(open_hits, tol) if open_hits else []
     # wie match_shipment_history; als Versand-Aufträge nur, wenn dabei ein Hit ins Spiel kommt
@@ -825,6 +844,7 @@ def match_shipment_history(pool: Dict, batches: List[List], tol: float = VALUE_T
     """
     result = {"certain": [], "groups": [], "maybe": [], "used_batches": 0, "ignored_deadlines": [],
               "value_mismatch": [], "off_value": []}
+    pool = shipping_pool(pool, price)   # Versand-Karten unter dem Packpreis: wie normale Karten
     hits = [u for u in tracked_units(pool) if u["shipping_only"]]
     if not hits:
         return result
