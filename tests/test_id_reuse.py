@@ -138,6 +138,10 @@ def test_history_before_start_of_running_banner_is_dropped(tmp_path):
             for t, cards in ((start - timedelta(days=20), 3), (start + timedelta(hours=1), 1)):   # alt / neu
                 await conn.execute("INSERT INTO shipment_history (banner_id, old_cards, new_cards, old_coins, new_coins, "
                                    "changed_at) VALUES (24260, 0, ?, 0, 1000, ?)", (cards, t.isoformat()))
+            # Pack-Verlauf: alter Banner endet bei 0, der neue beginnt voll (200) - Neustart
+            for t, old_c, new_c in ((start - timedelta(days=20), 3, 0), (start + timedelta(hours=1), 200, 150)):
+                await conn.execute("INSERT INTO pack_history (banner_id, old_count, new_count, changed_at) "
+                                   "VALUES (24260, ?, ?, ?)", (old_c, new_c, t.isoformat()))
             await conn.commit()
         dropped = await db.drop_history_before_start()
         async with aiosqlite.connect(db.db_path) as conn:
@@ -145,7 +149,7 @@ def test_history_before_start_of_running_banner_is_dropped(tmp_path):
         return dropped, left
 
     dropped, left = asyncio.run(run())
-    assert dropped == {24260: 1} and left == [(1,)]
+    assert dropped == {24260: 2} and left == [(1,)]   # je ein Versand- und ein Pack-Eintrag des alten Banners
 
 
 def test_missing_start_is_filled_from_site_and_old_history_dropped(tmp_path):
@@ -159,6 +163,8 @@ def test_missing_start_is_filled_from_site_and_old_history_dropped(tmp_path):
         async with aiosqlite.connect(db.db_path) as conn:
             await conn.execute("INSERT INTO shipment_history (banner_id, old_cards, new_cards, old_coins, new_coins, "
                                "changed_at) VALUES (24260, 0, 3, 0, 9000, ?)", ((start - timedelta(days=30)).isoformat(),))
+            await conn.execute("INSERT INTO pack_history (banner_id, old_count, new_count, changed_at) "
+                               "VALUES (24260, 2, 0, ?)", ((start - timedelta(days=30)).isoformat(),))   # alter: leer
             await conn.commit()
         filled = await db.fill_start(24260, int(start.timestamp()))
         again = await db.fill_start(24260, int(start.timestamp()) + 999)   # schon gesetzt: bleibt
@@ -166,4 +172,44 @@ def test_missing_start_is_filled_from_site_and_old_history_dropped(tmp_path):
         return filled, again, dropped, (await db.get_banner(24260))["starts_at"], int(start.timestamp())
 
     filled, again, dropped, stored, start = asyncio.run(run())
-    assert filled and not again and dropped == {24260: 1} and stored == start
+    assert filled and not again and dropped == {24260: 2} and stored == start   # jetzt 14 Packs: Neustart
+
+
+def test_edited_banner_keeps_its_history(tmp_path):
+    """GTCHA hat den Banner nur bearbeitet (neues Startdatum): Packs laufen lückenlos weiter - Verlauf bleibt."""
+    async def run():
+        db = Database(str(tmp_path / "b.db"))
+        await db.init()
+        start = datetime.now() - timedelta(hours=5)
+        await db.save_banner(ScrapedBanner(pack_id=24260, category="Bonus", title=None, price_coins=150000,
+                                           current_packs=14, total_packs=20))
+        await db.set_start(24260, int(start.timestamp()), announced=True)
+        async with aiosqlite.connect(db.db_path) as conn:
+            for t, old_c, new_c in ((start - timedelta(days=10), 20, 17), (start - timedelta(days=3), 17, 15),
+                                    (start + timedelta(hours=1), 15, 14)):
+                await conn.execute("INSERT INTO pack_history (banner_id, old_count, new_count, changed_at) "
+                                   "VALUES (24260, ?, ?, ?)", (old_c, new_c, t.isoformat()))
+            await conn.commit()
+        dropped = await db.drop_history_before_start()
+        async with aiosqlite.connect(db.db_path) as conn:
+            left = (await (await conn.execute("SELECT count(*) FROM pack_history WHERE banner_id = 24260")).fetchone())[0]
+        return dropped, left
+
+    assert asyncio.run(run()) == ({}, 3)
+
+
+def test_edited_banner_reappearing_is_not_treated_as_new(tmp_path):
+    """Inaktiv gewordener Banner kommt mit anderem Start, aber weiterlaufenden Packs zurück: keine neue Vergabe."""
+    async def run():
+        db = Database(str(tmp_path / "b.db"))
+        await db.init()
+        await db.save_banner(ScrapedBanner(pack_id=24260, category="Bonus", title="Alt", price_coins=150000,
+                                           current_packs=15, total_packs=20))
+        await db.set_start(24260, jst_timestamp("2026-09-01 12:00:00"), announced=True)
+        await db.mark_banner_inactive(24260)
+        bot = make_bot(db)
+        item = {**_item("2026-10-14 12:00:00"), "pack_count": 14, "total_pack_count": 20}
+        await bot._create_banners_from_api({24260: item})
+        return bot.app_bridge.forgotten
+
+    assert asyncio.run(run()) == []

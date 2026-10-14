@@ -122,13 +122,25 @@ def category_for(item: dict) -> Optional[str]:
     return CATEGORY_BY_CARD_TYPE.get(card_type) or CARD_TYPE_NAMES.get(card_type) or f"Kategorie {card_type}"
 
 
-def versioned_image(url: Optional[str], starts_at: Optional[int]) -> Optional[str]:
-    """Bannerbild mit Kennung des Banners (Verkaufsstart): GTCHA vergibt Pack-IDs neu, das Bild liegt dann unter
-    derselben Adresse (/pack/24260/1.webp) - ohne Kennung zeigten Zwischenspeicher (VPS, Browser, Discord) noch das
-    Bild des alten Banners. Die Seite ignoriert den Zusatz."""
-    if not url or not starts_at:
+def versioned_image(url: Optional[str], starts_at: Optional[int], cards: Optional[str] = None) -> Optional[str]:
+    """Bannerbild mit Kennung des Banners: GTCHA vergibt Pack-IDs neu bzw. bearbeitet Banner, das Bild liegt dann
+    unter derselben Adresse (/pack/24260/1.webp) - ohne Kennung zeigten Zwischenspeicher (VPS, Browser) noch das
+    alte Bild. Kennung = Verkaufsstart, in den Apps zusätzlich die Karten (card_key). Die Seite ignoriert den Zusatz."""
+    if not url or not (starts_at or cards):
         return url
-    return f"{url}{'&' if '?' in url else '?'}s={int(starts_at)}"
+    key = "-".join(str(x) for x in (int(starts_at) if starts_at else None, cards) if x)
+    return f"{url}{'&' if '?' in url else '?'}s={key}"
+
+
+def card_key(pool_json) -> Optional[str]:
+    """Kurzer Fingerabdruck der Karten eines Banners (IDs, nicht Werte): ändert sich, wenn GTCHA die Karten tauscht."""
+    import hashlib
+    try:
+        pool = json.loads(pool_json) if isinstance(pool_json, str) else (pool_json or {})
+    except ValueError:
+        return None
+    ids = sorted(str(c.get("id") or c.get("name")) for part in ("hits", "cards", "top") for c in pool.get(part) or [])
+    return hashlib.sha1(",".join(ids).encode()).hexdigest()[:8] if ids else None
 
 
 def jst_timestamp(text: Optional[str]) -> Optional[int]:

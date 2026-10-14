@@ -45,3 +45,15 @@ def test_versioned_image_differs_per_banner_under_same_id():
     assert old != new and old.startswith(URL + "?s=")
     assert versioned_image(URL + "?v=2", 5) == URL + "?v=2&s=5"
     assert versioned_image(URL, None) == URL and versioned_image(None, 5) is None
+
+
+def test_app_image_changes_when_cards_change():
+    """Bearbeiteter Banner (gleicher Start, andere Karten): App lädt das Bild unter neuer Adresse."""
+    import json as _json
+
+    from utils.banner_info import card_key, versioned_image
+    one = _json.dumps({"cards": [{"id": "1"}, {"id": "2"}]})
+    other = _json.dumps({"cards": [{"id": "1"}, {"id": "3"}]})
+    a, b = versioned_image(URL, 100, card_key(one)), versioned_image(URL, 100, card_key(other))
+    assert a != b and card_key(one) == card_key(_json.dumps({"cards": [{"id": "2"}, {"id": "1"}]}))
+    assert versioned_image(URL, None, card_key(one)).startswith(URL + "?s=")
