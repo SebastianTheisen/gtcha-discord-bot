@@ -35,6 +35,7 @@ export function fetchDetail(id: string | number): Promise<BannerDetail> {
   const running = inflight.get(key);
   if (running) return running;
   const p = api<BannerDetail>(`api/banner/${key}`).then((d) => {
+    if (d.explain_pending) return d;   // unvollständig: nicht merken, die volle Seite kommt gleich
     detailCache.set(key, d);
     if (detailCache.size > 30) detailCache.delete(detailCache.keys().next().value as string);
     return d;

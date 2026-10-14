@@ -7,6 +7,7 @@ Start: python -m webapp.server
 """
 
 import asyncio
+import copy
 import hashlib
 import multiprocessing
 import json
@@ -221,10 +222,14 @@ def _view_job(db_path: str, what: str, arg=None):
         return asyncio.run(view.archived_banners())
     if what == "detail":
         return asyncio.run(view.detail(arg))
+    if what == "detail_quick":
+        return asyncio.run(view.detail(arg, explain=False))
     raise ValueError(what)
 
 
-VIEW_WORKERS = int(os.getenv("WEBAPP_VIEW_WORKERS") or "2")
+VIEW_WORKERS = int(os.getenv("WEBAPP_VIEW_WORKERS") or "2")   # für Detailseiten; die Bannerliste hat einen eigenen
+DETAIL_WAIT = float(os.getenv("WEBAPP_DETAIL_WAIT") or "6")   # so lange auf die volle Detailseite warten, dann ohne
+DETAIL_CACHE_SECONDS = 600   # fertige Detailseiten so lange zwischenspeichern (solange sich am Banner nichts ändert)
 
 
 class App:
@@ -243,24 +248,27 @@ class App:
         self._digest = ""                       # Fingerabdruck der Banner-Daten: ändert er sich, gibt es ein Live-Update
         self._changed = asyncio.Event()
         self.beta = (role or ROLE) == "beta"
-        self._view_pool = None
+        self._view_pool = None      # Detailseiten (können bei großen Bannern Minuten dauern)
+        self._list_pool = None      # Bannerliste/Archiv: eigener Arbeiter, wartet nie hinter Detailseiten
+        self._detail_cache: Dict[int, tuple] = {}
+        self._detail_tasks: Dict[int, asyncio.Task] = {}
 
     async def _in_process(self, what: str, arg=None):
         """View-Rechnung im eigenen Prozess (Server bleibt ansprechbar); fällt er aus, einmal direkt."""
         if os.getenv("WEBAPP_VIEW_INLINE") == "1":   # Tests ohne Extra-Prozess
-            return await getattr(self.view, {"all": "all_banners", "archived": "archived_banners",
-                                             "detail": "detail"}[what])(*([True] if what == "all" else
-                                                                         [arg] if what == "detail" else []))
-        if self._view_pool is None:
-            self._view_pool = ProcessPoolExecutor(max_workers=VIEW_WORKERS,
-                                                  mp_context=multiprocessing.get_context("spawn"))
+            return await asyncio.to_thread(_view_job, self.view.db.db_path, what, arg)
+        detail = what == "detail"   # nur die volle Detailseite ist langsam; die schnelle läuft beim Listen-Arbeiter
+        attr = "_view_pool" if detail else "_list_pool"
+        if getattr(self, attr) is None:
+            setattr(self, attr, ProcessPoolExecutor(max_workers=VIEW_WORKERS if detail else 1,
+                                                    mp_context=multiprocessing.get_context("spawn")))
         started = time.monotonic()
         try:
             result = await asyncio.get_running_loop().run_in_executor(
-                self._view_pool, _view_job, self.view.db.db_path, what, arg)
+                getattr(self, attr), _view_job, self.view.db.db_path, what, arg)
         except BrokenProcessPool:
             logger.warning("Rechen-Prozess der App ausgefallen - starte neu")
-            self._view_pool = None
+            setattr(self, attr, None)
             return await self._in_process(what, arg)
         took = time.monotonic() - started
         if took > 5:
@@ -377,7 +385,7 @@ class App:
             pack_id = int(request.match_info["id"])
         except ValueError:
             raise web.HTTPBadRequest()
-        data = await self._in_process("detail", pack_id)
+        data = await self._detail(pack_id)
         if not data:
             raise web.HTTPNotFound()
         data.pop("hit_keys_detected", None)
@@ -397,6 +405,35 @@ class App:
             if a and a["user_id"] == o["user"]:
                 o["via"], o["pulled_on"] = "lesezeichen", a["pulled_on"]
         return web.json_response(data)
+
+    def _banner_version(self, pack_id: int):
+        """Stand eines Banners aus der Bannerliste: ändert er sich, ist eine gespeicherte Detailseite veraltet."""
+        b = next((x for x in self._data or [] if x.get("id") == pack_id), None)
+        return b and (b.get("remaining"), b.get("ship_cards"), b.get("status"), b.get("hits_open"), b.get("ev_pct"))
+
+    async def _detail(self, pack_id: int) -> Optional[Dict]:
+        """Detailseite: aus dem Zwischenspeicher, sonst voll berechnet. Dauert die volle Seite länger als
+        DETAIL_WAIT (Versand-Erklärung bei sehr vielen Versand-Hits), kommt sie sofort ohne Erklärung
+        (explain_pending) - die volle wird im Hintergrund fertig und beim nächsten Abruf geliefert.
+        Gleichzeitige Abrufe teilen sich eine Rechnung."""
+        version = self._banner_version(pack_id)
+        cached = self._detail_cache.get(pack_id)
+        if cached and cached[0] == version and time.monotonic() - cached[2] < DETAIL_CACHE_SECONDS:
+            return copy.deepcopy(cached[1])
+        task = self._detail_tasks.get(pack_id)
+        if not task or task.done():
+            async def full():
+                try:
+                    result = await self._in_process("detail", pack_id)
+                    self._detail_cache[pack_id] = (version, result, time.monotonic())
+                    return result
+                finally:
+                    self._detail_tasks.pop(pack_id, None)
+            task = self._detail_tasks[pack_id] = asyncio.create_task(full())
+        try:
+            return copy.deepcopy(await asyncio.wait_for(asyncio.shield(task), DETAIL_WAIT))
+        except asyncio.TimeoutError:
+            return await self._in_process("detail_quick", pack_id)
 
     async def api_stream(self, request):
         """Live-Updates (Server-Sent Events): meldet, sobald sich Banner-Daten ändern - die App lädt dann neu."""

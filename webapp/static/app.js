@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 135;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 136;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -666,6 +666,10 @@ const DETAIL_TABS = { overview: "Übersicht", cards: "Karten", history: "Verlauf
 
 async function showBanner(id) {
   const b = await api(`/api/banner/${encodeURIComponent(id)}`);
+  // Versand-Erklärung noch in Arbeit (sehr viele Versand-Hits): gleich nachladen, solange der Banner offen ist
+  if (b.explain_pending) {
+    setTimeout(() => { if (location.hash === `#/banner/${id}`) showBanner(id).catch(() => {}); }, 8000);
+  }
   const [icon, label] = STATUS[b.status] || STATUS.running;
   const hits = b.hits.map((h) => ({ ...h, ship: b.tracked_hits }));
   const open = hits.filter((h) => h.state === "open").length;
@@ -724,6 +728,7 @@ async function showBanner(id) {
       <h2>💰 Ø Rückgabe im Verlauf <small>gestrichelt = 100 %</small></h2>
       ${evChart(b.ev_history)}
       <h2>📦 Versandschübe <small>Kartenwert = gezählter Wert × 1,1 (Steuer)</small></h2>
+      ${b.explain_pending ? `<div class="hint pad">⏳ Welche Hits in den Schüben stecken, wird noch berechnet – erscheint gleich.</div>` : ""}
       ${b.shipments.length ? `<div class="rows">${b.shipments.map((s) => `
         <div class="batch ${s.kind === "hits" ? "has-hit" : ""}">
           <div class="line"><span class="muted">${s.t ? time(s.t) : "vor Beginn der Aufzeichnung"}</span>

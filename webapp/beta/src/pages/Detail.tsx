@@ -34,12 +34,20 @@ export function Detail({ id }: { id: string }) {
   useEffect(() => {
     let alive = true;
     if (reload) detailCache.delete(id);
+    let again: number | undefined;
     fetchDetail(id)
-      .then((d) => alive && (setB(d), setError(null)))
+      .then((d) => {
+        if (!alive) return;
+        setB(d);
+        setError(null);
+        // Versand-Erklärung noch in Arbeit (sehr viele Versand-Hits): gleich nachladen
+        if (d.explain_pending) again = window.setTimeout(() => setReload((r) => r + 1), 8000);
+      })
       .catch((e) => alive && (e instanceof LockedError ? setLock(e.info)
         : setError(String(e.message) === "404" ? "Banner nicht gefunden" : `Daten nicht erreichbar (${e.message})`)));
     return () => {
       alive = false;
+      clearTimeout(again);
     };
   }, [id, changed, reload]);
 
@@ -375,6 +383,7 @@ function History({ b }: { b: BannerDetail }) {
       <div class="section-title"><h2>📉 Pack-Verlauf</h2><span class="muted small">mit Versand/Umwandlung</span></div>
       <Timeline events={b.pack_timeline || []} />
       <div class="section-title"><h2>📦 Versandschübe</h2><span class="muted small">Kartenwert = gezählt × 1,1</span></div>
+      {b.explain_pending ? <p class="muted small">⏳ Welche Hits in den Schüben stecken, wird noch berechnet – erscheint gleich.</p> : null}
       <Shipments list={b.shipments || []} />
       <div class="section-title"><h2>💰 Ø Rückgabe im Verlauf</h2><span class="muted small">gestrichelt = 100 %</span></div>
       <div class="panel"><AreaChart points={(b.ev_history || []).map((h) => ({ t: h.t, v: h.ev }))} refLine={100} label={(v) => pct(v, 0)} /></div>

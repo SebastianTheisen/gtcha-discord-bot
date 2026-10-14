@@ -405,7 +405,22 @@ def _suffix_reach(pool: Dict, classes: List[Dict], count: int, upper: int, tol: 
     return {"bits": bits, "q": q, "slack": 5 * tol * upper}
 
 
+_BATCH_CACHE: Dict[tuple, Optional[List[tuple]]] = {}   # gleiche Schübe werden immer wieder gerechnet (Detailseite,
+                                                         # jeder neue Versand wertet alle bisherigen erneut aus)
+
+
 def _batch_options(pool: Dict, classes: List[Dict], count: int, value: int, tol: float) -> Optional[List[tuple]]:
+    key = (tuple(sorted((pool.get("normal_values") or {}).items())),
+           tuple((len(c["keys"]), c["min"], c["max"]) for c in classes), count, value, tol)
+    if key not in _BATCH_CACHE:
+        if len(_BATCH_CACHE) > 3000:
+            _BATCH_CACHE.clear()
+        _BATCH_CACHE[key] = _batch_options_uncached(pool, classes, count, value, tol)
+    found = _BATCH_CACHE[key]
+    return None if found is None else list(found)
+
+
+def _batch_options_uncached(pool: Dict, classes: List[Dict], count: int, value: int, tol: float) -> Optional[List[tuple]]:
     """Alle Aufteilungen eines Schubs (count Karten, Kartenwert `value`) als Hits je Klasse.
 
     Rest muss aus genau so vielen normalen Karten bestehen. None = zu viele Möglichkeiten.

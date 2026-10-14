@@ -530,7 +530,9 @@ class BannerView:
         ]
         return rank_entries(candidates)
 
-    async def detail(self, pack_id: int) -> Optional[Dict]:
+    async def detail(self, pack_id: int, explain: bool = True) -> Optional[Dict]:
+        """explain=False: ohne Versand-Erklärung (die kann bei Bannern mit sehr vielen Versand-Hits Minuten dauern,
+        24164) - der Server liefert die Seite dann sofort und die Erklärung kommt nach (explain_pending)."""
         row = await self.db.get_banner(pack_id)
         if not row:
             return None
@@ -556,7 +558,12 @@ class BannerView:
             shipments.append({"t": None, "before": True, "cards": to_int(pre[0]), "coins": to_int(pre[1]) or 0,
                               "players": to_int(pre[2]) or 0, "total_cards": to_int(pre[0])})
         data["history"] = history
-        data["shipments"] = await self._explain_shipments(row, data, shipments)
+        if explain:
+            data["shipments"] = await self._explain_shipments(row, data, shipments)
+        else:
+            for sh in shipments:
+                sh["value"], sh["explain"] = card_value(max(0, sh["coins"])), []
+            data["shipments"], data["explain_pending"] = shipments, True
         async with aiosqlite.connect(self.db.db_path) as conn:
             cur = await conn.execute("SELECT changed_at, old_count, new_count FROM pack_history WHERE banner_id = ? "
                                      "ORDER BY id DESC LIMIT 2000", (pack_id,))
