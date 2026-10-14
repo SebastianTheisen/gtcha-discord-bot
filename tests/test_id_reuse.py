@@ -146,3 +146,24 @@ def test_history_before_start_of_running_banner_is_dropped(tmp_path):
 
     dropped, left = asyncio.run(run())
     assert dropped == {24260: 1} and left == [(1,)]
+
+
+def test_missing_start_is_filled_from_site_and_old_history_dropped(tmp_path):
+    """Über den Tab-Scrape reaktiviert: kein Verkaufsstart - wird aus pack/list nachgetragen, alter Verlauf gelöst."""
+    async def run():
+        db = Database(str(tmp_path / "b.db"))
+        await db.init()
+        await db.save_banner(ScrapedBanner(pack_id=24260, category="Bonus", title=None, price_coins=150000,
+                                           current_packs=14, total_packs=20))
+        start = datetime.now() - timedelta(days=1)
+        async with aiosqlite.connect(db.db_path) as conn:
+            await conn.execute("INSERT INTO shipment_history (banner_id, old_cards, new_cards, old_coins, new_coins, "
+                               "changed_at) VALUES (24260, 0, 3, 0, 9000, ?)", ((start - timedelta(days=30)).isoformat(),))
+            await conn.commit()
+        filled = await db.fill_start(24260, int(start.timestamp()))
+        again = await db.fill_start(24260, int(start.timestamp()) + 999)   # schon gesetzt: bleibt
+        dropped = await db.drop_history_before_start(24260)
+        return filled, again, dropped, (await db.get_banner(24260))["starts_at"], int(start.timestamp())
+
+    filled, again, dropped, stored, start = asyncio.run(run())
+    assert filled and not again and dropped == {24260: 1} and stored == start
