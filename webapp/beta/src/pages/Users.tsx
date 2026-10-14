@@ -50,6 +50,15 @@ export function Users() {
     authApi("api/admin/auto_ticks").then((r) => setTicks(r.items || [])).catch(() => setTicks([]));
   }, [user?.user_id, tick]);
 
+  // System-Status live: alle 10 s neu, solange die Seite offen ist (der Rest der Seite bleibt, wie er ist)
+  useEffect(() => {
+    if (!user?.admin) return;
+    const t = window.setInterval(() => {
+      if (!document.hidden) authApi("api/admin/status").then(setSt).catch(() => {});
+    }, 10000);
+    return () => clearInterval(t);
+  }, [user?.user_id]);
+
   if (user === undefined) return <div class="skeleton" style={{ height: "200px" }} />;
   if (!user?.admin) return <div class="empty">Nur für den Admin.</div>;
 

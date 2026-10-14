@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 137;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 138;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -1730,6 +1730,8 @@ async function showUsers() {
       <button class="seg-btn" data-tick="${i}">${t.rejected ? "↩️ zulassen" : "❌ war falsch"}</button></div>`).join("");
   const ago = (sec) => (sec == null ? "–" : sec < 120 ? `${sec} s` : sec < 7200 ? `${Math.round(sec / 60)} Min` : `${Math.round(sec / 3600)} Std`);
   const ok = (good) => (good ? "🟢" : "🔴");
+  // System-Status als Funktion: er wird alle 10 s neu geladen, ohne den Rest der Seite anzufassen
+  const statusBlock = (st) => {
   // Rechen-Prozess und Hintergrund-Warteschlangen des Bots (alle 10 s vom Bot gemeldet)
   const w = st && st.workers;
   const secs = (x) => (x == null ? "–" : x < 60 ? `${String(x).replace(".", ",")} s` : ago(Math.round(x)));
@@ -1746,7 +1748,7 @@ async function showUsers() {
       ${w.cpu_timeouts ? `<div class="line"><span>Abgebrochen (Zeitlimit ${w.cpu_limit || "–"} s)</span><span>${num(w.cpu_timeouts)}× · zuletzt ${job(w.cpu_last_timeout)} · vor ${ago(w.cpu_last_timeout && w.cpu_last_timeout.ago)}</span></div>` : ""}
       <div class="line"><span>Seit Start: Rechnungen / Banner-Auswertungen</span><span>${num(w.cpu_done)} / ${num(w.hits_done || 0)}${w.cpu_fallbacks ? ` · ${w.cpu_fallbacks}× neu gestartet` : ""} · vor ${ago(w.cpu_up)}</span></div>`
     : `<div class="line"><span>Rechen-Prozess</span><span class="muted">noch keine Meldung</span></div>`;
-  const statusHtml = st ? `<div class="rows">
+  return st ? `<div class="rows">
       <div class="line"><span>${ok(st.heartbeat_age != null && st.heartbeat_age < 900)} Bot (letzter Scrape)</span><span>vor ${ago(st.heartbeat_age)}</span></div>
       ${workerHtml}
       <div class="line"><span>Letzte Pack-Bewegung</span><span>${esc(st.last_pack_move ? st.last_pack_move.slice(11, 16) : "–")}</span></div>
@@ -1759,9 +1761,10 @@ async function showUsers() {
       <div class="line"><span>Hits unsichtbar gezogen (gelernt)</span><span>${st.hidden_rate != null ? pct(st.hidden_rate * 100) : "–"}</span></div>
       <div class="line"><span>Nutzer / gesperrt / Push-Geräte</span><span>${st.users} / ${st.blocked} / ${st.push_devices}</span></div>
     </div>` : `<div class="hint pad">Status nicht verfügbar</div>`;
+  };
   view.innerHTML = `<div class="section-title">👥 Nutzer <small class="muted">${users.length}</small></div>
     <details class="user-card"><summary><b>🩺 System-Status</b><span>${st ? ok(st.heartbeat_age != null && st.heartbeat_age < 900) : ""}</span></summary>
-      <div class="user-body" style="padding-top:8px">${statusHtml}</div></details>
+      <div class="user-body" style="padding-top:8px" id="sys-status">${statusBlock(st)}</div></details>
     <details class="user-card"><summary><b>🤖 Automatisch abgehakt</b><span class="muted">${(ticks.items || []).length} · 14 Tage</span></summary>
       <div class="user-body" style="padding-top:8px"><div class="hint pad">Vom Bot aus Versand/Umwandlung erkannt.
         „war falsch“ nimmt den Haken sofort weg; der Hit wird bei diesem Banner nicht mehr automatisch abgehakt.</div>
@@ -1806,6 +1809,15 @@ async function showUsers() {
       msg.textContent = `Gesendet an ${r.sent} Geräte ✓`; haptic();
     } catch (e) { msg.textContent = e.message; }
   });
+  // System-Status live: alle 10 s neu, solange die Seite offen ist (aufgeklappte Nutzer bleiben, wie sie sind)
+  clearInterval(state.statusTimer);
+  state.statusTimer = setInterval(async () => {
+    const box = document.getElementById("sys-status");
+    if (!box || !location.hash.startsWith("#/users")) return clearInterval(state.statusTimer);
+    if (document.visibilityState !== "visible") return;
+    const fresh = await authApi("/api/admin/status").catch(() => null);
+    if (fresh) box.innerHTML = statusBlock(fresh);
+  }, 10000);
   const others = users.filter((u) => !u.blocked);
   view.querySelectorAll(".user-card[data-user]").forEach((card) => card.addEventListener("toggle", async () => {
     if (!card.open || card.dataset.loaded) return;
@@ -2208,11 +2220,50 @@ document.addEventListener("touchend", async () => {
   ptr.classList.remove("ready");
 });
 
+// Live wie in der Beta: Der Server meldet jede Änderung der Banner-Daten, Liste und Detailseite laden sofort neu
+// (statt bis zu 30 s später). Wächter: hängt die Verbindung ohne Antwort (z. B. nach einem Neustart des Servers),
+// wird sie nach 10 s ohne "hello" bzw. 60 s ohne Lebenszeichen neu aufgebaut. Das 30-s-Neuladen bleibt als Rückfall.
+const live = { src: null, watch: 0, retry: 0, pending: 0 };
+function connectLive() {
+  live.src?.close();
+  live.src = null;
+  clearTimeout(live.retry);
+  clearTimeout(live.watch);
+  if (document.visibilityState !== "visible" || !deviceToken()) return;
+  const watch = (ms) => {
+    clearTimeout(live.watch);
+    live.watch = setTimeout(() => { live.src?.close(); live.src = null; live.retry = setTimeout(connectLive, 2000); }, ms);
+  };
+  live.src = new EventSource(`/api/stream?t=${encodeURIComponent(deviceToken())}`);
+  watch(10000);
+  live.src.addEventListener("hello", () => watch(60000));
+  live.src.addEventListener("ping", () => watch(60000));
+  live.src.addEventListener("update", () => {
+    watch(60000);
+    clearTimeout(live.pending);
+    live.pending = setTimeout(() => {
+      if (state.render && document.visibilityState === "visible") state.render().catch(() => {});
+    }, 500);
+  });
+  live.src.onerror = () => {
+    clearTimeout(live.watch);
+    live.src?.close();
+    live.src = null;
+    live.retry = setTimeout(connectLive, 15000);
+  };
+}
+
 // Zurück aus dem Hintergrund: sofort frische Daten statt bis zu 30 s alte
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState !== "visible") return;
+  if (document.visibilityState !== "visible") {
+    live.src?.close();
+    live.src = null;
+    clearTimeout(live.watch);
+    return;
+  }
   if (state.render) state.render().catch(() => {});
   updateBell();
+  connectLive();
 });
 // Push kommt an, während die App offen ist -> Glocke sofort hochzählen
 navigator.serviceWorker?.addEventListener("message", (e) => {
@@ -2223,6 +2274,7 @@ navigator.serviceWorker?.addEventListener("message", (e) => {
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
 route();
 updateBell();
+connectLive();
 // Reiter "Nutzer" nur für Admins
 me().then((u) => {
   const t = document.getElementById("users-tab"); if (t) t.hidden = !u?.admin;
