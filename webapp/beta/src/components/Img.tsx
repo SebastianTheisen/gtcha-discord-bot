@@ -16,10 +16,11 @@ export function Img({ url, w = 640, alt = "", eager = false }: { url?: string; w
   );
 }
 
-// Wie die Seite seit dem Umbau: Fächer der Top-Karten (wertvollste in der Mitte); Bannerbild nur ohne Kartenliste
+// Wie die Seite seit dem Umbau: Fächer der Top-Karten (wertvollste in der Mitte), auch bei nur 1-2 Karten (24260:
+// Giratina + Coins) - das hinterlegte Bannerbild ist bei GTCHA oft veraltet und nur ohne Kartenliste zu sehen
 export function Cover({ b, w = 640, alt = "", eager = false, max = 5 }:
   { b: { image?: string; cover?: string[] }; w?: number; alt?: string; eager?: boolean; max?: number }) {
-  if ((b.cover?.length || 0) < Math.min(3, max)) return <Img url={b.image || b.cover?.[0]} w={w} alt={alt} eager={eager} />;
+  if (!b.cover?.length) return <Img url={b.image} w={w} alt={alt} eager={eager} />;
   const cards = (b.cover || []).slice(0, max);
   return (
     <div class={`fan n${cards.length}`}>
