@@ -520,6 +520,14 @@ class ScrapingMixin:
                 changed = await self.db.set_image(pid, api_image(item)) or changed
             changed = await self.db.clear_title_if(pid, api_name(item)) or changed
             await self.db.set_site_name(pid, api_name(item))   # Zuordnung der Kauf-Details bei versteckter Kartenliste
+            # Verkaufsstart fehlt (über den Tab-Scrape angelegt/reaktiviert): nachtragen - er ist die Kennung des
+            # Banners (Bild-Adresse) und trennt ihn vom Verlauf eines früheren Banners mit derselben ID
+            if await self.db.fill_start(pid, jst_timestamp(item.get('start_date'))):
+                dropped = await self.db.drop_history_before_start(pid)
+                if dropped:
+                    logger.info(f"[ID] {pid}: Verkaufsstart nachgetragen, Verlauf eines früheren Banners gelöst "
+                                f"({dropped[pid]} Einträge)")
+                changed = True
             # Umgewandelte Coins nur speichern (Verlauf), Startbeitrag deshalb nicht neu bearbeiten
             if item.get('total_kangen') is not None:
                 await self.db.update_converted(pid, _int(item.get('total_kangen')))

@@ -325,14 +325,15 @@ class Database:
             ))
             await db.commit()
 
-    async def drop_history_before_start(self) -> Dict[int, int]:
+    async def drop_history_before_start(self, pack_id: Optional[int] = None) -> Dict[int, int]:
         """Verlauf, der über einen Tag vor dem Verkaufsstart eines laufenden Banners liegt, gehört zu einem früheren
         Banner mit derselben ID (GTCHA vergibt IDs neu) - lösen. Packs bewegen sich erst ab dem Start, verschickt und
         umgewandelt wird danach. Gibt {pack_id: gelöste Einträge} zurück."""
         tables = ("pack_history", "shipment_history", "convert_history", "card_value_history", "api_log")
         dropped: Dict[int, int] = {}
         async with aiosqlite.connect(self.db_path) as db:
-            cur = await db.execute("SELECT pack_id, starts_at FROM banners WHERE is_active = 1 AND starts_at > 0")
+            cur = await db.execute("SELECT pack_id, starts_at FROM banners WHERE is_active = 1 AND starts_at > 0"
+                                   + (" AND pack_id = ?" if pack_id else ""), (pack_id,) if pack_id else ())
             for pid, starts_at in await cur.fetchall():
                 cutoff = datetime.fromtimestamp(starts_at - 86400).isoformat()
                 for table in tables:
@@ -700,6 +701,16 @@ class Database:
             for table in THREAD_TABLES:
                 await db.execute(f"UPDATE {table} SET title = ? WHERE thread_id = ?", (title, thread_id))
             await db.commit()
+
+    async def fill_start(self, pack_id: int, starts_at: Optional[int]) -> bool:
+        """Verkaufsstart nachtragen, wenn er fehlt (Banner über den Tab-Scrape angelegt/reaktiviert). True = neu."""
+        if not starts_at:
+            return False
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("UPDATE banners SET starts_at = ? WHERE pack_id = ? AND is_active = 1 "
+                                   "AND (starts_at IS NULL OR starts_at = 0)", (starts_at, pack_id))
+            await db.commit()
+            return cur.rowcount > 0
 
     async def set_start(self, pack_id: int, starts_at: Optional[int], announced: bool) -> None:
         async with aiosqlite.connect(self.db_path) as db:
