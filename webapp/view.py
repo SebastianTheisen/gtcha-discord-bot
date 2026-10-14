@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 import aiosqlite
+from loguru import logger
 
 from database.db import STORE, Database, store_thread_id
 from utils.banner_info import RANK_ORDER, format_conditions, format_shipping, sale_end_timestamp, to_int
@@ -499,13 +500,24 @@ class BannerView:
                            "medals": medals}
         return result
 
+    async def _summaries(self, rows: List[Dict], with_pool: bool = False) -> List[Dict]:
+        """Ein Banner, der beim Berechnen scheitert, darf die anderen nicht verhindern (sonst zeigte die App gar
+        keine neuen Banner mehr) - er wird übersprungen und geloggt."""
+        out = []
+        for row in rows:
+            try:
+                out.append(await self.summary(row, with_pool=with_pool))
+            except Exception as e:
+                logger.warning(f"Banner {row.get('pack_id')} nicht berechnet: {type(e).__name__}: {e}")
+        return out
+
     async def all_banners(self, with_pool: bool = False) -> List[Dict]:
         rows = list((await self.db.get_active_banners()).values()) + list((await self.db.get_store_banners()).values())
-        return [await self.summary(row, with_pool=with_pool) for row in rows]
+        return await self._summaries(rows, with_pool)
 
     async def archived_banners(self) -> List[Dict]:
         """Beendete Banner der letzten 30 Tage (Kategorie Archiv), zuletzt beendete zuerst."""
-        return [await self.summary(row) for row in (await self.db.get_ended_banners()).values()]
+        return await self._summaries(list((await self.db.get_ended_banners()).values()))
 
     @staticmethod
     def hot(banners: List[Dict]) -> List[Dict]:

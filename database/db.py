@@ -325,6 +325,62 @@ class Database:
             ))
             await db.commit()
 
+    async def drop_history_before_start(self) -> Dict[int, int]:
+        """Verlauf, der über einen Tag vor dem Verkaufsstart eines laufenden Banners liegt, gehört zu einem früheren
+        Banner mit derselben ID (GTCHA vergibt IDs neu) - lösen. Packs bewegen sich erst ab dem Start, verschickt und
+        umgewandelt wird danach. Gibt {pack_id: gelöste Einträge} zurück."""
+        tables = ("pack_history", "shipment_history", "convert_history", "card_value_history", "api_log")
+        dropped: Dict[int, int] = {}
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT pack_id, starts_at FROM banners WHERE is_active = 1 AND starts_at > 0")
+            for pid, starts_at in await cur.fetchall():
+                cutoff = datetime.fromtimestamp(starts_at - 86400).isoformat()
+                for table in tables:
+                    c = await db.execute(f"DELETE FROM {table} WHERE banner_id = ? AND changed_at < ?", (pid, cutoff))
+                    if c.rowcount > 0:
+                        dropped[pid] = dropped.get(pid, 0) + c.rowcount
+            for pid in dropped:
+                # Erkennung lief evtl. schon mit dem alten Verlauf: neu aufbauen (erste Auswertung postet nichts)
+                await db.execute("UPDATE banners SET decided_value = NULL, ship_count = NULL, ship_value = NULL, "
+                                 "pulled_cards = NULL, unsure_cards = NULL, ship_batches = NULL WHERE pack_id = ?",
+                                 (pid,))
+                await db.execute("DELETE FROM auto_ticks WHERE pack_id = ?", (pid,))
+                await db.execute("DELETE FROM discord_public WHERE pack_id = ?", (pid,))
+            await db.commit()
+        return dropped
+
+    async def retire_banner_id(self, pack_id: int) -> bool:
+        """GTCHA vergibt Pack-IDs neu: den alten Banner dieser ID abschließen, bevor ein neuer sie bekommt.
+
+        Der alte Banner kommt ins Archiv (Kartenwerte/-IDs für den eigenen Verlauf), seine Threads gelten als beendet
+        und alles, was an der ID hängt (Pack-Verlauf, Versand-Schübe, Umwandlungen, Kartenwerte, Rohdaten, erkannte
+        Hits, Store-Medaillen, Discord-Warteschlange), wird gelöst - sonst rechnet der neue Banner mit den Versand-
+        Schüben des alten (falsche Medaillen) und zeigt dessen Verlauf. Lernfälle (banner_cases) bleiben.
+        True, wenn es zu der ID etwas Altes gab."""
+        tables = ("pack_history", "shipment_history", "convert_history", "card_value_history", "api_log")
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT pack_id, title, category, best_hit, price_coins, image_url, created_at, "
+                                   "updated_at, card_pool FROM banners WHERE pack_id = ?", (pack_id,))
+            old = await cur.fetchone()
+            found = old is not None
+            for table in tables:
+                cur = await db.execute(f"DELETE FROM {table} WHERE banner_id = ?", (pack_id,))
+                found = found or cur.rowcount > 0
+            if old:
+                await db.execute(
+                    "INSERT OR REPLACE INTO banner_archive (pack_id, title, category, best_hit, price_coins, image_url, "
+                    "created_at, ended_at, card_values, card_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (*old[:7], old[7] or datetime.now().isoformat(), *archive_pool(old[8])))
+                await db.execute("DELETE FROM banners WHERE pack_id = ?", (pack_id,))
+            for table in ("auto_ticks", "pull_rejects", "discord_public", "discord_outbox"):
+                await db.execute(f"DELETE FROM {table} WHERE pack_id = ?", (pack_id,))
+            await db.execute("DELETE FROM medals WHERE thread_id = ?", (store_thread_id(pack_id),))
+            await db.execute("UPDATE discord_threads SET is_expired = 1 WHERE banner_id = ?", (pack_id,))
+            await db.execute("DELETE FROM premium_threads WHERE banner_id = ?", (pack_id,))
+            await db.commit()
+        self.__dict__.get("_api_last", {}).pop(pack_id, None)
+        return found
+
     async def update_banner_packs(self, pack_id: int, new_count: int) -> None:
         now = datetime.now().isoformat()
         async with aiosqlite.connect(self.db_path) as db:
