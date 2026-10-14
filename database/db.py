@@ -727,8 +727,10 @@ class Database:
         if not starts_at:
             return False
         async with aiosqlite.connect(self.db_path) as db:
-            cur = await db.execute("UPDATE banners SET starts_at = ? WHERE pack_id = ? AND is_active = 1 "
-                                   "AND (starts_at IS NULL OR starts_at = 0)", (starts_at, pack_id))
+            # läuft schon: als gemeldet markieren - sonst meldete der Bot bei jedem nachgetragenen Banner
+            # "Verkauf gestartet" (14.10.: rund 30 alte Banner auf einmal)
+            cur = await db.execute("UPDATE banners SET starts_at = ?, start_announced = 1 WHERE pack_id = ? "
+                                   "AND is_active = 1 AND (starts_at IS NULL OR starts_at = 0)", (starts_at, pack_id))
             await db.commit()
             return cur.rowcount > 0
 
