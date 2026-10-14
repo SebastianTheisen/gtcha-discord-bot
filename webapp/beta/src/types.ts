@@ -105,6 +105,7 @@ export interface Shipment {
 }
 
 export interface BannerDetail extends Banner {
+  explain_pending?: boolean;   // Versand-Erklärung wird noch berechnet (kommt beim nächsten Abruf)
   hits: Hit[];
   cards: Card[];
   share_above_price?: number | null;
