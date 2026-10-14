@@ -47,6 +47,11 @@ class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, Hits
         """Setup beim Start."""
         await self.db.init()
         logger.info(f"Datenbank initialisiert: {self.db.db_path}")
+        # GTCHA vergibt Pack-IDs neu: Verlauf eines früheren Banners mit derselben ID vom laufenden lösen
+        dropped = await self.db.drop_history_before_start()
+        if dropped:
+            logger.info(f"[ID] Verlauf früherer Banner gelöst: "
+                        f"{', '.join(f'{pid} ({n})' for pid, n in sorted(dropped.items()))}")
 
         # Slash Commands registrieren
         self.tree.add_command(app_commands.Command(

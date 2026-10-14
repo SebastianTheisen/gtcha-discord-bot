@@ -449,6 +449,16 @@ class AppBridge:
             await db.commit()
         return request_id
 
+    async def forget_pack(self, pack_id: int) -> None:
+        """Pack-ID wird von GTCHA neu vergeben: automatisch gemeldete Medaillen und %-Verlauf des alten Banners lösen."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("DELETE FROM auto_claims WHERE pack_id = ?", (pack_id,))
+            try:
+                await db.execute("DELETE FROM ev_history WHERE banner_id = ?", (pack_id,))
+            except aiosqlite.OperationalError:
+                pass   # Tabelle legt erst die App an
+            await db.commit()
+
     async def is_auto_claim(self, pack_id: int, tier: str, user_id) -> bool:
         """Wurde diese Medaille automatisch (aus angeforderten Karten geschlossen) gemeldet?"""
         async with aiosqlite.connect(self.db_path) as db:

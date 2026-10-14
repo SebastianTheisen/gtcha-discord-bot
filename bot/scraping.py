@@ -115,6 +115,8 @@ class ScrapingMixin:
                         # (kann passieren wenn bot falscherweise 0-Pack via Proxy-Fehler gelöscht hat)
                         if existing and existing.get('is_active') == 0 and (banner.current_packs or 0) > 0:
                             logger.info(f"Banner {banner.pack_id} wieder auf Website - reaktiviere und erstelle Thread neu")
+                            # neue Vergabe der ID (anderer Banner)? Dann alten abschließen, sonst Daten behalten
+                            await self._prepare_banner_id(banner.pack_id, (api_items or {}).get(banner.pack_id) or {})
                             existing = None  # Als neuen Banner behandeln (save_banner setzt is_active=1)
 
                         # Banner mit 0 Packs: nur überspringen, NICHT löschen
@@ -368,12 +370,61 @@ class ScrapingMixin:
         return {pid for pid, it in api_items.items()
                 if _int(it.get('pack_count')) > 0 and not states.get(pid) and category_for(it)}
 
+    async def _prepare_banner_id(self, pid: int, item: dict) -> bool:
+        """GTCHA vergibt Pack-IDs neu (z. B. 24260): Ist die ID schon einmal benutzt worden und passt der neue Banner
+        nicht zum alten (anderer Verkaufsstart bzw. anderer interner Name), wird der alte abgeschlossen und alles,
+        was an der ID hängt, gelöst. Gleicher Start = derselbe Banner taucht wieder auf - dann bleibt alles.
+        True, wenn alte Daten gelöst wurden."""
+        row = await self.db.get_banner(pid)
+        if row and row.get('is_active') == 1:
+            return False
+        if row:
+            start, old_start = jst_timestamp(item.get('start_date')), row.get('starts_at')
+            name, old_name = api_name(item), row.get('site_name')
+            if start and old_start:
+                same = abs(start - old_start) < 3600
+            elif name and old_name:
+                same = name == old_name
+            else:   # nichts zum Vergleichen: kurz nach dem Ende ist es eher derselbe Banner
+                try:
+                    same = (datetime.now() - datetime.fromisoformat(row.get('updated_at'))).total_seconds() < 86400
+                except (TypeError, ValueError):
+                    same = False
+            if same:
+                return False
+        if not await self.db.retire_banner_id(pid):
+            return False
+        try:
+            await self.app_bridge.forget_pack(pid)
+        except Exception as e:
+            logger.warning(f"[ID] App-Daten zu {pid} nicht gelöst: {e}")
+        for cache in ("_coin_seen", "_observation_cache"):
+            self.__dict__.get(cache, {}).pop(pid, None)
+        self.__dict__.get("_reevaluate_skipped", set()).discard(pid)
+        logger.info(f"[ID] {pid} wird von GTCHA neu vergeben: alter Banner"
+                    f"{' (' + str(row.get('title') or row.get('site_name') or row.get('category')) + ')' if row else ''}"
+                    f" archiviert, neuer Banner startet ohne alte Daten")
+        return True
+
     async def _create_banners_from_api(self, api_items: dict) -> list:
         """Legt neue Banner direkt aus pack/list an (auch vor Verkaufsstart); gibt die IDs zurück."""
         created = []
+        # ID neu vergeben, während der alte Banner hier noch als laufend gilt: Die Seite meldet zur ID einen
+        # späteren Verkaufsstart (mind. 1 Tag) und einen anderen internen Namen - alten Banner erst beenden
+        for pid, row in (await self.db.get_active_banners()).items():
+            item = api_items.get(pid)
+            start, old_start = jst_timestamp((item or {}).get('start_date')), row.get('starts_at')
+            name, old_name = api_name(item or {}), row.get('site_name')
+            if (item and start and old_start and start > old_start + 86400 and old_start < time.time()
+                    and not (name and old_name and name == old_name)):
+                logger.info(f"[ID] {pid}: neuer Banner unter bekannter ID (Start {item.get('start_date')}) - "
+                            f"alter wird beendet")
+                await self._delete_banner_thread(pid)
+                await self.db.mark_banner_inactive(pid)
         states = await self.db.get_banner_states()
         for pid in sorted(self._new_banner_candidates(api_items, states)):
             item = api_items[pid]
+            await self._prepare_banner_id(pid, item)   # ID schon einmal vergeben? Alten Banner abschließen
             limit = _int(item.get('max_buy_count'))
             banner = ScrapedBanner(
                 pack_id=pid,
