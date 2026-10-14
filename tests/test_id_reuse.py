@@ -213,3 +213,16 @@ def test_edited_banner_reappearing_is_not_treated_as_new(tmp_path):
         return bot.app_bridge.forgotten
 
     assert asyncio.run(run()) == []
+
+
+def test_filled_start_counts_as_announced(tmp_path):
+    """Nachgetragener Start bei laufendem Banner: kein "Verkauf gestartet" hinterher."""
+    async def run():
+        db = Database(str(tmp_path / "b.db"))
+        await db.init()
+        await db.save_banner(ScrapedBanner(pack_id=24014, category="Pokemon", title=None, price_coins=100,
+                                           current_packs=5, total_packs=10))
+        await db.fill_start(24014, int((datetime.now() - timedelta(days=30)).timestamp()))
+        return (await db.get_banner(24014))["start_announced"]
+
+    assert asyncio.run(run()) == 1
