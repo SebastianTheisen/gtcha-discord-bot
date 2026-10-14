@@ -122,6 +122,15 @@ def category_for(item: dict) -> Optional[str]:
     return CATEGORY_BY_CARD_TYPE.get(card_type) or CARD_TYPE_NAMES.get(card_type) or f"Kategorie {card_type}"
 
 
+def versioned_image(url: Optional[str], starts_at: Optional[int]) -> Optional[str]:
+    """Bannerbild mit Kennung des Banners (Verkaufsstart): GTCHA vergibt Pack-IDs neu, das Bild liegt dann unter
+    derselben Adresse (/pack/24260/1.webp) - ohne Kennung zeigten Zwischenspeicher (VPS, Browser, Discord) noch das
+    Bild des alten Banners. Die Seite ignoriert den Zusatz."""
+    if not url or not starts_at:
+        return url
+    return f"{url}{'&' if '?' in url else '?'}s={int(starts_at)}"
+
+
 def jst_timestamp(text: Optional[str]) -> Optional[int]:
     """'2026-10-01 03:00:00' oder '2026/11/01 00:00' (Zeit der Seite, JST) -> Unix-Zeit."""
     if not text:

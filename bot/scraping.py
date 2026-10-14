@@ -438,6 +438,7 @@ class ScrapingMixin:
                 detail_page_url=f"{BASE_URL}/pack-detail?packId={pid}",
             )
             starts_at = jst_timestamp(item.get('start_date'))
+            banner.starts_at = starts_at   # Bild im ersten Startbeitrag mit Kennung (siehe versioned_image)
             upcoming = is_upcoming(item)
             await self.db.save_banner(banner)
             await self.db.set_start(pid, starts_at, announced=not upcoming)

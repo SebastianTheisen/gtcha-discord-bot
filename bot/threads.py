@@ -277,7 +277,8 @@ class ThreadsMixin:
 
         # Bild hinzufügen falls vorhanden
         if get('image_url'):
-            embed.set_image(url=get('image_url'))
+            # mit Kennung des Banners: unter einer neu vergebenen ID zeigt Discord sonst das alte Bild
+            embed.set_image(url=versioned_image(get('image_url'), get('starts_at')))
 
         return embed
 
