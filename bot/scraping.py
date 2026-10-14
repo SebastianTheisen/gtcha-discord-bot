@@ -381,7 +381,15 @@ class ScrapingMixin:
         if row:
             start, old_start = jst_timestamp(item.get('start_date')), row.get('starts_at')
             name, old_name = api_name(item), row.get('site_name')
-            if start and old_start:
+            # Packs laufen weiter nach unten (nicht wieder hoch wie bei einem neuen, vollen Banner) und gleiche
+            # Gesamtzahl: GTCHA hat denselben Banner nur bearbeitet - Verlauf gehört dazu
+            packs, old_packs = _int(item.get('pack_count')), row.get('current_packs')
+            total, old_total = _int(item.get('total_pack_count')), row.get('total_packs')
+            continues = (old_packs is not None and packs <= old_packs and (not total or not old_total
+                                                                            or total == old_total))
+            if continues:
+                same = True
+            elif start and old_start:
                 same = abs(start - old_start) < 3600
             elif name and old_name:
                 same = name == old_name
@@ -415,8 +423,9 @@ class ScrapingMixin:
             item = api_items.get(pid)
             start, old_start = jst_timestamp((item or {}).get('start_date')), row.get('starts_at')
             name, old_name = api_name(item or {}), row.get('site_name')
+            continues = item and _int(item.get('pack_count')) <= (row.get('current_packs') or 0)
             if (item and start and old_start and start > old_start + 86400 and old_start < time.time()
-                    and not (name and old_name and name == old_name)):
+                    and not (name and old_name and name == old_name) and not continues):
                 logger.info(f"[ID] {pid}: neuer Banner unter bekannter ID (Start {item.get('start_date')}) - "
                             f"alter wird beendet")
                 await self._delete_banner_thread(pid)

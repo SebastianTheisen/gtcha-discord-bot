@@ -12,8 +12,8 @@ import aiosqlite
 from loguru import logger
 
 from database.db import STORE, Database, store_thread_id
-from utils.banner_info import (RANK_ORDER, format_conditions, format_shipping, sale_end_timestamp, to_int,
-                               versioned_image)
+from utils.banner_info import (RANK_ORDER, card_key, format_conditions, format_shipping, sale_end_timestamp,
+                               to_int, versioned_image)
 from utils.card_pool import (
     batch_deadlines, card_value, estimate, explain_batch, out_of_banner_value, fmt_coins, pool_minimum, relevant_units, resolve_pulled, tier_keys,
     tracked_units, claimable_units, medal_units, coin_base_drawn, is_coin_mixed_pool, is_coin_pool,
@@ -226,7 +226,7 @@ class BannerView:
             "id": pid, "title": banner_label(row.get('title'), row.get('best_hit'), row.get('category'),
                                                      row.get('price_coins')) or f"Pack {pid}", "category": row.get('category'),
             "price": price, "remaining": remaining, "total": total,
-            "per_day": row.get('entries_per_day'), "image": versioned_image(row.get('image_url'), row.get('starts_at')), "buy_url": buy_url(row),
+            "per_day": row.get('entries_per_day'), "image": versioned_image(row.get('image_url'), row.get('starts_at'), card_key(row.get('card_pool'))), "buy_url": buy_url(row),
             "cover": cover,
             "end": row.get('sale_end_date'), "end_ts": sale_end_timestamp(row.get('sale_end_date')),
             "starts_at": row.get('starts_at'),
@@ -421,11 +421,11 @@ class BannerView:
         # Archiv: alles behalten (Platz ist da) - die Detailseite soll auch dort sofort Bilder zeigen
         for row in (await self.db.get_ended_banners()).values():
             pool = json.loads(row['card_pool']) if row.get('card_pool') else {}
-            banners.append(versioned_image(row.get('image_url'), row.get('starts_at')))
+            banners.append(versioned_image(row.get('image_url'), row.get('starts_at'), card_key(row.get('card_pool'))))
             hits += [h.get('image') for h in pool.get('hits') or []] + [c.get('image') for c in pool.get('top') or []]
             cards += [c.get('image') for c in pool.get('cards') or []]
         for row in rows:
-            banners.append(versioned_image(row.get('image_url'), row.get('starts_at')))
+            banners.append(versioned_image(row.get('image_url'), row.get('starts_at'), card_key(row.get('card_pool'))))
             pool = json.loads(row['card_pool']) if row.get('card_pool') else {}
             hits += [h.get('image') for h in pool.get('hits') or []] + [c.get('image') for c in pool.get('top') or []]
             cards += [c.get('image') for c in pool.get('cards') or []]

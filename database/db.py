@@ -332,10 +332,16 @@ class Database:
         tables = ("pack_history", "shipment_history", "convert_history", "card_value_history", "api_log")
         dropped: Dict[int, int] = {}
         async with aiosqlite.connect(self.db_path) as db:
-            cur = await db.execute("SELECT pack_id, starts_at FROM banners WHERE is_active = 1 AND starts_at > 0"
-                                   + (" AND pack_id = ?" if pack_id else ""), (pack_id,) if pack_id else ())
-            for pid, starts_at in await cur.fetchall():
+            cur = await db.execute("SELECT pack_id, starts_at, current_packs FROM banners WHERE is_active = 1 "
+                                   "AND starts_at > 0" + (" AND pack_id = ?" if pack_id else ""),
+                                   (pack_id,) if pack_id else ())
+            for pid, starts_at, current in await cur.fetchall():
                 cutoff = datetime.fromtimestamp(starts_at - 86400).isoformat()
+                # Nur bei einem Neustart im Pack-Verlauf: ein neuer Banner beginnt voll, die Packs springen also
+                # hoch. Laufen sie lückenlos weiter nach unten, hat GTCHA denselben Banner nur bearbeitet (neues
+                # Datum, Bild, Karten) - dann gehört der Verlauf dazu und bleibt.
+                if not await self._pack_restart(db, pid, cutoff, current):
+                    continue
                 for table in tables:
                     c = await db.execute(f"DELETE FROM {table} WHERE banner_id = ? AND changed_at < ?", (pid, cutoff))
                     if c.rowcount > 0:
@@ -701,6 +707,20 @@ class Database:
             for table in THREAD_TABLES:
                 await db.execute(f"UPDATE {table} SET title = ? WHERE thread_id = ?", (title, thread_id))
             await db.commit()
+
+    @staticmethod
+    async def _pack_restart(db, pack_id: int, cutoff: str, current: Optional[int]) -> bool:
+        """Zeigt der Pack-Verlauf um `cutoff` einen Neustart (letzter Stand davor < erster Stand danach)?"""
+        cur = await db.execute("SELECT new_count FROM pack_history WHERE banner_id = ? AND changed_at < ? "
+                               "ORDER BY changed_at DESC, id DESC LIMIT 1", (pack_id, cutoff))
+        before = await cur.fetchone()
+        if not before or before[0] is None:
+            return False   # kein Verlauf von davor - nichts, das zu einem anderen Banner gehören könnte
+        cur = await db.execute("SELECT old_count FROM pack_history WHERE banner_id = ? AND changed_at >= ? "
+                               "ORDER BY changed_at, id LIMIT 1", (pack_id, cutoff))
+        after = await cur.fetchone()
+        first = after[0] if after and after[0] is not None else current
+        return first is not None and first > before[0]
 
     async def fill_start(self, pack_id: int, starts_at: Optional[int]) -> bool:
         """Verkaufsstart nachtragen, wenn er fehlt (Banner über den Tab-Scrape angelegt/reaktiviert). True = neu."""
