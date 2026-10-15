@@ -129,3 +129,18 @@ def test_medal_for_banner_without_thread_is_stored_internally(tmp_path, monkeypa
 
     status, medals = asyncio.run(run())
     assert status == "ok" and medals == {"T1": 42}
+
+
+def test_random_message_per_line_at_irregular_intervals():
+    """Mehrere Zeilen: je Thread eine zufällige davon, nächste frühestens nach 5 Min (höchstens 25)."""
+    async def run():
+        bot = Bot("notice")
+        bot._pause["notice"] = "⚠️ Timeout\n\n❌ Error\n🔄 Reconnecting"
+        bot._install_discord_guard()
+        await bot._discord_paused(1)
+        waits = [t - time.time() for t in bot._pause_notice_at.values()]
+        return bot.sent, waits
+
+    sent, waits = asyncio.run(run())
+    assert len(sent) == 2 and all(text in ("⚠️ Timeout", "❌ Error", "🔄 Reconnecting") for _, text in sent)
+    assert all(5 * 60 - 1 <= w <= 25 * 60 for w in waits)
