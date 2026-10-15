@@ -54,6 +54,7 @@ def test_guard_blocks_writes_but_not_reads_interactions_or_the_notice():
         route = lambda m, p: SimpleNamespace(method=m, path=p)
         await bot.http.request(route("GET", "/channels/1/messages"))
         await bot.http.request(route("POST", "/interactions/1/abc/callback"))   # /tracker-verknüpfen bleibt
+        await bot.http.request(route("PUT", "/applications/{application_id}/guilds/{guild_id}/commands"))   # Start
         blocked = []
         for m, p in (("POST", "/channels/1/messages"), ("PATCH", "/channels/1/messages/2"),
                      ("PUT", "/channels/1/messages/2/reactions/x/@me"), ("DELETE", "/channels/1")):
@@ -69,6 +70,7 @@ def test_guard_blocks_writes_but_not_reads_interactions_or_the_notice():
     blocked, passed = asyncio.run(run())
     assert blocked == ["POST", "PATCH", "PUT", "DELETE"]
     assert ("GET", "/channels/1/messages") in passed and ("POST", "/channels/1/messages") in passed
+    assert ("PUT", "/applications/{application_id}/guilds/{guild_id}/commands") in passed
 
 
 def test_notice_instead_of_update_at_most_every_10_minutes_then_nothing():

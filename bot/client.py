@@ -181,8 +181,11 @@ class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, Hits
         if GUILD_ID:
             guild = discord.Object(id=int(GUILD_ID))
             self.tree.copy_global_to(guild=guild)
-            await self.tree.sync(guild=guild)
-            logger.info("Slash Commands synchronisiert")
+            try:   # darf den Start nie verhindern (sonst läuft weder Bot noch Datenerfassung für die Apps)
+                await self.tree.sync(guild=guild)
+                logger.info("Slash Commands synchronisiert")
+            except Exception as e:
+                logger.warning(f"Slash Commands nicht synchronisiert: {type(e).__name__}: {e}")
 
     async def on_ready(self):
         logger.info(f"Bot online: {self.user}")
@@ -198,7 +201,10 @@ class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, Hits
 
         # Nur die Thread-Wiederherstellung muss vor dem ersten Scrape fertig sein
         # (sonst entstehen doppelte Threads); der Rest läuft parallel zum Scrape.
-        await self._recover_threads_from_discord()
+        try:   # Discord-Probleme (oder Discord-Pause) dürfen den Start der Datenerfassung nie verhindern
+            await self._recover_threads_from_discord()
+        except Exception as e:
+            logger.warning(f"Thread-Wiederherstellung übersprungen: {type(e).__name__}: {e}")
 
         # Erster Scrape sofort - über Scheduler triggern statt direkt aufrufen,
         # das vermeidet Konflikte mit dem regulären Scheduler-Job
