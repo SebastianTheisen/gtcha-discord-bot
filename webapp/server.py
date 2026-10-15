@@ -204,6 +204,7 @@ def worker_summary(st: Optional[Dict], now: float) -> Optional[Dict]:
         "cpu_limit": cpu.get("limit"), "cpu_workers": cpu.get("workers", 1),
         "cpu_running_all": [{**j, "for": ago(j.get("since"))} for j in cpu.get("running_all") or []],
         "hits_done": hits.get("done", 0),
+        "discord": st.get("discord") and {**st["discord"], "last": done((st["discord"] or {}).get("last"))},
         "hits_running": hits.get("running") and {**hits["running"], "for": ago(hits["running"].get("since"))},
         "hits_last": done(hits.get("last")), "hits_waiting": hits.get("waiting", 0),
         "views_waiting": views.get("waiting", 0), "views_busy": bool(views.get("busy")),

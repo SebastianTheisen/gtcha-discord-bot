@@ -198,6 +198,10 @@ class HitsMixin:
                      "waiting": len([p for p in pending if p not in running])},
             "views": {"waiting": len(self.__dict__.get("_view_queue") or {}),
                       "busy": bool(getattr(self, "_view_worker", None) and not self._view_worker.done())},
+            # Discord-Pause: Zustand, gepostete Meldungen (normal/Premium), abgefangene Zugriffe seit dem Start
+            "discord": {"state": (getattr(self, "_pause", None) or {}).get("state", "on"),
+                        "notices": self.__dict__.get("_pause_notices") or {"main": 0, "premium": 0},
+                        "blocked": getattr(self, "_pause_blocked", 0), "last": getattr(self, "_pause_last", None)},
         }
 
     async def _write_worker_status(self):
