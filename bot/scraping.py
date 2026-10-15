@@ -620,6 +620,8 @@ class ScrapingMixin:
     async def _post_pack_update_to_thread(self, pack_id: int, old_packs: int, new_packs: int, total_packs: int) -> bool:
         """Postet einen Kommentar in allen Threads des Banners, wenn sich die Pack-Anzahl ändert.
         True, sobald es in mindestens einem Thread geklappt hat."""
+        if await self._discord_paused(pack_id):
+            return True   # Discord-Pause: Hinweis statt Pack-Update - die Pack-Zahl wird trotzdem gespeichert
         try:
             if not await self._banner_threads(pack_id):
                 row = await self.db.get_banner(pack_id)

@@ -224,9 +224,10 @@ class HitsMixin:
                     medal_thread = store_thread_id(pid)
                 else:
                     thread_data = await self.db.get_thread_by_banner_id(pid)
-                    if not thread_data or thread_data.get('is_expired'):
+                    if thread_data and thread_data.get('is_expired'):
                         continue
-                    medal_thread = int(thread_data['thread_id'])
+                    # ohne Thread (z. B. während der Discord-Pause angelegt): Medaillen an der internen Nummer
+                    medal_thread = int(thread_data['thread_id']) if thread_data else store_thread_id(pid)
 
                 state = await self.db.get_pull_tracking(pid)
                 pulled, unsure = list(state["pulled"]), list(state["unsure"])
@@ -687,6 +688,8 @@ class HitsMixin:
     async def _update_probability_message(self, thread_id: Optional[int], banner_id: int):
         """Erstellt oder aktualisiert die Wahrscheinlichkeits-Nachricht in allen Threads des Banners, die nicht
         schlank sind (thread_id wird nicht mehr gebraucht - es gelten immer alle Threads)."""
+        if await self._discord_pause_state() != "on":
+            return   # Discord-Pause
         for thread_data, scope in await self._banner_threads(banner_id):
             if not await self._slim(scope):
                 await self._update_one_probability(thread_data, banner_id)

@@ -58,7 +58,7 @@ class LearningMixin:
                 medal_thread = store_thread_id(pid)
             else:
                 thread = await self.db.get_thread_by_banner_id(pid) or {}
-                medal_thread = int(thread['thread_id']) if thread.get('thread_id') else 0
+                medal_thread = int(thread['thread_id']) if thread.get('thread_id') else store_thread_id(pid)
             keys = tier_keys(pool)
             medal_t = {keys[t]: m["at"] for t, m in (await self.db.medal_rows(medal_thread)).items()
                        if t in keys and m.get("at") and m["source"] != "admin"} if medal_thread else {}
@@ -96,7 +96,7 @@ class LearningMixin:
                 medal_thread = store_thread_id(pid)
             else:
                 thread = await self.db.get_thread_by_banner_id(pid) or {}
-                medal_thread = int(thread['thread_id']) if thread.get('thread_id') else 0
+                medal_thread = int(thread['thread_id']) if thread.get('thread_id') else store_thread_id(pid)
             keys = tier_keys(pool)
             medal_keys = {keys[t] for t in (await self.db.medal_rows(medal_thread)) if t in keys} if medal_thread else set()
             seen = set((await self.db.get_pull_tracking(pid))["pulled"]) | medal_keys

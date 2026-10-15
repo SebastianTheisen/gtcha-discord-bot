@@ -14,9 +14,20 @@ Die Datenbank (und damit die App) bekommt jede Änderung sofort.
 """
 
 import time
+from contextvars import ContextVar
 from datetime import timezone
 
 from bot.common import *  # noqa: F401,F403
+
+# Discord-Pause (Admin in der App): "notice" = statt jedes Updates nur der Hinweis, "off" = gar nichts mehr.
+# Gesperrt wird zentral in der HTTP-Schicht von discord.py (jeder schreibende Zugriff); nur der Hinweis selbst und
+# Antworten auf Slash-Commands (/tracker-verknüpfen, nur für die Person sichtbar) dürfen durch.
+DISCORD_ALLOW = ContextVar("discord_allow", default=False)
+PAUSE_NOTICE_EVERY = 10 * 60   # Hinweis höchstens so oft je Thread (Banner mit Updates jede Minute: sonst Flut)
+
+
+class DiscordPaused(discord.DiscordException):
+    """Schreibender Discord-Zugriff während der Discord-Pause (wird nicht als Fehler geloggt)."""
 
 # Foren aus der .env (Stand beim Start) - in der App eingetragene kommen dazu bzw. überschreiben sie
 _ENV_CHANNELS = dict(CHANNEL_IDS)
@@ -45,6 +56,69 @@ def minimal_drop(content: str) -> bool:
 
 
 class DiscordViewMixin:
+    async def _discord_pause_state(self, fresh: bool = False) -> str:
+        """"on" | "notice" | "off" (aus den App-Einstellungen, 20 s zwischengespeichert)."""
+        cached = getattr(self, "_pause", None)
+        if fresh or not cached or time.time() - cached["read"] > SETTINGS_CACHE_SECONDS:
+            try:
+                await self.app_bridge.init()
+                cached = {**await self.app_bridge.discord_pause(), "read": time.time()}
+            except Exception as e:
+                logger.debug(f"Discord-Pause nicht gelesen: {e}")
+                cached = cached or {"state": "on", "notice": "", "read": time.time()}
+            if getattr(self, "_pause", {}).get("state") != cached["state"]:
+                logger.info(f"[DISCORD] Pause: {cached['state']}")
+            self._pause = cached
+        return cached["state"]
+
+    def _install_discord_guard(self):
+        """Jeder schreibende Discord-Zugriff läuft durch http.request - dort während der Pause sperren."""
+        if getattr(self, "_guard_installed", False):
+            return
+        original = self.http.request
+
+        async def guarded(route, **kwargs):
+            state = (getattr(self, "_pause", None) or {}).get("state", "on")
+            if (state != "on" and route.method != "GET" and not DISCORD_ALLOW.get()
+                    and not route.path.startswith(("/interactions", "/webhooks"))):
+                raise DiscordPaused(f"Discord-Pause ({state}): {route.method} {route.path}")
+            return await original(route, **kwargs)
+
+        self.http.request = guarded
+        self._guard_installed = True
+
+    async def _post_pause_notice(self, pack_id: int) -> None:
+        """Hinweis statt des Updates in die Threads des Banners (höchstens alle 10 Min je Thread)."""
+        sent = self.__dict__.setdefault("_pause_notice_at", {})
+        text = (getattr(self, "_pause", None) or {}).get("notice")
+        if not text:
+            return
+        for thread_data, _scope in await self._banner_threads(pack_id):
+            tid = int(thread_data["thread_id"])
+            if time.time() - sent.get(tid, 0) < PAUSE_NOTICE_EVERY:
+                continue
+            sent[tid] = time.time()
+            token = DISCORD_ALLOW.set(True)
+            try:
+                thread = await self._open_thread(tid)
+                if thread is not None:
+                    await discord_rate_limiter.acquire("message_send")
+                    await thread.send(text)
+            except Exception as e:
+                logger.debug(f"[DISCORD] Hinweis in {tid} nicht gepostet: {e}")
+            finally:
+                DISCORD_ALLOW.reset(token)
+
+    async def _discord_paused(self, pack_id: int, notice: bool = True) -> bool:
+        """True, wenn Discord pausiert ist (dann ggf. Hinweis statt des Updates). Aufrufer tun so, als sei gepostet,
+        damit Pack-Zahlen, Banner und Medaillen in der Datenbank (und damit in den Apps) weiterlaufen."""
+        state = await self._discord_pause_state()
+        if state == "on":
+            return False
+        if state == "notice" and notice:
+            await self._post_pause_notice(pack_id)
+        return True
+
     async def _apply_forum_ids(self):
         """In der App eingetragene Discord-Foren übernehmen (zusätzlich zur .env, die App gewinnt). Neu eingetragenes
         normales Forum: laufende Banner der Kategorie dort nachposten."""
@@ -159,6 +233,8 @@ class DiscordViewMixin:
                                exclude: Optional[int] = None, reaction: Optional[tuple] = None, **kwargs) -> bool:
         """Text in alle Threads des Banners posten (scopes: nur diese Foren, skip_minimal: nicht ins minimale Forum,
         exclude: diesen Thread auslassen). reaction = (Emoji, hinzufügen?) am Startbeitrag. True = mind. ein Post."""
+        if await self._discord_paused(pack_id, notice=bool(text)):
+            return True   # Discord-Pause: Hinweis statt des Posts, alles andere läuft weiter
         posted = False
         for thread_data, scope in await self._banner_threads(pack_id):
             if (scopes and scope not in scopes) or int(thread_data["thread_id"]) == exclude:
@@ -317,6 +393,8 @@ class DiscordViewMixin:
     async def _watch_discord_mode(self):
         """In der App umgeschaltet (schlank/voll)? Dann alle Startbeiträge, Titel und Hit-Listen neu zeichnen
         und beim Wechsel auf schlank die alten Posts löschen."""
+        if await self._discord_pause_state(fresh=True) != "on":
+            return   # Discord-Pause: nichts neu zeichnen, keine Foren nachrüsten
         await self._apply_forum_ids()
         try:
             view = await self._settings_view()

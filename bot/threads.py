@@ -285,6 +285,8 @@ class ThreadsMixin:
     async def _post_banner_to_discord(self, banner, starts_at: Optional[int] = None):
         """Postet einen Banner als Thread in Discord (starts_at = angekündigt, Verkauf startet später) -
         im normalen Forum und, falls eingerichtet, im Premium-Forum."""
+        if await self._discord_pause_state() != "on":
+            return   # Discord-Pause: kein Thread - der Banner läuft in den Apps (Medaillen intern wie Store-Packs)
         thread, message = await self._create_banner_thread(banner, CHANNEL_IDS.get(banner.category), starts_at)
         if thread:
             await self.db.save_thread(banner_id=banner.pack_id, thread_id=thread.id, channel_id=thread.parent_id,
@@ -298,7 +300,7 @@ class ThreadsMixin:
         ohne @everyone, dafür gleich mit Startbeitrag, Hit-Liste und Medaillen."""
         get = lambda key, default=None: self._get_banner_value(banner, key, default)
         channel_id = PREMIUM_CHANNEL_IDS.get(get('category'))
-        if not channel_id:
+        if not channel_id or await self._discord_pause_state() != "on":
             return None
         async with self.__dict__.setdefault("_premium_lock", asyncio.Lock()):
             known = await self.db.get_premium_thread(get('pack_id'))

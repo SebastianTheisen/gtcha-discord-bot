@@ -47,6 +47,9 @@ class GTCHABot(FastPollMixin, ScrapingMixin, MonitoringMixin, ThreadsMixin, Hits
         """Setup beim Start."""
         await self.db.init()
         logger.info(f"Datenbank initialisiert: {self.db.db_path}")
+        # Discord-Pause (in der App): schreibende Zugriffe zentral sperren, Stand gleich beim Start lesen
+        self._install_discord_guard()
+        await self._discord_pause_state(fresh=True)
         # GTCHA vergibt Pack-IDs neu: Verlauf eines früheren Banners mit derselben ID vom laufenden lösen
         dropped = await self.db.drop_history_before_start()
         if dropped:

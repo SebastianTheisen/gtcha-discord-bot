@@ -22,6 +22,8 @@ logger.configure(patcher=lambda record: record["extra"].update(
 logger.add(
     sys.stderr,
     level=log_level,
+    # Discord-Pause: abgefangene Discord-Zugriffe sind kein Fehler - nicht als Warnung ins Log
+    filter=lambda record: "Discord-Pause (" not in record["message"] and "DiscordPaused" not in record["message"],
     format="<level>{extra[berlin]}</level> | <level>{level: <7}</level> | <level>{message}</level>",
     colorize=True,
 )

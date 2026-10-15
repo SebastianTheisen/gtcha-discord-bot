@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 138;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 139;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -1152,6 +1152,20 @@ async function showSettings() {
       haptic();
     } catch (e) { msg.textContent = "Nicht gespeichert: " + e.message; }
   });
+  view.querySelectorAll("[data-pause]").forEach((btn) => btn.addEventListener("click", async () => {
+    const msg = view.querySelector("#pause-msg");
+    const action = btn.dataset.pause;
+    const label = action === "notice" ? "Hinweis posten und danach Discord abschalten?" : action === "off"
+      ? "Discord sofort abschalten? Es wird nichts mehr gepostet." : "Discord wieder normal laufen lassen?";
+    if (await ask("Discord-Pause", label, ["Abbrechen", "Ja"]) !== "Ja") return;
+    try {
+      const p = await authApi("/api/admin/discord_pause", { action, notice: view.querySelector("#pause-notice").value,
+        hours: Number(String(view.querySelector("#pause-hours").value).replace(",", ".")) || 6 });
+      view.querySelector("#pause-status").innerHTML = `<b>${esc(pauseStatus(p))}</b>`;
+      msg.textContent = "Gespeichert ✓ – der Bot übernimmt es innerhalb einer Minute";
+      haptic();
+    } catch (e) { msg.textContent = "Nicht gespeichert: " + e.message; }
+  }));
   view.querySelector("#forum-save")?.addEventListener("click", async () => {
     const msg = view.querySelector("#forum-msg");
     const forums = {};
@@ -1639,8 +1653,33 @@ function adminSection(a) {
       <div class="hint">Admin: ${(a.admins || []).map((x) => esc(x.name || "–")).join(", ") || "–"}</div>
       <div class="hint" id="admin-msg"></div>
     </div>
+    ${pauseSection(a)}
     ${forumSection(a)}
     ${announceSection(a)}`;
+}
+
+// --- Admin: Discord-Pause (Hinweis statt Updates, danach gar nichts mehr - die Apps laufen normal weiter) ---
+const pauseStatus = (p) => (!p || p.state === "on" ? "🟢 Discord läuft normal"
+  : p.state === "notice" ? `⏸️ Hinweis statt Updates bis ${new Date(p.stop_at * 1000).toLocaleString("de-DE", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}, danach aus`
+  : "⛔ Discord aus – es wird nichts mehr gepostet");
+function pauseSection(a) {
+  const p = a.pause || {};
+  return `<h2>⏸️ Discord-Pause <small>Admin</small></h2>
+    <div class="panel">
+      <div class="hint" id="pause-status"><b>${esc(pauseStatus(p))}</b></div>
+      <textarea id="pause-notice" class="bm-code" rows="4" aria-label="Hinweis">${esc(p.notice || "")}</textarea>
+      <div class="add-watch">
+        <input id="pause-hours" class="code-input plain" inputmode="decimal" value="6" aria-label="Stunden">
+        <button class="btn primary" data-pause="notice">Hinweis, danach aus</button>
+      </div>
+      <div class="hint">Statt jedes Updates kommt der Hinweis (höchstens alle 10 Min je Thread), nach den Stunden gar
+        nichts mehr. Die Apps laufen ganz normal weiter.</div>
+      <div class="add-watch">
+        <button class="btn" data-pause="off">Sofort aus</button>
+        <button class="btn" data-pause="on">Wieder normal</button>
+      </div>
+      <div class="hint" id="pause-msg"></div>
+    </div>`;
 }
 
 // --- Admin: Discord-Foren je Kategorie (der Bot übernimmt sie innerhalb einer Minute) ---
