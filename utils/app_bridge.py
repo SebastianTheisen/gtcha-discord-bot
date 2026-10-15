@@ -65,7 +65,12 @@ MAX_IMPORT_BYTES = 40_000_000   # "Komplett" mit hunderten Münzseiten
 #   premium_mode  Premium-Foren: "full" = alle Infos wie in der App, "slim" = abgespeckt (immer mit Verzögerung)
 DEFAULT_SETTINGS = {"discord_mode": "minimal", "discord_delay": "30", "premium_mode": "full",
                     # Discord-Foren je Kategorie aus der App ({"Yu-Gi-Oh!": {"main": "123…", "premium": "456…"}})
-                    "forum_ids": "{}"}
+                    "forum_ids": "{}",
+                    # Discord-Pause: bis discord_stop_at (Unix-Zeit) kommt statt jedes Updates der Hinweis
+                    # discord_notice, danach wird gar nichts mehr gepostet. Leer = Discord normal.
+                    "discord_stop_at": "", "discord_notice": ""}
+DEFAULT_PAUSE_NOTICE = ("⚠️ Notice: Due to a restriction, no data could be retrieved. Pack counts, shipments and "
+                        "hit detection for this period are not available. Sorry for the inconvenience!")
 DISCORD_MODES = ("minimal", "slim", "full")
 PREMIUM_MODES = ("slim", "full")
 MAX_DELAY_MINUTES = 24 * 60
@@ -232,6 +237,18 @@ class AppBridge:
         premium = s.get("premium_mode") if s.get("premium_mode") in PREMIUM_MODES else "full"
         return {"mode": mode, "slim": slim, "minimal": mode == "minimal", "delay": minutes * 60 if slim else 0,
                 "delay_minutes": minutes, "premium_mode": premium}
+
+    async def discord_pause(self, now: Optional[float] = None) -> Dict:
+        """{"state": "on" | "notice" | "off", "stop_at": Unix-Zeit oder None, "notice": Text}.
+        notice: bis stop_at statt jedes Updates der Hinweis; off: ab stop_at nichts mehr in Discord."""
+        s = await self.settings()
+        try:
+            stop_at = int(float(s.get("discord_stop_at") or 0)) or None
+        except ValueError:
+            stop_at = None
+        now = now if now is not None else datetime.now().timestamp()
+        state = "on" if not stop_at else "notice" if now < stop_at else "off"
+        return {"state": state, "stop_at": stop_at, "notice": s.get("discord_notice") or DEFAULT_PAUSE_NOTICE}
 
     async def set_setting(self, key: str, value: str):
         if key not in DEFAULT_SETTINGS:

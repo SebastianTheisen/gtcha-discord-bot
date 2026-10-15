@@ -555,11 +555,35 @@ class App:
         view = await self.bridge.discord_view()
         forums = await self._forums()
         return web.json_response({"mode": view["mode"], "delay_minutes": view["delay_minutes"],
-                                  "premium_mode": view["premium_mode"],
+                                  "premium_mode": view["premium_mode"], "pause": await self.bridge.discord_pause(),
                                   "premium": premium_enabled() or any(f["premium"] for f in forums),
                                   "forums": forums,
                                   "announcements": [self._announcement_out(a) for a in await self.bridge.announcements()],
                                   "admins": [{"name": x["name"]} for x in await self.bridge.names(admin_ids())]})
+
+    async def api_admin_discord_pause(self, request):
+        """Discord-Pause: {"action": "notice", "hours": 6} = so lange statt jedes Updates der Hinweis, danach nichts
+        mehr; {"action": "off"} = sofort nichts mehr; {"action": "on"} = Discord wieder normal. Optional "notice"."""
+        user = await self._admin(request)
+        body = await request.json()
+        action = str(body.get("action") or "")
+        if action == "notice":
+            try:
+                hours = max(0.1, min(24 * 30, float(body.get("hours") or 6)))
+            except (TypeError, ValueError):
+                raise web.HTTPBadRequest(text="Stunden")
+            await self.bridge.set_setting("discord_stop_at", str(int(time.time() + hours * 3600)))
+        elif action == "off":
+            await self.bridge.set_setting("discord_stop_at", str(int(time.time())))
+        elif action == "on":
+            await self.bridge.set_setting("discord_stop_at", "")
+        else:
+            raise web.HTTPBadRequest(text="action: notice, off oder on")
+        if isinstance(body.get("notice"), str):
+            await self.bridge.set_setting("discord_notice", body["notice"].strip()[:1800])
+        pause = await self.bridge.discord_pause()
+        logger.info(f"Discord-Pause von {user['name']}: {action} -> {pause['state']}")
+        return web.json_response(pause)
 
     async def _forums(self) -> List[Dict]:
         """Discord-Foren je Kategorie: aus der App eingetragen (gewinnt) und aus der .env."""
@@ -1533,6 +1557,7 @@ def make_app(app: App) -> web.Application:
         web.post("/api/me/devices/remove", app.api_remove_device),
         web.get("/api/health", app.api_health),
         web.get("/api/stream", app.api_stream),
+        web.post("/api/admin/discord_pause", app.api_admin_discord_pause),
         web.get("/api/accuracy", app.api_accuracy),
         web.post("/api/import-form", app.api_import_form),
         web.post("/api/import-diag", app.api_import_diag),

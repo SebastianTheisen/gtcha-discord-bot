@@ -205,7 +205,8 @@ class BannerView:
         thread_id = (int(thread['thread_id']) if thread.get('thread_id') and (ended or not thread.get('is_expired'))
                      else 0)
         store = row.get('is_active') == STORE or (ended and row.get('category') == 'Store')
-        medal_thread = store_thread_id(pid) if store else thread_id   # Store-Pack: Medaillen ohne Discord-Thread
+        # Store-Pack bzw. Banner ohne Discord-Thread (Discord-Pause): Medaillen an der internen Nummer
+        medal_thread = store_thread_id(pid) if store or not thread_id else thread_id
         price, remaining, total = (to_int(row.get(k)) for k in ('price_coins', 'current_packs', 'total_packs'))
         pool = json.loads(row['card_pool']) if row.get('card_pool') else None
         cover = cover_images(pool)   # wie die Seite: Fächer der Top-Karten (Bannerbild nur ohne Kartenliste)

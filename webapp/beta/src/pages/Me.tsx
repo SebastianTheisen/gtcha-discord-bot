@@ -92,6 +92,7 @@ export function Me() {
       <PushPanel push={push} onChange={() => pushState().then(setPush)} />
       <Section id="guide" title="📖 Anleitung"><Guide /></Section>
       {admin && <AdminSettings a={admin} />}
+      {admin && <DiscordPause a={admin} />}
       {admin && <Forums a={admin} />}
       {admin && <Announce a={admin} reload={() => authApi("api/admin/settings").then(setAdmin).catch(() => {})} />}
       <Section id="look" title="🎨 Darstellung & Links">
@@ -435,6 +436,46 @@ function AdminSettings({ a }: { a: any }) {
 }
 
 // Admin: Discord-Foren je Kategorie (der Bot übernimmt sie innerhalb einer Minute, postet neue Kategorien nach)
+// Admin: Discord-Pause - statt jedes Updates der Hinweis, danach gar nichts mehr (die Apps laufen normal weiter)
+const pauseStatus = (p: any) => (!p || p.state === "on" ? "🟢 Discord läuft normal"
+  : p.state === "notice" ? `⏸️ Hinweis statt Updates bis ${dateTime(p.stop_at)}, danach aus`
+  : "⛔ Discord aus – es wird nichts mehr gepostet");
+
+function DiscordPause({ a }: { a: any }) {
+  const [pause, setPause] = useState<any>(a.pause || {});
+  const [notice, setNotice] = useState<string>(a.pause?.notice || "");
+  const [hours, setHours] = useState("6");
+  const run = async (action: "notice" | "off" | "on") => {
+    const label = action === "notice" ? "Hinweis posten und danach Discord abschalten?" : action === "off"
+      ? "Discord sofort abschalten? Es wird nichts mehr gepostet." : "Discord wieder normal laufen lassen?";
+    if (await ask("Discord-Pause", label, ["Abbrechen", "Ja"]) !== "Ja") return;
+    try {
+      setPause(await authApi("api/admin/discord_pause", { action, notice,
+        hours: Number(hours.replace(",", ".")) || 6 }));
+      showToast("Gespeichert ✓ – der Bot übernimmt es innerhalb einer Minute");
+      haptic();
+    } catch (e) { showToast("Nicht gespeichert: " + (e as Error).message); }
+  };
+  return (
+    <Section id="pause" title="⏸️ Discord-Pause" extra="Admin">
+      <p class="small"><b>{pauseStatus(pause)}</b></p>
+      <textarea class="field left" rows={4} value={notice} aria-label="Hinweis"
+        onInput={(e) => setNotice((e.target as HTMLTextAreaElement).value)} />
+      <div class="row" style={{ marginTop: "8px" }}>
+        <input class="field small-field" inputMode="decimal" value={hours} aria-label="Stunden"
+          onInput={(e) => setHours((e.target as HTMLInputElement).value)} />
+        <button class="btn primary" onClick={() => run("notice")}>Hinweis, danach aus</button>
+      </div>
+      <p class="muted small">Statt jedes Updates kommt der Hinweis (höchstens alle 10 Min je Thread), nach den Stunden gar
+        nichts mehr. Die Apps laufen ganz normal weiter.</p>
+      <div class="row">
+        <button class="btn" onClick={() => run("off")}>Sofort aus</button>
+        <button class="btn" onClick={() => run("on")}>Wieder normal</button>
+      </div>
+    </Section>
+  );
+}
+
 function Forums({ a }: { a: any }) {
   const [rows, setRows] = useState<{ name: string; main: string; premium: string }[]>(
     (a.forums || []).map((f: any) => ({ name: f.name, main: f.main || "", premium: f.premium || "" })));

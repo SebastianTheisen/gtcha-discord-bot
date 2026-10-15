@@ -63,6 +63,10 @@ class AppLinkMixin:
         if (await self.db.get_banner(pack_id) or {}).get("is_active") == STORE:
             return await self._apply_store_medal(req, pack_id, tier, user_id)
         thread_data = await self.db.get_thread_by_banner_id(pack_id)
+        if not thread_data and (await self.db.get_banner(pack_id) or {}).get("is_active") == 1:
+            # laufender Banner ohne Discord-Thread (z. B. während der Discord-Pause angelegt): wie ein Store-Pack -
+            # Medaille an der internen Nummer, nichts nach Discord
+            return await self._apply_store_medal(req, pack_id, tier, user_id)
         if not thread_data or thread_data.get("is_expired"):
             return False, "Zu diesem Banner gibt es keinen aktiven Thread"
         thread_id = int(thread_data["thread_id"])   # Medaillen hängen am normalen Thread (gilt auch für Premium)
