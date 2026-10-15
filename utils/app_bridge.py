@@ -69,8 +69,16 @@ DEFAULT_SETTINGS = {"discord_mode": "minimal", "discord_delay": "30", "premium_m
                     # Discord-Pause: bis discord_stop_at (Unix-Zeit) kommt statt jedes Updates der Hinweis
                     # discord_notice, danach wird gar nichts mehr gepostet. Leer = Discord normal.
                     "discord_stop_at": "", "discord_notice": ""}
-DEFAULT_PAUSE_NOTICE = ("⚠️ Notice: Due to a restriction, no data could be retrieved. Pack counts, shipments and "
-                        "hit detection for this period are not available. Sorry for the inconvenience!")
+# eine Meldung pro Zeile - der Bot nimmt jedes Mal zufällig eine (allgemeine Fehlermeldungen, keine Zahlen)
+DEFAULT_PAUSE_NOTICE = "\n".join((
+    "⚠️ Request timed out – data could not be loaded.",
+    "❌ Error while fetching pack data. Retrying…",
+    "🔄 Connection to data source lost. Reconnecting…",
+    "⚠️ Rate limit reached – updates temporarily unavailable.",
+    "❌ Unexpected response from data source. Update skipped.",
+    "⏳ Data source not responding (timeout after 30s).",
+    "⚠️ Sync failed – no data received.",
+))
 DISCORD_MODES = ("minimal", "slim", "full")
 PREMIUM_MODES = ("slim", "full")
 MAX_DELAY_MINUTES = 24 * 60

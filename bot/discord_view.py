@@ -23,7 +23,8 @@ from bot.common import *  # noqa: F401,F403
 # Gesperrt wird zentral in der HTTP-Schicht von discord.py (jeder schreibende Zugriff); nur der Hinweis selbst und
 # Antworten auf Slash-Commands (/tracker-verknüpfen, nur für die Person sichtbar) dürfen durch.
 DISCORD_ALLOW = ContextVar("discord_allow", default=False)
-PAUSE_NOTICE_EVERY = 10 * 60   # Hinweis höchstens so oft je Thread (Banner mit Updates jede Minute: sonst Flut)
+# Meldung je Thread in unregelmäßigen Abständen (zufällig 5-25 Min) - Banner mit Updates jede Minute: sonst Flut
+PAUSE_NOTICE_MIN, PAUSE_NOTICE_MAX = 5 * 60, 25 * 60
 
 
 class DiscordPaused(discord.DiscordException):
@@ -88,16 +89,19 @@ class DiscordViewMixin:
         self._guard_installed = True
 
     async def _post_pause_notice(self, pack_id: int) -> None:
-        """Hinweis statt des Updates in die Threads des Banners (höchstens alle 10 Min je Thread)."""
-        sent = self.__dict__.setdefault("_pause_notice_at", {})
-        text = (getattr(self, "_pause", None) or {}).get("notice")
-        if not text:
+        """Statt des Updates eine Meldung in die Threads des Banners: eine Zeile des Hinweistexts, zufällig gewählt,
+        je Thread in unregelmäßigen Abständen (5-25 Min)."""
+        import random
+        next_at = self.__dict__.setdefault("_pause_notice_at", {})
+        lines = [x.strip() for x in ((getattr(self, "_pause", None) or {}).get("notice") or "").splitlines() if x.strip()]
+        if not lines:
             return
         for thread_data, _scope in await self._banner_threads(pack_id):
             tid = int(thread_data["thread_id"])
-            if time.time() - sent.get(tid, 0) < PAUSE_NOTICE_EVERY:
+            if time.time() < next_at.get(tid, 0):
                 continue
-            sent[tid] = time.time()
+            next_at[tid] = time.time() + random.uniform(PAUSE_NOTICE_MIN, PAUSE_NOTICE_MAX)
+            text = random.choice(lines)
             token = DISCORD_ALLOW.set(True)
             try:
                 thread = await self._open_thread(tid)
