@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 141;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 142;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -1672,8 +1672,9 @@ function pauseSection(a) {
         <input id="pause-hours" class="code-input plain" inputmode="decimal" value="6" aria-label="Stunden">
         <button class="btn primary" data-pause="notice">Meldungen, danach aus</button>
       </div>
-      <div class="hint">Eine Meldung pro Zeile: Statt der Updates kommt jeweils eine zufällige davon, je Thread in
-        unregelmäßigen Abständen (5–25 Min). Nach den Stunden gar nichts mehr. Die Apps laufen ganz normal weiter.</div>
+      <div class="hint">Eine Meldung pro Zeile: Jeder laufende Thread (normal und Premium) bekommt jeweils eine zufällige
+        davon, in unregelmäßigen Abständen (5–25 Min) – auch wenn sich nichts tut. Updates kommen keine mehr. Nach den
+        Stunden gar nichts mehr. Die Apps laufen ganz normal weiter.</div>
       <div class="add-watch">
         <button class="btn" data-pause="off">Sofort aus</button>
         <button class="btn" data-pause="on">Wieder normal</button>

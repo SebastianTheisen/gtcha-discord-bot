@@ -90,6 +90,19 @@ class DiscordViewMixin:
         self.http.request = guarded
         self._guard_installed = True
 
+    async def _pause_notice_round(self) -> None:
+        """Während der Hinweis-Phase von sich aus (jede Minute aufgerufen): jeder laufende Thread - normal und
+        Premium - bekommt in unregelmäßigen Abständen eine Meldung, auch wenn auf der Seite nichts passiert.
+        Beim ersten Mal wird der Termin je Thread zufällig verteilt, damit nicht alle gleichzeitig anspringen."""
+        import random
+        next_at = self.__dict__.setdefault("_pause_notice_at", {})
+        for pid in await self.db.get_active_banners():
+            for thread_data, _scope in await self._banner_threads(pid):
+                tid = int(thread_data["thread_id"])
+                if tid not in next_at:
+                    next_at[tid] = time.time() + random.uniform(0, PAUSE_NOTICE_MAX)
+            await self._post_pause_notice(pid)
+
     async def _post_pause_notice(self, pack_id: int) -> None:
         """Statt des Updates eine Meldung in die Threads des Banners: eine Zeile des Hinweistexts, zufällig gewählt,
         je Thread in unregelmäßigen Abständen (5-25 Min)."""
@@ -404,7 +417,13 @@ class DiscordViewMixin:
     async def _watch_discord_mode(self):
         """In der App umgeschaltet (schlank/voll)? Dann alle Startbeiträge, Titel und Hit-Listen neu zeichnen
         und beim Wechsel auf schlank die alten Posts löschen."""
-        if await self._discord_pause_state(fresh=True) != "on":
+        state = await self._discord_pause_state(fresh=True)
+        if state != "on":
+            if state == "notice":   # Meldungen auch ohne Updates
+                try:
+                    await self._pause_notice_round()
+                except Exception as e:
+                    logger.warning(f"[DISCORD] Pause-Meldungen: {type(e).__name__}: {e}")
             return   # Discord-Pause: nichts neu zeichnen, keine Foren nachrüsten
         await self._apply_forum_ids()
         try:
