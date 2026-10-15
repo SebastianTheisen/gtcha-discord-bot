@@ -466,8 +466,9 @@ function DiscordPause({ a }: { a: any }) {
           onInput={(e) => setHours((e.target as HTMLInputElement).value)} />
         <button class="btn primary" onClick={() => run("notice")}>Meldungen, danach aus</button>
       </div>
-      <p class="muted small">Eine Meldung pro Zeile: Statt der Updates kommt jeweils eine zufällige davon, je Thread in
-        unregelmäßigen Abständen (5–25 Min). Nach den Stunden gar nichts mehr. Die Apps laufen ganz normal weiter.</p>
+      <p class="muted small">Eine Meldung pro Zeile: Jeder laufende Thread (normal und Premium) bekommt jeweils eine
+        zufällige davon, in unregelmäßigen Abständen (5–25 Min) – auch wenn sich nichts tut. Updates kommen keine mehr.
+        Nach den Stunden gar nichts mehr. Die Apps laufen ganz normal weiter.</p>
       <div class="row">
         <button class="btn" onClick={() => run("off")}>Sofort aus</button>
         <button class="btn" onClick={() => run("on")}>Wieder normal</button>

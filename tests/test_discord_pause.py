@@ -167,3 +167,26 @@ def test_status_counts_notices_per_forum_and_blocked_writes():
     st = asyncio.run(run())
     assert st["state"] == "notice" and st["notices"] == {"main": 1, "premium": 1} and st["blocked"] == 1
     assert st["last"]["banner"] == 24164
+
+
+def test_messages_also_without_updates_spread_over_time():
+    """Von sich aus: jeder laufende Thread bekommt Meldungen, erster Termin zufällig verteilt (nicht alle sofort)."""
+    class DB:
+        async def get_active_banners(self):
+            return {pid: {} for pid in range(1, 41)}
+
+    async def run():
+        bot = Bot("notice")
+        bot.db = DB()
+        bot._install_discord_guard()
+        await bot._pause_notice_round()
+        first = len(bot.sent)
+        for tid in bot._pause_notice_at:          # später: alle Termine erreicht
+            bot._pause_notice_at[tid] = 0
+        bot.sent.clear()
+        await bot._pause_notice_round()
+        return first, len(bot.sent)
+
+    first, later = asyncio.run(run())
+    assert first < 80 * 0.5        # 40 Banner x 2 Threads: anfangs nur ein Teil (zufällig verteilt)
+    assert later == 2              # Bot-Attrappe: alle Banner teilen sich die Threads 111/222
