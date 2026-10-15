@@ -20,8 +20,9 @@ from datetime import timezone
 from bot.common import *  # noqa: F401,F403
 
 # Discord-Pause (Admin in der App): "notice" = statt jedes Updates nur der Hinweis, "off" = gar nichts mehr.
-# Gesperrt wird zentral in der HTTP-Schicht von discord.py (jeder schreibende Zugriff); nur der Hinweis selbst und
-# Antworten auf Slash-Commands (/tracker-verknüpfen, nur für die Person sichtbar) dürfen durch.
+# Gesperrt wird zentral in der HTTP-Schicht von discord.py (jeder schreibende Zugriff); nur der Hinweis selbst,
+# Antworten auf Slash-Commands (/tracker-verknüpfen, nur für die Person sichtbar) und das Anmelden der Slash-Commands
+# beim Start (/applications, unsichtbar - ohne das startete der Bot nicht) dürfen durch.
 DISCORD_ALLOW = ContextVar("discord_allow", default=False)
 # Meldung je Thread in unregelmäßigen Abständen (zufällig 5-25 Min) - Banner mit Updates jede Minute: sonst Flut
 PAUSE_NOTICE_MIN, PAUSE_NOTICE_MAX = 5 * 60, 25 * 60
@@ -81,7 +82,7 @@ class DiscordViewMixin:
         async def guarded(route, **kwargs):
             state = (getattr(self, "_pause", None) or {}).get("state", "on")
             if (state != "on" and route.method != "GET" and not DISCORD_ALLOW.get()
-                    and not route.path.startswith(("/interactions", "/webhooks"))):
+                    and not route.path.startswith(("/interactions", "/webhooks", "/applications"))):
                 self._pause_blocked = getattr(self, "_pause_blocked", 0) + 1   # für den System-Status
                 raise DiscordPaused(f"Discord-Pause ({state}): {route.method} {route.path}")
             return await original(route, **kwargs)
