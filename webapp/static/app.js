@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = 140;   // zusammen mit ?v= in index.html und sw.js erhöhen
+const APP_VERSION = 141;   // zusammen mit ?v= in index.html und sw.js erhöhen
 
 const view = document.getElementById("view");
 const REFRESH_MS = 30000;
@@ -1785,6 +1785,10 @@ async function showUsers() {
       <div class="line"><span>Letzte Rechnung</span><span>${w.cpu_last ? `${job(w.cpu_last)} · ${secs(w.cpu_last.seconds)} · vor ${ago(w.cpu_last.ago)}` : "–"}</span></div>
       <div class="line"><span>Längste Rechnung seit Start</span><span>${w.cpu_slowest ? `${job(w.cpu_slowest)} · ${secs(w.cpu_slowest.seconds)}` : "–"}</span></div>
       ${w.cpu_timeouts ? `<div class="line"><span>Abgebrochen (Zeitlimit ${w.cpu_limit || "–"} s)</span><span>${num(w.cpu_timeouts)}× · zuletzt ${job(w.cpu_last_timeout)} · vor ${ago(w.cpu_last_timeout && w.cpu_last_timeout.ago)}</span></div>` : ""}
+      ${w.discord && (w.discord.state !== "on" || w.discord.blocked) ? `
+      <div class="line"><span>Discord-Pause</span><span>${w.discord.state === "notice" ? "⏸️ Meldungen aktiv" : w.discord.state === "off" ? "⛔ aus" : "🟢 normal"}</span></div>
+      <div class="line"><span>Meldungen normal / Premium</span><span>${num(w.discord.notices.main || 0)} / ${num(w.discord.notices.premium || 0)}${w.discord.last ? ` · zuletzt ${w.discord.last.banner}${w.discord.last.scope === "premium" ? " (Premium)" : ""} vor ${ago(w.discord.last.ago)}` : ""}</span></div>
+      <div class="line"><span>Abgefangene Discord-Zugriffe</span><span>${num(w.discord.blocked || 0)}</span></div>` : ""}
       <div class="line"><span>Seit Start: Rechnungen / Banner-Auswertungen</span><span>${num(w.cpu_done)} / ${num(w.hits_done || 0)}${w.cpu_fallbacks ? ` · ${w.cpu_fallbacks}× neu gestartet` : ""} · vor ${ago(w.cpu_up)}</span></div>`
     : `<div class="line"><span>Rechen-Prozess</span><span class="muted">noch keine Meldung</span></div>`;
   return st ? `<div class="rows">

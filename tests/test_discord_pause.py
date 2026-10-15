@@ -144,3 +144,24 @@ def test_random_message_per_line_at_irregular_intervals():
     sent, waits = asyncio.run(run())
     assert len(sent) == 2 and all(text in ("⚠️ Timeout", "❌ Error", "🔄 Reconnecting") for _, text in sent)
     assert all(5 * 60 - 1 <= w <= 25 * 60 for w in waits)
+
+
+def test_status_counts_notices_per_forum_and_blocked_writes():
+    from bot.hits import HitsMixin
+
+    class StatusBot(Bot, HitsMixin):
+        pass
+
+    async def run():
+        bot = StatusBot("notice")
+        bot._install_discord_guard()
+        await bot._discord_paused(24164)
+        try:
+            await bot.http.request(SimpleNamespace(method="PATCH", path="/channels/1/messages/2"))
+        except DiscordPaused:
+            pass
+        return bot._worker_status()["discord"]
+
+    st = asyncio.run(run())
+    assert st["state"] == "notice" and st["notices"] == {"main": 1, "premium": 1} and st["blocked"] == 1
+    assert st["last"]["banner"] == 24164

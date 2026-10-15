@@ -82,6 +82,7 @@ class DiscordViewMixin:
             state = (getattr(self, "_pause", None) or {}).get("state", "on")
             if (state != "on" and route.method != "GET" and not DISCORD_ALLOW.get()
                     and not route.path.startswith(("/interactions", "/webhooks"))):
+                self._pause_blocked = getattr(self, "_pause_blocked", 0) + 1   # für den System-Status
                 raise DiscordPaused(f"Discord-Pause ({state}): {route.method} {route.path}")
             return await original(route, **kwargs)
 
@@ -96,7 +97,7 @@ class DiscordViewMixin:
         lines = [x.strip() for x in ((getattr(self, "_pause", None) or {}).get("notice") or "").splitlines() if x.strip()]
         if not lines:
             return
-        for thread_data, _scope in await self._banner_threads(pack_id):
+        for thread_data, scope in await self._banner_threads(pack_id):
             tid = int(thread_data["thread_id"])
             if time.time() < next_at.get(tid, 0):
                 continue
@@ -108,6 +109,11 @@ class DiscordViewMixin:
                 if thread is not None:
                     await discord_rate_limiter.acquire("message_send")
                     await thread.send(text)
+                    # Kontrolle: im Log und im System-Status der Apps (normal/Premium getrennt gezählt)
+                    counts = self.__dict__.setdefault("_pause_notices", {"main": 0, "premium": 0})
+                    counts[scope] = counts.get(scope, 0) + 1
+                    self._pause_last = {"banner": pack_id, "scope": scope, "text": text, "at": round(time.time())}
+                    logger.info(f"[DISCORD] Pause-Meldung in {pack_id} ({'Premium' if scope == 'premium' else 'normal'}): {text}")
             except Exception as e:
                 logger.debug(f"[DISCORD] Hinweis in {tid} nicht gepostet: {e}")
             finally:

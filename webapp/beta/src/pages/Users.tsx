@@ -30,6 +30,12 @@ function WorkerRows({ w }: { w: any }) {
     <div class="line"><span>Längste Rechnung seit Start</span><span>{w.cpu_slowest ? `${job(w.cpu_slowest)} · ${secs(w.cpu_slowest.seconds)}` : "–"}</span></div>
     {w.cpu_timeouts ? <div class="line"><span>Abgebrochen (Zeitlimit {w.cpu_limit || "–"} s)</span>
       <span>{num(w.cpu_timeouts)}× · zuletzt {job(w.cpu_last_timeout)} · vor {ago(w.cpu_last_timeout?.ago)}</span></div> : null}
+    {w.discord && (w.discord.state !== "on" || w.discord.blocked) ? <>
+      <div class="line"><span>Discord-Pause</span><span>{w.discord.state === "notice" ? "⏸️ Meldungen aktiv" : w.discord.state === "off" ? "⛔ aus" : "🟢 normal"}</span></div>
+      <div class="line"><span>Meldungen normal / Premium</span><span>{num(w.discord.notices?.main || 0)} / {num(w.discord.notices?.premium || 0)}
+        {w.discord.last ? ` · zuletzt ${w.discord.last.banner}${w.discord.last.scope === "premium" ? " (Premium)" : ""} vor ${ago(w.discord.last.ago)}` : ""}</span></div>
+      <div class="line"><span>Abgefangene Discord-Zugriffe</span><span>{num(w.discord.blocked || 0)}</span></div>
+    </> : null}
     <div class="line"><span>Seit Start: Rechnungen / Banner-Auswertungen</span><span>{num(w.cpu_done)} / {num(w.hits_done || 0)}{w.cpu_fallbacks ? ` · ${w.cpu_fallbacks}× neu gestartet` : ""} · vor {ago(w.cpu_up)}</span></div>
   </>;
 }
