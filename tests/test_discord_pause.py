@@ -208,3 +208,29 @@ def test_card_list_is_loaded_for_banner_without_thread(tmp_path):
 
     old_rule, new_rule = asyncio.run(run())
     assert old_rule == [] and new_rule == [24269]
+
+
+def test_medals_without_thread_appear_everywhere_in_the_apps(tmp_path):
+    """Banner ohne Thread: Medaille (interne Nummer) in "Meine Medaillen", beim Lesezeichen-Abgleich und im Ablauf."""
+    from database.db import Database, store_thread_id
+    from scraper.models import ScrapedBanner
+    from utils.card_pool import summarize_cards
+    from webapp.view import BannerView
+
+    async def run():
+        db = Database(str(tmp_path / "b.db"))
+        await db.init()
+        await db.save_banner(ScrapedBanner(pack_id=24269, category="One piece", title=None, price_coins=1200,
+                                           current_packs=487, total_packs=500))
+        await db.save_card_pool(24269, summarize_cards([
+            {"id": 1, "name": "Hancock", "buy_point": 90000, "duplication": 1, "action_type": 0},
+            {"id": 2, "name": "Normal", "buy_point": 300, "duplication": 499, "action_type": 0}]))
+        await db.save_medal(store_thread_id(24269), "T1", 42, source="app")
+        view = BannerView(db)
+        mine = [m["banner_id"] for m in await view.my_medals("42")]
+        targets = (await view.claim_targets()).get(24269, {}).get("medals")
+        odds = (await db.odds_inputs(24269))["medals"]
+        return mine, targets, odds
+
+    mine, targets, odds = asyncio.run(run())
+    assert mine == [24269] and targets == {"T1": 42} and "T1" in odds

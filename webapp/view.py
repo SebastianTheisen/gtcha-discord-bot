@@ -439,9 +439,9 @@ class BannerView:
                 "SELECT m.tier, t.banner_id, m.created_at FROM medals m "
                 "JOIN discord_threads t ON t.thread_id = m.thread_id "
                 "WHERE m.user_id = ? AND t.is_expired = 0 "
-                "UNION ALL "   # Store-Packs: interne Nummer = -pack_id, nur solange der Pack läuft
+                "UNION ALL "   # Store-Packs und Banner ohne Discord-Thread: interne Nummer = -pack_id, solange er läuft
                 "SELECT m.tier, b.pack_id, m.created_at FROM medals m JOIN banners b ON b.pack_id = -m.thread_id "
-                "WHERE m.user_id = ? AND m.thread_id < 0 AND b.is_active = ? "
+                "WHERE m.user_id = ? AND m.thread_id < 0 AND b.is_active IN (?, 1) "
                 "ORDER BY 3 DESC", (int(user_id), int(user_id), STORE))
             rows = await cur.fetchall()
         result = []
@@ -495,9 +495,11 @@ class BannerView:
                 medals = await self.db.get_medals(store_thread_id(pid))
             else:
                 thread = await self.db.get_thread_by_banner_id(pid) or {}
-                if not thread.get('thread_id') or thread.get('is_expired'):
+                if thread.get('is_expired'):
                     continue
-                medals = await self.db.get_medals(int(thread['thread_id']))
+                # ohne Discord-Thread (Discord-Pause): Medaillen an der internen Nummer
+                medals = await self.db.get_medals(int(thread['thread_id']) if thread.get('thread_id')
+                                                  else store_thread_id(pid))
             result[pid] = {"units": claimable_units(pool, to_int(row.get('price_coins')) or None),
                            "medals": medals}
         return result

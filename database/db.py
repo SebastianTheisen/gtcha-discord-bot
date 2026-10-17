@@ -1196,7 +1196,8 @@ class Database:
                 threads = [store_thread_id(pack_id)]
             else:
                 cur = await db.execute("SELECT thread_id FROM discord_threads WHERE banner_id = ?", (pack_id,))
-                threads = [r[0] for r in await cur.fetchall()]
+                # dazu die interne Nummer: Banner ohne Discord-Thread (Discord-Pause) haben ihre Medaillen dort
+                threads = [r[0] for r in await cur.fetchall()] + [store_thread_id(pack_id)]
             medals = {}
             if threads:
                 # vom Admin abgehakt: kein Zugzeitpunkt, keine Versand-Anforderung

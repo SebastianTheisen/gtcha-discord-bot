@@ -6,6 +6,11 @@ from bot.common import *  # noqa: F401,F403
 class ThreadsMixin:
     async def _recover_threads_from_discord(self):
         """Stellt Thread-Daten aus Discord wieder her (für DB-Verlust nach Neustart)."""
+        if await self._discord_pause_state() != "on":
+            # Discord-Pause: keine Thread-Zuordnung aus Discord - sonst lägen Medaillen, die an der internen
+            # Nummer gespeichert sind, plötzlich an einem Thread und fehlten in den Apps
+            logger.info("Discord-Pause: Thread-Wiederherstellung übersprungen")
+            return
         logger.info("Prüfe Discord-Threads zur Wiederherstellung...")
         recovered_count = 0
 
