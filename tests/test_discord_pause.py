@@ -190,3 +190,21 @@ def test_messages_also_without_updates_spread_over_time():
     first, later = asyncio.run(run())
     assert first < 80 * 0.5        # 40 Banner x 2 Threads: anfangs nur ein Teil (zufällig verteilt)
     assert later == 2              # Bot-Attrappe: alle Banner teilen sich die Threads 111/222
+
+
+def test_card_list_is_loaded_for_banner_without_thread(tmp_path):
+    """Während der Pause angelegter Banner (kein Thread, Kategorie mit Forum): Kartenliste wird trotzdem geladen."""
+    from database.db import Database
+    from scraper.models import ScrapedBanner
+
+    async def run():
+        db = Database(str(tmp_path / "b.db"))
+        await db.init()
+        await db.save_banner(ScrapedBanner(pack_id=24269, category="One piece", title=None, price_coins=1200,
+                                           current_packs=487, total_packs=500))
+        old_rule = await db.get_banners_without_pool(10, [24269], forums=["One piece"])
+        new_rule = await db.get_banners_without_pool(10, [24269], forums=[])
+        return old_rule, new_rule
+
+    old_rule, new_rule = asyncio.run(run())
+    assert old_rule == [] and new_rule == [24269]
