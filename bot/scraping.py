@@ -232,7 +232,9 @@ class ScrapingMixin:
                     await self.db.mark_pool_stale(pid)
                 missing_pools = await self.db.get_banners_without_pool(
                     limit=POOL_FETCH_PER_SCRAPE + len(shipped), prefer_ids=list(new_banner_ids) + shipped,
-                    forums=[c for c, cid in CHANNEL_IDS.items() if cid])
+                    # alle laufenden Banner, auch ohne Discord-Thread (Discord-Pause, Kategorie ohne Forum) - die
+                    # Apps brauchen die Kartenliste unabhängig von Discord
+                    forums=[])
                 if shipped:
                     logger.info(f"[POOL] Versand bei {', '.join(map(str, shipped))}: Kartenlisten werden neu geladen")
                 if missing_pools:
