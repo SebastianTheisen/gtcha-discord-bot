@@ -61,7 +61,7 @@ services=""
 if [ "$1" = "--alles" ] || echo "$changed" | grep -qE '^(bot|scraper|database|utils|services|tor)/|^(main|config)\.py$|^requirements\.txt$|^Dockerfile$|^docker-compose\.yml$'; then
   services="$services gtcha-bot"
 fi
-if [ "$1" = "--alles" ] || echo "$changed" | grep -v '^webapp/beta/' | grep -qE '^(webapp|utils|database)/|^requirements-webapp\.txt$|^Dockerfile\.webapp$|^docker-compose\.yml$'; then
+if [ "$1" = "--alles" ] || echo "$changed" | grep -qE '^(webapp|utils|database)/|^requirements-webapp\.txt$|^Dockerfile\.webapp$|^docker-compose\.yml$'; then
   services="$services gtcha-app"
 fi
 if [ "$1" = "--alles" ] || echo "$changed" | grep -qE '^tor/'; then

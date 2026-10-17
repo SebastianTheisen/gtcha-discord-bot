@@ -1,4 +1,12 @@
 # GTCHA Tracker - Web-App neben dem Bot (liest dessen Datenbank, kein Browser nötig)
+# Stufe 1 baut die neue Oberfläche (Vite + Preact); die Haupt-App zeigt sie mit WEBAPP_UI=beta (Standard im Compose).
+FROM node:22-alpine AS ui
+WORKDIR /ui
+COPY webapp/beta/package.json webapp/beta/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY webapp/beta/ ./
+RUN npm run build
+
 FROM python:3.11-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1
@@ -11,5 +19,6 @@ COPY config.py ./
 COPY database ./database
 COPY utils ./utils
 COPY webapp ./webapp
+COPY --from=ui /ui/dist ./webapp/beta/dist
 
 CMD ["python", "-m", "webapp.server"]

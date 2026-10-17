@@ -7,7 +7,7 @@ import { Img } from "../components/Img";
 import { Sheet } from "../components/Sheet";
 import { dateTime, ddmm, ddmmhhmm, num } from "../format";
 import { GUIDE_DEVICES, GUIDES, guessDevice } from "../guides";
-import { applyProfile, buyHref, isIOS, isStandalone, LINK_MODES, linkMode, load, myCharge, myRank, RANKS, save } from "../local";
+import { applyProfile, buyHref, IS_BETA, isIOS, isStandalone, LINK_MODES, linkMode, load, myCharge, myRank, RANKS, save } from "../local";
 import {
   disablePush, enablePush, EVENT_DEFAULTS, EVENT_LABELS, pushState, savePrefs, testPush, WATCH_DEFAULT, WATCH_LABELS, type Prefs,
 } from "../push";
@@ -103,8 +103,10 @@ export function Me() {
         </select>
       </Section>
       <div class="panel small muted" style={{ marginTop: "12px" }}>
-        🧪 Beta der neuen Oberfläche · inoffiziell, kein Angebot von GTCHA · Daten wie in der normalen App.
-        <a class="btn block" style={{ marginTop: "10px" }} href="../">Zur normalen App</a>
+        {IS_BETA ? <>
+          🧪 Beta der neuen Oberfläche · inoffiziell, kein Angebot von GTCHA · Daten wie in der normalen App.
+          <a class="btn block" style={{ marginTop: "10px" }} href="../">Zur normalen App</a>
+        </> : "Inoffiziell · kein Angebot von GTCHA"}
       </div>
     </div>
   );
@@ -137,8 +139,8 @@ function LinkPanel({ devices, onChange }: { devices: any[]; onChange: () => void
     return (
       <div class="panel">
         <h3 style={{ marginTop: 0 }}>🔗 Discord verknüpfen</h3>
-        <p class="muted small">Code eintragen – aus der normalen App (<b>Ich → 🧪 Beta → Code anzeigen</b>) oder aus Discord
-          (<b>/tracker-verknüpfen</b>).</p>
+        <p class="muted small">{IS_BETA ? <>Code eintragen – aus der normalen App (<b>Ich → 🧪 Beta → Code anzeigen</b>) oder
+          aus Discord (<b>/tracker-verknüpfen</b>).</> : <>Code eintragen – in Discord <b>/tracker-verknüpfen</b> eingeben.</>}</p>
         <input class="field" maxLength={8} autoComplete="one-time-code" autoCapitalize="characters" placeholder="Code, z. B. K7M2QX" value={code}
           onInput={(e) => setCode((e.target as HTMLInputElement).value)} />
         <button class="btn primary block" style={{ marginTop: "10px" }} onClick={() => link()}>Verknüpfen</button>

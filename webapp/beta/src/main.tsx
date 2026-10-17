@@ -11,6 +11,7 @@ import { Search } from "./pages/Search";
 import { Top } from "./pages/Top";
 import { Users } from "./pages/Users";
 import { markRead, setBell, unread, updateBell } from "./push";
+import { IS_BETA } from "./local";
 import { connectLive, live, loadBanners, loadError, loadMe, locked, me, refreshAll, route, theme, updated } from "./store";
 import { closeDialogs, DialogHost, haptic } from "./ui";
 import { checkVersion, UpdateBar } from "./version";
@@ -43,6 +44,8 @@ function Page() {
   return <List />;
 }
 
+if (!IS_BETA) document.title = "GTCHA Tracker";
+
 const NAV: [string, string, string][] = [["/", "🎴", "Banner"], ["/top", "🔥", "Top 10"], ["/search", "🔍", "Suche"],
   ["/users", "👥", "Nutzer"], ["/me", "👤", "Ich"]];
 
@@ -63,7 +66,7 @@ function App() {
   return (
     <div class="app">
       <header class="header">
-        <a class="brand" href="#/">GTCHA Tracker <span class="beta">BETA</span></a>
+        <a class="brand" href="#/">GTCHA Tracker {IS_BETA ? <span class="beta">BETA</span> : null}</a>
         <span class="spacer" />
         <span class={`live ${state === "live" && !locked.value ? "on" : state === "offline" || locked.value ? "off" : ""}`}
           title={updated.value ? `Stand ${relative(updated.value)}` : ""}>
