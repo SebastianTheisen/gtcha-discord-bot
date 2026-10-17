@@ -249,6 +249,9 @@ class App:
         self._digest = ""                       # Fingerabdruck der Banner-Daten: ändert er sich, gibt es ein Live-Update
         self._changed = asyncio.Event()
         self.beta = (role or ROLE) == "beta"
+        # Oberfläche: Beta-Container immer die neue; der Live-Container mit WEBAPP_UI=beta ebenfalls (gleiche Adresse,
+        # gleiche Verknüpfung, Lesezeichen und Pushes - niemand muss etwas ändern). WEBAPP_UI=classic = alte Oberfläche.
+        self.new_ui = (self.beta or os.getenv("WEBAPP_UI", "classic") == "beta") and (BETA_DIST / "index.html").exists()
         self._view_pool = None      # Detailseiten (können bei großen Bannern Minuten dauern)
         self._list_pool = None      # Bannerliste/Archiv: eigener Arbeiter, wartet nie hinter Detailseiten
         self._detail_cache: Dict[int, tuple] = {}
@@ -1406,15 +1409,21 @@ class App:
 
     # --- Seiten ---
     async def index(self, request):
-        if self.beta and (BETA_DIST / "index.html").exists():
+        if self.new_ui:
             return web.FileResponse(BETA_DIST / "index.html", headers={"Cache-Control": "no-cache"})
         return web.FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})
 
     async def service_worker(self, request):
-        path = BETA_DIST / "sw.js" if self.beta and (BETA_DIST / "sw.js").exists() else STATIC / "sw.js"
+        path = BETA_DIST / "sw.js" if self.new_ui and (BETA_DIST / "sw.js").exists() else STATIC / "sw.js"
         return web.FileResponse(path, headers={"Cache-Control": "no-cache", "Content-Type": "application/javascript"})
 
     async def manifest(self, request):
+        if self.new_ui and not self.beta:
+            # neue Oberfläche als Haupt-App: Name, Startadresse und Icons der bisherigen App behalten (installierte
+            # Apps bleiben dieselbe App), Farben der neuen Oberfläche
+            data = json.loads((STATIC / "manifest.webmanifest").read_text(encoding="utf-8"))
+            data.update({"background_color": "#0b0f1a", "theme_color": "#0b0f1a"})
+            return web.json_response(data, content_type="application/manifest+json")
         path = (BETA_DIST / "manifest.webmanifest" if self.beta and (BETA_DIST / "manifest.webmanifest").exists()
                 else STATIC / "manifest.webmanifest")
         return web.FileResponse(path, headers={"Content-Type": "application/manifest+json"})
@@ -1521,7 +1530,7 @@ def _beta_file(name: str):
 
 
 def make_app(app: App) -> web.Application:
-    middlewares = [security_headers, compress_api] if app.beta else [security_headers]
+    middlewares = [security_headers, compress_api] if app.new_ui else [security_headers]
     web_app = web.Application(middlewares=middlewares, client_max_size=MAX_IMPORT_BYTES + 1024)
     routes = [
         web.get("/", app.index),
@@ -1579,7 +1588,7 @@ def make_app(app: App) -> web.Application:
         web_app.add_routes([web.RouteDef(r.method, prefix + r.path if r.path != "/" or not prefix else prefix + "/",
                                          r.handler, r.kwargs) for r in routes])
         web_app.router.add_static(prefix + "/static", STATIC)
-        if app.beta and (BETA_DIST / "assets").is_dir():
+        if app.new_ui and (BETA_DIST / "assets").is_dir():
             web_app.router.add_static(prefix + "/assets", BETA_DIST / "assets")
             for name in ("icon-180.png", "icon-512.png", "version.json"):
                 web_app.router.add_get(prefix + "/" + name, _beta_file(name))

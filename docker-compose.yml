@@ -57,6 +57,8 @@ services:
     environment:
       - WEBAPP_HOST=127.0.0.1
       - WEBAPP_PORT=${WEBAPP_PORT:-8080}
+      # neue Oberfläche (bisher Beta) als Haupt-App; zurück zur alten: WEBAPP_UI=classic in der .env
+      - WEBAPP_UI=${WEBAPP_UI:-beta}
     volumes:
       - ./data:/app/data
     logging:

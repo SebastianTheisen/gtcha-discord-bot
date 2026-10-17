@@ -19,6 +19,9 @@ export function save(key: string, value: string) {
 }
 
 // --- Mitgliedsrang und Aufladung (für "Für mich kaufbar") ---
+// Unter /beta die Testversion; dieselbe Oberfläche unter / ist die Haupt-App (ohne Beta-Hinweise)
+export const IS_BETA = location.pathname.startsWith("/beta");
+
 export const RANKS: [string, string][] = [["white", "Weiß"], ["bronze", "Bronze"], ["silver", "Silber"], ["gold", "Gold"],
   ["rainbow", "Rainbow"], ["black", "Black"]];
 export const rankLabel = (k?: string | null) => (RANKS.find(([key]) => key === k) || [null, k || "–"])[1];
