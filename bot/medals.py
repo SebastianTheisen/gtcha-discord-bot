@@ -11,6 +11,8 @@ class MedalsMixin:
 
         if message.author.bot:
             return
+        if await self._discord_pause_state() != "on":
+            return   # Discord-Pause: aus Discord kommt nichts mehr in die Datenbank (Medaillen nur über die Apps)
 
         # Pruefe ob in einem unserer Threads
         if not isinstance(message.channel, discord.Thread):
@@ -239,6 +241,9 @@ class MedalsMixin:
 
     async def _sync_medals_from_discord(self):
         """Synchronisiert Medaillen-Reaktionen von Discord in die Datenbank."""
+        if await self._discord_pause_state() != "on":
+            logger.info("Discord-Pause: Medaillen aus Discord-Reaktionen werden nicht übernommen")
+            return
         logger.info("Synchronisiere Medaillen von Discord-Reaktionen...")
         synced_count = 0
 
