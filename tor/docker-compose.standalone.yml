@@ -1,0 +1,32 @@
+# Eigenständiger Tor-Container (SOCKS-Proxy + ControlPort) für andere Projekte.
+# Anleitung: tor/README.md. Start im Ordner tor/:
+#   cp .env.example .env && nano .env      (Passwort setzen)
+#   docker compose -f docker-compose.standalone.yml up -d --build
+#
+# Erreichbar für andere Container im Docker-Netz "tor-net" unter tor:9050 (SOCKS) und tor:9051 (Control).
+# Ports werden bewusst NICHT nach außen veröffentlicht - ein offener SOCKS-Proxy im Internet wird sofort missbraucht.
+services:
+  tor:
+    build: .
+    container_name: tor-proxy
+    restart: unless-stopped
+    environment:
+      - TOR_CONTROL_PASSWORD=${TOR_CONTROL_PASSWORD:?TOR_CONTROL_PASSWORD in .env setzen}
+      # im Docker-Netz lauschen (nur Container in tor-net kommen dran, siehe oben)
+      - TOR_SOCKS_ADDR=${TOR_SOCKS_ADDR:-0.0.0.0:9050}
+      - TOR_CONTROL_ADDR=${TOR_CONTROL_ADDR:-0.0.0.0:9051}
+    networks:
+      - tor-net
+    # Nur nötig, wenn ein Programm OHNE Docker auf demselben Server den Proxy nutzen soll - dann nur an localhost:
+    # ports:
+    #   - "127.0.0.1:9050:9050"
+    #   - "127.0.0.1:9051:9051"
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+networks:
+  tor-net:
+    name: tor-net
