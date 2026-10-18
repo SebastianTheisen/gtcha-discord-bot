@@ -65,8 +65,13 @@ def start_watchdog(max_silence_seconds: int, startup_grace_seconds: int):
     threading.Thread(target=watch, name="watchdog", daemon=True).start()
 
 
-async def new_tor_identity(host: str = "127.0.0.1", port: int = 9051) -> bool:
-    """Fordert bei Tor neue Routen (neue Ausgangs-IP) für die nächsten Verbindungen an."""
+async def new_tor_identity(host: str = None, port: int = None) -> bool:
+    """Fordert bei Tor neue Routen (neue Ausgangs-IP) für die nächsten Verbindungen an.
+    Adresse des ControlPorts aus TOR_CONTROL_ADDR (Standard 127.0.0.1:9051, wie im Tor-Container)."""
+    if host is None or port is None:
+        addr_host, _, addr_port = (os.getenv("TOR_CONTROL_ADDR") or "127.0.0.1:9051").rpartition(":")
+        host = host or addr_host or "127.0.0.1"
+        port = port or int(addr_port or 9051)
     password = os.getenv("TOR_CONTROL_PASSWORD")
     if not password:
         return False
