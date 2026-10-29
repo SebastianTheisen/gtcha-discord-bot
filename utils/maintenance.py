@@ -90,3 +90,20 @@ async def new_tor_identity(host: str = None, port: int = None) -> bool:
     except Exception as e:
         logger.debug(f"[TOR] ControlPort nicht erreichbar: {e}")
         return False
+
+
+async def run_with_deadline(coro, timeout: float, grace: float = 15, name: str = "Aufgabe"):
+    """Wie asyncio.wait_for, aber hängt nie: Nach dem Zeitlimit wird abgebrochen und höchstens `grace` Sekunden auf
+    das Aufräumen gewartet - hängt auch das (z. B. Browser über eine tote Tor-Verbindung schließen), wird die Aufgabe
+    aufgegeben. Sonst hielt ein hängender Scrape die Sperre ewig und alle weiteren Abrufe fielen aus (29.10.).
+    Wirft asyncio.TimeoutError nach dem Zeitlimit."""
+    task = asyncio.ensure_future(coro)
+    done, _ = await asyncio.wait({task}, timeout=timeout)
+    if task in done:
+        return task.result()
+    task.cancel()
+    done, _ = await asyncio.wait({task}, timeout=grace)
+    if task not in done:
+        logger.error(f"{name} hängt auch nach dem Abbruch - wird aufgegeben, es geht ohne sie weiter")
+        task.add_done_callback(lambda t: t.cancelled() or t.exception())   # späteren Fehler nicht als unbehandelt melden
+    raise asyncio.TimeoutError()

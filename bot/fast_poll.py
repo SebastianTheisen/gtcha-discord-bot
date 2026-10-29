@@ -36,7 +36,7 @@ class FastPollMixin:
             else:
                 try:
                     async with self._scrape_lock:
-                        ok = await asyncio.wait_for(self._fast_poll_tick(), timeout=60)
+                        ok = await run_with_deadline(self._fast_poll_tick(), 60, name="Schnell-Abruf")
                 except Exception as e:
                     ok = False
                     logger.warning(f"[SCHNELL] Fehler: {type(e).__name__}: {e}")
