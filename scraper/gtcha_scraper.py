@@ -24,21 +24,34 @@ from utils.card_pool import summarize_cards
 
 JST = timezone(timedelta(hours=9))
 
+# Zeitlimits gegen hängende Tor-Verbindungen (sonst wartete ein Scrape ewig und hielt die Sperre, 29.10.)
+EVAL_TIMEOUT = 120      # Abfrage im Browser (die Abfragen selbst brechen nach 45 s ab)
+CLOSE_TIMEOUT = 15      # Seite/Browser schließen
+
+
+async def close_quietly(coro, timeout: float = CLOSE_TIMEOUT) -> None:
+    """Schließen ohne ewig zu warten - hängt es, wird es aufgegeben (der Browser wird später beendet)."""
+    try:
+        await asyncio.wait_for(coro, timeout)
+    except Exception as e:
+        logger.debug(f"Schließen übersprungen: {type(e).__name__}: {e}")
+
+
 FETCH_PACK_LIST_JS = """async () => {
-    const r = await fetch('/api/user/pack/list', {headers: {Accept: 'application/json'}});
+    const r = await fetch('/api/user/pack/list', {headers: {Accept: 'application/json'}, signal: AbortSignal.timeout(45000)});
     try { return await r.json(); } catch (e) { return null; }
 }"""
 
 # Kategorien der Seite (Reiter der Startseite, die Seite lädt die Liste selbst): [{id, name}]
 FETCH_CARD_TYPES_JS = """async () => {
-    const r = await fetch('/api/user/card_type', {headers: {Accept: 'application/json'}});
+    const r = await fetch('/api/user/card_type', {headers: {Accept: 'application/json'}, signal: AbortSignal.timeout(45000)});
     try { return await r.json(); } catch (e) { return null; }
 }"""
 
 # Lädt Seite 1 der Kartenliste, dann alle weiteren Seiten gleichzeitig, und gibt alle Karten zurück.
 FETCH_CARD_LIST_JS = """async (pid) => {
     const get = async (n) => {
-        const r = await fetch(`/api/user/pack/card_list/${pid}/${n}`, {headers: {Accept: 'application/json'}});
+        const r = await fetch(`/api/user/pack/card_list/${pid}/${n}`, {headers: {Accept: 'application/json'}, signal: AbortSignal.timeout(45000)});
         try { return await r.json(); } catch (e) { return {}; }
     };
     const first = await get(1);
@@ -198,12 +211,14 @@ class GTCHAScraper:
         logger.info("Browser gestartet (v6 - Pure DOM, Bilder aus)")
 
     async def close(self):
+        # jeder Schritt mit Zeitlimit: über eine hängende Tor-Verbindung kann auch das Schließen ewig dauern
         if self._context:
-            await self._context.close()
+            await close_quietly(self._context.close())
         if self._browser:
-            await self._browser.close()
+            await close_quietly(self._browser.close())
         if self._playwright:
-            await self._playwright.stop()
+            await close_quietly(self._playwright.stop())
+        self._context = self._browser = self._playwright = None
         logger.info("Browser geschlossen")
 
     async def _random_delay(self, min_sec: float = 1.0, max_sec: float = 3.0):
@@ -353,7 +368,7 @@ class GTCHAScraper:
             for url in (f"{self.base_url}/api/user/point", self.base_url):
                 # Erst ein leichtes Dokument der Seite (setzt die Sitzung), notfalls die Startseite
                 await page.goto(url, wait_until="domcontentloaded", timeout=90000)
-                data = await page.evaluate(FETCH_PACK_LIST_JS)
+                data = await asyncio.wait_for(page.evaluate(FETCH_PACK_LIST_JS), EVAL_TIMEOUT)
                 items = (data or {}).get("list") if isinstance(data, dict) else None
                 if items:
                     result = {int(it["id"]): it for it in items if it.get("id")}
@@ -364,12 +379,12 @@ class GTCHAScraper:
             logger.warning("[API] pack/list lieferte keine Banner")
             return {}
         finally:
-            await page.close()
+            await close_quietly(page.close())
 
     async def _fetch_card_types(self, page) -> None:
         """Namen der Kategorien (card_type -> Name), damit neue Kategorien der Seite richtig heißen."""
         try:
-            data = await page.evaluate(FETCH_CARD_TYPES_JS)
+            data = await asyncio.wait_for(page.evaluate(FETCH_CARD_TYPES_JS), EVAL_TIMEOUT)
             items = (data or {}).get("list") if isinstance(data, dict) else None
             self._card_types = {str(it["id"]): str(it.get("name") or "").strip()
                                 for it in items or [] if isinstance(it, dict) and it.get("id") not in (None, "")}
@@ -387,7 +402,7 @@ class GTCHAScraper:
             await page.goto(f"{self.base_url}/api/user/point", wait_until="domcontentloaded", timeout=60000)
             for pid in pack_ids:
                 try:
-                    cards = await page.evaluate(FETCH_CARD_LIST_JS, pid)
+                    cards = await asyncio.wait_for(page.evaluate(FETCH_CARD_LIST_JS, pid), EVAL_TIMEOUT)
                     if cards is None:
                         logger.warning(f"[POOL] {pid}: Kartenliste nicht abrufbar - nächster Scrape versucht es erneut")
                         continue
@@ -403,7 +418,7 @@ class GTCHAScraper:
                 except Exception as e:
                     logger.warning(f"[POOL] {pid}: Fehler beim Laden der Kartenliste: {e}")
         finally:
-            await page.close()
+            await close_quietly(page.close())
         return pools
 
     async def scrape_all_banners_parallel(self) -> List[ScrapedBanner]:
@@ -450,10 +465,7 @@ class GTCHAScraper:
 
                 # Pages schließen
                 for page in pages:
-                    try:
-                        await page.close()
-                    except:
-                        pass
+                    await close_quietly(page.close())
 
                 # Ergebnisse verarbeiten
                 for category, result in zip(category_group, results):

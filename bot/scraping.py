@@ -572,7 +572,7 @@ class ScrapingMixin:
                         logger.info(f"Retry {attempt}/{max_retries} - warte {retry_delay}s...")
                         await asyncio.sleep(retry_delay)
 
-                    await asyncio.wait_for(self.scrape_and_post(), timeout=timeout_seconds)
+                    await run_with_deadline(self.scrape_and_post(), timeout_seconds, name="Scrape")
                     return  # Erfolg - beenden
 
                 except asyncio.TimeoutError:
@@ -592,11 +592,9 @@ class ScrapingMixin:
                             pass
                         self._scraper = None
 
-                    if attempt < max_retries:
-                        continue  # Retry
-                    else:
-                        logger.error("Alle Retries fehlgeschlagen!")
-                        await notify_all_retries_failed()
+                    # kein Wiederholen mit gehaltener Sperre: der nächste Scrape kommt ohnehin in 2 Min, und der
+                    # Schnell-Abfrager (Pack-Zahlen) braucht die Sperre
+                    return
 
                 except Exception as e:
                     logger.error(f"Fehler im Scrape-Job: {e} (Versuch {attempt + 1}/{max_retries + 1})")

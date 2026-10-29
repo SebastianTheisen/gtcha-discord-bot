@@ -6,6 +6,7 @@ dasselbe: neuer Browser-Kontext (neue Sitzung) über Tor, dann pack/list. Mit fr
 (Standard) wird dafür jedes Mal auch ein komplett neuer Browser gestartet, wie beim Scrape.
 """
 
+import asyncio
 import random
 import time
 from typing import Dict, Optional
@@ -13,7 +14,7 @@ from typing import Dict, Optional
 from loguru import logger
 from playwright.async_api import async_playwright
 
-from scraper.gtcha_scraper import FETCH_PACK_LIST_JS, USER_AGENTS
+from scraper.gtcha_scraper import EVAL_TIMEOUT, FETCH_PACK_LIST_JS, USER_AGENTS, close_quietly
 
 BROWSER_MAX_AGE = 60 * 60  # Browser stündlich neu starten (Speicher)
 GEO_HEADERS = {  # wie beim normalen Scrape
@@ -49,13 +50,11 @@ class PackListClient:
         logger.debug("[SCHNELL] Browser gestartet")
 
     async def close(self):
-        try:
-            if self._browser:
-                await self._browser.close()
-            if self._playwright:
-                await self._playwright.stop()
-        except Exception:
-            pass
+        # mit Zeitlimit: über eine hängende Tor-Verbindung kann das Schließen sonst ewig dauern
+        if self._browser:
+            await close_quietly(self._browser.close())
+        if self._playwright:
+            await close_quietly(self._playwright.stop())
         self._browser = self._playwright = None
 
     async def _new_context(self):
@@ -72,7 +71,7 @@ class PackListClient:
         try:
             page = await context.new_page()
             await page.goto(f"{self.base_url}/api/user/point", wait_until="domcontentloaded", timeout=30000)
-            data = await page.evaluate(FETCH_PACK_LIST_JS)
+            data = await asyncio.wait_for(page.evaluate(FETCH_PACK_LIST_JS), EVAL_TIMEOUT)
             items = (data or {}).get("list") if isinstance(data, dict) else None
             return {int(it["id"]): it for it in items or [] if it.get("id")}
         except Exception:
@@ -80,9 +79,6 @@ class PackListClient:
             await self.close()
             raise
         finally:
-            try:
-                await context.close()
-            except Exception:
-                pass
+            await close_quietly(context.close())
             if self.fresh_browser:
                 await self.close()
